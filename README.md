@@ -5,12 +5,13 @@
 # PredictX Neural - AI-Powered Forex Prediction
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/WekaF/predictx-neural)
+[![Deployment Status](https://img.shields.io/badge/deployment-live-brightgreen)](https://predictx-neural.vercel.app/)
 
 AI-powered forex trading prediction system with meta-learning capabilities and neural network optimization.
 
 ## 🚀 Live Demo
 
-**Production:** [Coming soon after deployment]
+**Production:** [https://predictx-neural.vercel.app/](https://predictx-neural.vercel.app/) ✨
 
 ## 📖 Quick Links
 
