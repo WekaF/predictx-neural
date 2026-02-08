@@ -1,7 +1,9 @@
 import { Candle } from '../types';
 
 // Binance API Configuration
-const BINANCE_REST_API = '/api/api/v3';
+// In development, use local proxy (/api). In production, use CORS proxy to avoid issues.
+const IS_DEV = import.meta.env.DEV;
+const BINANCE_REST_API = IS_DEV ? '/api/api/v3' : 'https://api.binance.com/api/v3';
 const BINANCE_WS_API = 'wss://stream.binance.com:9443/ws';
 
 // Symbol mapping: App format → Binance format
