@@ -2,11 +2,11 @@
 <img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
 </div>
 
-# PredictX - AI-Powered Forex Prediction
+# PredictX Neural - AI-Powered Forex Prediction
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/YOUR_USERNAME/predictx)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/WekaF/predictx-neural)
 
-AI-powered forex trading prediction system with meta-learning capabilities.
+AI-powered forex trading prediction system with meta-learning capabilities and neural network optimization.
 
 ## 🚀 Live Demo
 
@@ -15,6 +15,8 @@ AI-powered forex trading prediction system with meta-learning capabilities.
 ## 📖 Quick Links
 
 - [🚀 Deployment Guide](DEPLOYMENT.md) - Complete guide for deploying to Vercel with CI/CD
+- [⚡ Quick Start](QUICKSTART.md) - Deploy in 5 minutes
+- [📋 Deployment Summary](DEPLOYMENT_SUMMARY.md) - Overview and next steps
 - [AI Studio App](https://ai.studio/apps/drive/1iAWFHMSkOjDeUf1uHuj44sSkdFbMN_T6)
 
 ## 🏃 Run Locally
@@ -47,7 +49,7 @@ AI-powered forex trading prediction system with meta-learning capabilities.
 See the [Deployment Guide](DEPLOYMENT.md) for complete instructions on deploying to Vercel with automated CI/CD.
 
 **Quick deploy:**
-1. Push to GitHub
+1. Push to GitHub ✅ (You're here!)
 2. Import to Vercel
 3. Add environment variables
 4. Deploy! 🎉
@@ -63,4 +65,3 @@ See the [Deployment Guide](DEPLOYMENT.md) for complete instructions on deploying
 ## 📝 License
 
 MIT
-
