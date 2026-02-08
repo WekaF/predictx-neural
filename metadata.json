@@ -1,0 +1,5 @@
+{
+  "name": "PredictX",
+  "description": "An advanced AI-powered trading assistant for Crypto and Forex. Features real-time pattern recognition, position sizing calculators, and a self-improving analysis engine using Gemini.",
+  "requestFramePermissions": []
+}
