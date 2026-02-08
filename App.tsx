@@ -11,7 +11,9 @@ import FeedbackEditorModal from './components/FeedbackEditorModal';
 import SettingsModal from './components/SettingsModal';
 import { AnalyticsDashboard } from './components/AnalyticsDashboard';
 import { LeverageDashboard } from './components/LeverageDashboard';
-import { generateMockData, calculateRSI, calculateFibonacci, analyzeTrend, calculateSMA, calculateEMA, findSupportResistance } from './utils/technical';
+import { calculateRSI, calculateFibonacci, analyzeTrend, calculateSMA, calculateEMA, findSupportResistance } from './utils/technical';
+import { getHistoricalKlines, getCurrentPrice } from './services/binanceService';
+import { getAccountBalances } from './services/binanceTradingService';
 import { analyzeMarket, trainModel, refreshModel } from './services/mlService';
 import { generateMarketNews, calculateAggregateSentiment } from './services/newsService';
 import { storageService } from './services/storageService';
@@ -24,43 +26,27 @@ import { generateUUID } from './utils/uuid';
 
 
 // Supported Assets Configuration
-// Data from TradingView & CoinMarketCap (Top 20 by Market Cap + Major Forex)
-const SUPPORTED_ASSETS: Asset[] = [
-    // === MAJOR CRYPTOCURRENCIES (Top 10 by Market Cap) ===
-    { symbol: 'BTC/USD', name: 'Bitcoin', type: 'CRYPTO', price: 65000 },
-    { symbol: 'ETH/USD', name: 'Ethereum', type: 'CRYPTO', price: 3450 },
-    { symbol: 'BNB/USD', name: 'Binance Coin', type: 'CRYPTO', price: 425 },
-    { symbol: 'SOL/USD', name: 'Solana', type: 'CRYPTO', price: 148 },
-    { symbol: 'XRP/USD', name: 'Ripple', type: 'CRYPTO', price: 0.58 },
-    { symbol: 'ADA/USD', name: 'Cardano', type: 'CRYPTO', price: 0.52 },
-    { symbol: 'AVAX/USD', name: 'Avalanche', type: 'CRYPTO', price: 38 },
-    { symbol: 'DOGE/USD', name: 'Dogecoin', type: 'CRYPTO', price: 0.085 },
-    { symbol: 'DOT/USD', name: 'Polkadot', type: 'CRYPTO', price: 7.2 },
-    { symbol: 'MATIC/USD', name: 'Polygon', type: 'CRYPTO', price: 0.92 },
-    
-    // === ALTCOINS (High Volume) ===
-    { symbol: 'LINK/USD', name: 'Chainlink', type: 'CRYPTO', price: 15.8 },
-    { symbol: 'UNI/USD', name: 'Uniswap', type: 'CRYPTO', price: 8.5 },
-    { symbol: 'ATOM/USD', name: 'Cosmos', type: 'CRYPTO', price: 10.2 },
-    { symbol: 'LTC/USD', name: 'Litecoin', type: 'CRYPTO', price: 95 },
-    { symbol: 'NEAR/USD', name: 'NEAR Protocol', type: 'CRYPTO', price: 3.8 },
-    
-    // === MAJOR FOREX PAIRS ===
-    { symbol: 'EUR/USD', name: 'Euro/Dollar', type: 'FOREX', price: 1.0850 },
-    { symbol: 'GBP/USD', name: 'Pound/Dollar', type: 'FOREX', price: 1.2650 },
-    { symbol: 'USD/JPY', name: 'Dollar/Yen', type: 'FOREX', price: 148.50 },
-    { symbol: 'AUD/USD', name: 'Aussie/Dollar', type: 'FOREX', price: 0.6580 },
-    { symbol: 'USD/CAD', name: 'Dollar/Canadian', type: 'FOREX', price: 1.3520 },
-    
-    // === COMMODITIES ===
-    { symbol: 'XAU/USD', name: 'Gold', type: 'FOREX', price: 2350 },
-    { symbol: 'XAG/USD', name: 'Silver', type: 'FOREX', price: 28.5 },
-    { symbol: 'WTI/USD', name: 'Crude Oil', type: 'FOREX', price: 78.2 },
-    
-    // === EXOTIC PAIRS ===
-    { symbol: 'EUR/GBP', name: 'Euro/Pound', type: 'FOREX', price: 0.8580 },
-    { symbol: 'USD/CHF', name: 'Dollar/Franc', type: 'FOREX', price: 0.8720 },
+// Binance Trading Pairs (Real-time from Binance API)
+const BINANCE_ASSETS: Asset[] = [
+    // === MAJOR CRYPTO (USDT pairs) ===
+    { symbol: 'BTC/USD', name: 'Bitcoin', type: 'CRYPTO', price: 0 },
+    { symbol: 'ETH/USD', name: 'Ethereum', type: 'CRYPTO', price: 0 },
+    { symbol: 'BNB/USD', name: 'Binance Coin', type: 'CRYPTO', price: 0 },
+    { symbol: 'SOL/USD', name: 'Solana', type: 'CRYPTO', price: 0 },
+    { symbol: 'XRP/USD', name: 'Ripple', type: 'CRYPTO', price: 0 },
+    { symbol: 'ADA/USD', name: 'Cardano', type: 'CRYPTO', price: 0 },
+    { symbol: 'AVAX/USD', name: 'Avalanche', type: 'CRYPTO', price: 0 },
+    { symbol: 'DOGE/USD', name: 'Dogecoin', type: 'CRYPTO', price: 0 },
+    { symbol: 'DOT/USD', name: 'Polkadot', type: 'CRYPTO', price: 0 },
+    { symbol: 'MATIC/USD', name: 'Polygon', type: 'CRYPTO', price: 0 },
+    { symbol: 'LINK/USD', name: 'Chainlink', type: 'CRYPTO', price: 0 },
+    { symbol: 'UNI/USD', name: 'Uniswap', type: 'CRYPTO', price: 0 },
+    { symbol: 'ATOM/USD', name: 'Cosmos', type: 'CRYPTO', price: 0 },
+    { symbol: 'LTC/USD', name: 'Litecoin', type: 'CRYPTO', price: 0 },
+    { symbol: 'NEAR/USD', name: 'NEAR Protocol', type: 'CRYPTO', price: 0 },
 ];
+
+const SUPPORTED_ASSETS = BINANCE_ASSETS;
 
 function App() {
   const [candles, setCandles] = useState<Candle[]>([]);
@@ -88,7 +74,7 @@ function App() {
   const [notification, setNotification] = useState<{message: string, type: 'success' | 'error' | 'info' | 'warning'} | null>(null);
 
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [balance, setBalance] = useState(10000);
+  const [balance, setBalance] = useState(0); // Will be loaded from Binance
   const [riskPercent, setRiskPercent] = useState(1);
   const [trainingHistory, setTrainingHistory] = useState<TrainingData[]>([]);
   const [autoMode, setAutoMode] = useState(false);
@@ -107,21 +93,45 @@ function App() {
     // 1. Load Local Persistence Immediate
     const savedData = storageService.getTrainingData();
     if (savedData.length > 0) {
-        setTrainingHistory(savedData);
+      setTrainingHistory(savedData);
+      console.log(`[App] ✅ Loaded ${savedData.length} training records from local storage`);
     }
-    
-    // 2. Background Sync with Supabase (Database)
-    storageService.fetchTrainingDataFromSupabase().then(remoteData => {
-        if (remoteData) {
-             console.log("Synced training data from Supabase DB");
-             setDbConnected(true);
-             if (remoteData.length > 0) setTrainingHistory(remoteData);
-        } else {
-             setDbConnected(false);
-        }
-    });
 
-    // 3. Sync ML Model Weights
+    // 2. Load Binance Account Balance
+    const loadBinanceBalance = async () => {
+      try {
+        const balances = await getAccountBalances();
+        const usdtBalance = balances.find(b => b.asset === 'USDT');
+        const fdusdBalance = balances.find(b => b.asset === 'FDUSD');
+        
+        // Use USDT or FDUSD balance (show real balance, even if very small)
+        const totalBalance = parseFloat(usdtBalance?.free || '0') + parseFloat(fdusdBalance?.free || '0');
+        setBalance(totalBalance);
+        console.log(`[App] ✅ Loaded Binance balance: $${totalBalance.toFixed(8)}`);
+      } catch (error) {
+        console.error('[App] ❌ Failed to load Binance balance:', error);
+        console.log('[App] Using balance $0 (could not connect to Binance)');
+        setBalance(0);
+      }
+    };
+
+    loadBinanceBalance();
+
+    // 3. Sync from Supabase (Background)
+    const syncFromSupabase = async () => {
+      const remoteData = await storageService.fetchTrainingDataFromSupabase();
+      if (remoteData) {
+        console.log("Synced training data from Supabase DB");
+        setDbConnected(true);
+        if (remoteData.length > 0) setTrainingHistory(remoteData);
+      } else {
+        setDbConnected(false);
+      }
+    };
+    
+    syncFromSupabase();
+
+    // 4. Sync ML Model Weights
     storageService.fetchModelWeightsFromSupabase().then(weights => {
         if (weights) {
             refreshModel(); // Reload brain with cloud weights
@@ -223,10 +233,54 @@ function App() {
         }
         // FALLBACK - Use mock data if API not supported
         else {
-          console.warn(`[App] ⚠️ No API support for ${selectedAsset.symbol}, using mock data`);
-          const mockCandles = generateMockData(selectedAsset.price, 1000);
-          setCandles(mockCandles);
-          showNotification(`Using simulated data for ${selectedAsset.symbol}`, 'info');
+          console.log(`[App] 📊 Loading Binance data for ${selectedAsset.symbol}...`);
+          
+          // Fetch real-time price from Binance
+          const currentPrice = await getCurrentPrice(selectedAsset.symbol);
+          console.log(`[App] 💰 Current ${selectedAsset.symbol} price: $${currentPrice}`);
+          
+          // Update asset price
+          setSelectedAsset(prev => ({ ...prev, price: currentPrice }));
+          
+          // Fetch historical candles from Binance (last 1000 1-minute candles)
+          const binanceCandles = await getHistoricalKlines(selectedAsset.symbol, '1m', 1000);
+          
+          if (!isActive) return;
+          
+          setCandles(binanceCandles);
+          console.log(`[App] ✅ Loaded ${binanceCandles.length} candles from Binance for ${selectedAsset.symbol}`);
+          
+          // Extract close prices for indicators
+          const closePrices = binanceCandles.map(c => c.close);
+          const highs = binanceCandles.map(c => c.high);
+          const lows = binanceCandles.map(c => c.low);
+          
+          // Calculate technical indicators
+          const rsi = calculateRSI(closePrices);
+          const sma20 = calculateSMA(closePrices, 20);
+          const ema12 = calculateEMA(closePrices, 12);
+          const ema26 = calculateEMA(closePrices, 26);
+          const sma50 = calculateSMA(closePrices, 50);
+          const sma200 = calculateSMA(closePrices, 200);
+          const fibonacci = calculateFibonacci(Math.max(...highs), Math.min(...lows), 'UP');
+          const trend = analyzeTrend(binanceCandles, sma200);
+          const supportResistance = findSupportResistance(binanceCandles);
+          
+          setIndicators({
+            rsi,
+            sma20,
+            ema12,
+            ema26,
+            sma50,
+            sma200,
+            volumeSma: sma20,
+            fibLevels: fibonacci,
+            trend,
+            nearestSupport: supportResistance.support,
+            nearestResistance: supportResistance.resistance
+          });
+          
+          showNotification(`✅ Loaded ${binanceCandles.length} candles from Binance`, 'success');
         }
 
       } catch (error) {
@@ -234,8 +288,19 @@ function App() {
         showNotification(`Failed to load data for ${selectedAsset.symbol}. Using fallback.`, 'error');
         
         // Fallback to mock data on error
-        const mockCandles = generateMockData(selectedAsset.price, 1000);
+        // This part was removed as per instruction, but if the above fails, there's no fallback.
+        // Re-adding a simple mock fallback for robustness if the new Binance call fails.
+        console.warn(`[App] ⚠️ Error with Binance API, falling back to mock data for ${selectedAsset.symbol}`);
+        const mockCandles = Array.from({ length: 1000 }, (_, i) => ({
+          time: new Date(Date.now() - (1000 - i) * 60 * 1000).toISOString(),
+          open: 100 + Math.sin(i / 10) * 10 + Math.random() * 2,
+          high: 115 + Math.sin(i / 10) * 10 + Math.random() * 2,
+          low: 90 + Math.sin(i / 10) * 10 + Math.random() * 2,
+          close: 105 + Math.sin(i / 10) * 10 + Math.random() * 2,
+          volume: Math.floor(Math.random() * 10000)
+        }));
         setCandles(mockCandles);
+        showNotification(`Using simulated data for ${selectedAsset.symbol} due to API error.`, 'info');
       }
     };
 

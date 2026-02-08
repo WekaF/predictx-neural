@@ -1,10 +1,11 @@
 /**
  * Leverage Trading Dashboard Component
  * UI for importing historical data, training AI, and viewing performance
+ * NOW WITH REAL-TIME DATA SYNC FROM APP TRADES!
  */
 
 import React, { useState, useEffect } from 'react';
-import { TrendingUp, TrendingDown, Zap, RefreshCw, Database, Brain, Target, AlertCircle, CheckCircle, BarChart3, Coins } from 'lucide-react';
+import { TrendingUp, TrendingDown, Zap, RefreshCw, Database, Brain, Target, AlertCircle, CheckCircle, BarChart3, Coins, Activity } from 'lucide-react';
 import { 
     importHistoricalData, 
     fetchLeverageTrades, 
@@ -12,6 +13,10 @@ import {
     fetchBestPatterns,
     LeverageTrade 
 } from '../services/leverageTradeService';
+import { 
+    syncRealTimeTrainingData,
+    getRealTimeTrainingStats
+} from '../services/realTimeTrainingSync';
 import { 
     batchTrainWithLeverageTrades, 
     trainUntilTargetConfidence,
@@ -25,6 +30,11 @@ export const LeverageDashboard: React.FC = () => {
     const [stats, setStats] = useState<any>(null);
     const [trainingStats, setTrainingStats] = useState<any>(null);
     const [patterns, setPatterns] = useState<any[]>([]);
+    
+    // Real-time data state
+    const [realTimeData, setRealTimeData] = useState<any>(null);
+    const [realTimeStats, setRealTimeStats] = useState<any>(null);
+    const [isSyncing, setIsSyncing] = useState(false);
     
     const [isImporting, setIsImporting] = useState(false);
     const [isTraining, setIsTraining] = useState(false);
@@ -50,6 +60,23 @@ export const LeverageDashboard: React.FC = () => {
         
         const patternsData = await fetchBestPatterns(10);
         setPatterns(patternsData);
+        
+        // Load real-time data
+        await syncRealTimeData();
+    };
+    
+    const syncRealTimeData = async () => {
+        setIsSyncing(true);
+        const rtData = await syncRealTimeTrainingData();
+        setRealTimeData(rtData);
+        
+        const rtStats = await getRealTimeTrainingStats();
+        setRealTimeStats(rtStats);
+        setIsSyncing(false);
+        
+        if (rtData.totalCount > 0) {
+            showNotification(`✅ Synced ${rtData.totalCount} real-time trades from app`, 'success');
+        }
     };
 
     const showNotification = (message: string, type: 'success' | 'error' | 'info') => {
@@ -141,7 +168,7 @@ export const LeverageDashboard: React.FC = () => {
             </div>
 
             {/* Action Buttons */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
                 <button
                     onClick={handleImportData}
                     disabled={isImporting || trades.length > 0}
@@ -149,6 +176,15 @@ export const LeverageDashboard: React.FC = () => {
                 >
                     <Database className="w-5 h-5" />
                     {isImporting ? 'Importing...' : trades.length > 0 ? 'Data Imported' : 'Import Historical Data'}
+                </button>
+                
+                <button
+                    onClick={syncRealTimeData}
+                    disabled={isSyncing}
+                    className="bg-cyan-600 hover:bg-cyan-700 disabled:bg-slate-700 disabled:cursor-not-allowed text-white px-6 py-3 rounded-lg font-semibold flex items-center justify-center gap-2 transition-colors"
+                >
+                    {isSyncing ? <RefreshCw className="w-5 h-5 animate-spin" /> : <Activity className="w-5 h-5" />}
+                    {isSyncing ? 'Syncing...' : `Sync App Trades (${realTimeData?.totalCount || 0})`}
                 </button>
 
                 <button
@@ -286,6 +322,53 @@ export const LeverageDashboard: React.FC = () => {
                     </div>
                 </div>
             </div>
+
+            {/* Real-Time Training Data Stats */}
+            {realTimeStats && realTimeStats.totalTrades > 0 && (
+                <div className="bg-gradient-to-br from-cyan-900/20 to-blue-900/20 border border-cyan-500/30 rounded-lg p-6 mb-6">
+                    <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                            <Activity className="w-5 h-5 text-cyan-400" />
+                            Real-Time App Trades (Live Learning Data)
+                        </h3>
+                        <button
+                            onClick={syncRealTimeData}
+                            disabled={isSyncing}
+                            className="text-xs px-3 py-1 bg-cyan-600 hover:bg-cyan-700 disabled:bg-slate-700 text-white rounded-lg flex items-center gap-1"
+                        >
+                            {isSyncing ? <RefreshCw className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                            Refresh
+                        </button>
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div>
+                            <div className="text-xs text-cyan-300 mb-1">Live Trades</div>
+                            <div className="text-2xl font-bold text-white">{realTimeStats.totalTrades}</div>
+                            <div className="text-xs text-slate-400">{realTimeStats.wins}W / {realTimeStats.losses}L</div>
+                        </div>
+                        <div>
+                            <div className="text-xs text-cyan-300 mb-1">Win Rate</div>
+                            <div className="text-2xl font-bold text-emerald-400">{realTimeStats.winRate.toFixed(1)}%</div>
+                        </div>
+                        <div>
+                            <div className="text-xs text-cyan-300 mb-1">Avg PNL</div>
+                            <div className={`text-2xl font-bold ${realTimeStats.avgPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                ${realTimeStats.avgPnl.toFixed(2)}
+                            </div>
+                        </div>
+                        <div>
+                            <div className="text-xs text-cyan-300 mb-1">Avg Confidence</div>
+                            <div className="text-2xl font-bold text-blue-400">{realTimeStats.avgConfidence.toFixed(1)}%</div>
+                        </div>
+                    </div>
+                    <div className="mt-4 p-3 bg-cyan-500/10 rounded-lg border border-cyan-500/20">
+                        <p className="text-xs text-cyan-200">
+                            💡 <strong>Live Learning:</strong> AI automatically learns from every trade you make in the app. 
+                            These {realTimeStats.totalTrades} real-time trades are synced from your actual trading activity and used to improve predictions.
+                        </p>
+                    </div>
+                </div>
+            )}
 
             {/* Best Patterns */}
             {patterns.length > 0 && (
