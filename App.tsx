@@ -18,6 +18,7 @@ import { analyzeMarket, trainModel, refreshModel } from './services/mlService';
 import { generateMarketNews, calculateAggregateSentiment } from './services/newsService';
 import { storageService } from './services/storageService';
 import { sendWebhookNotification } from './services/webhookService';
+import { NotificationService } from './services/notificationService';
 import * as binanceService from './services/binanceService';
 import * as forexService from './services/forexService';
 import { Candle, TechnicalIndicators, TradeSignal, TrainingData, NewsItem, Alert, ExecutedTrade, Asset } from './types';
@@ -71,6 +72,10 @@ function App() {
   const [tradingMode, setTradingMode] = useState<'paper' | 'live'>('paper');
   const [leverage, setLeverage] = useState(10); // 1-20x
   
+  // PWA Install Prompt
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [showInstallPrompt, setShowInstallPrompt] = useState(false);
+  
   // Notification State
   const [notification, setNotification] = useState<{message: string, type: 'success' | 'error' | 'info' | 'warning'} | null>(null);
 
@@ -118,7 +123,32 @@ function App() {
 
     loadBinanceBalance();
 
-    // 3. Sync from Supabase (Background)
+    // 3. Setup PWA Install Prompt
+    const handleBeforeInstallPrompt = (e: any) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setShowInstallPrompt(true);
+      console.log('[PWA] Install prompt available');
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
+    // 4. Request Notification Permission
+    const requestNotificationPermission = async () => {
+      if (NotificationService.isSupported()) {
+        const granted = await NotificationService.requestPermission();
+        if (granted) {
+          console.log('[Notifications] ✅ Permission granted');
+        } else {
+          console.log('[Notifications] ⚠️ Permission denied');
+        }
+      }
+    };
+
+    // Request permission after 3 seconds (don't overwhelm user on first load)
+    setTimeout(requestNotificationPermission, 3000);
+
+    // 5. Sync from Supabase (Background)
     const syncFromSupabase = async () => {
       const remoteData = await storageService.fetchTrainingDataFromSupabase();
       if (remoteData) {
@@ -589,66 +619,81 @@ function App() {
 
   // Execute Trade after Confirmation
   const confirmTrade = () => {
-    if (pendingSignal) {
-        setActiveSignal(pendingSignal);
-        
-        // Save signal to Supabase
-        storageService.saveTradeSignal(pendingSignal);
-        
-        // Trigger Webhook
-        sendWebhookNotification('SIGNAL_ENTRY', pendingSignal).then(res => {
-             if (res.success) {
-                  if (res.warning) {
-                      showNotification(`Order Placed (Blind Mode). Check n8n.`, "warning");
-                  } else {
-                      showNotification("Trade Executed & Webhook Sent", "success");
-                  }
-             } else if (res.skipped) {
-                  showNotification("Trade Executed (Webhooks Disabled)", "info");
-             } else {
-                  showNotification(`Trade Executed but Webhook FAILED: ${res.error}`, "error");
-             }
-        });
-        
-        setPendingSignal(null);
-    }
+    if (!pendingSignal) return;
+
+    // Execute the trade
+    setActiveSignal({ ...pendingSignal, outcome: 'PENDING' });
+    setPendingSignal(null);
+    
+    // Send push notification
+    NotificationService.sendTradeNotification({
+      symbol: pendingSignal.symbol,
+      type: pendingSignal.type,
+      price: pendingSignal.entryPrice,
+      leverage: leverage,
+      mode: tradingMode,
+      positionSize: balance * leverage * (riskPercent / 100)
+    });
+
+    // Save signal to Supabase
+    storageService.saveTradeSignal(pendingSignal);
+
+    // Send webhook notification
+    sendWebhookNotification('SIGNAL_ENTRY', pendingSignal).then(res => {
+      if (res.success) {
+        if (res.warning) {
+          showNotification(`Order Placed (Blind Mode). Check n8n.`, "warning");
+        } else {
+          showNotification("Trade Executed & Webhook Sent", "success");
+        }
+      } else if (res.skipped) {
+        showNotification("Trade Executed (Webhooks Disabled)", "info");
+      } else {
+        showNotification(`Trade Executed but Webhook FAILED: ${res.error}`, "error");
+      }
+    });
+
+    showNotification(`Trade executed: ${pendingSignal.type} ${pendingSignal.symbol} at $${pendingSignal.entryPrice.toFixed(2)}`, 'success');
   };
 
   const rejectTrade = () => {
     setPendingSignal(null);
+    showNotification('Trade rejected', 'info');
   };
 
-  // Manual Trade Handler
-  const handleManualTrade = (type: 'BUY' | 'SELL', entry: number, sl: number, tp: number) => {
-    const risk = Math.abs(entry - sl);
-    const reward = Math.abs(tp - entry);
-    const rr = risk === 0 ? 0 : Number((reward / risk).toFixed(2));
-
-    const manualSignal: TradeSignal = {
-        id: generateUUID(),
-        symbol: selectedAsset.symbol,
-        type,
-        entryPrice: entry,
-        stopLoss: sl,
-        takeProfit: tp,
-        reasoning: "User Manual Override",
-        confidence: 100,
-        timestamp: Date.now(),
-        patternDetected: "Manual Entry",
-        confluenceFactors: ["User Decision"],
-        riskRewardRatio: rr,
-        outcome: 'PENDING'
+  // Handle Manual Trade
+  const handleManualTrade = (trade: { type: 'BUY' | 'SELL', entryPrice: number, stopLoss: number, takeProfit: number }) => {
+    const newSignal: TradeSignal = {
+      id: generateUUID(),
+      symbol: selectedAsset.symbol,
+      type: trade.type,
+      entryPrice: trade.entryPrice,
+      stopLoss: trade.stopLoss,
+      takeProfit: trade.takeProfit,
+      reasoning: 'Manual trade entry',
+      confidence: 50,
+      timestamp: Date.now(),
+      outcome: 'PENDING'
     };
+
+    setActiveSignal(newSignal);
+    setShowManualModal(false);
     
-    // Override any active signal
-    setPendingSignal(null);
-    setActiveSignal(manualSignal);
-    
+    // Send push notification for manual trade
+    NotificationService.sendTradeNotification({
+      symbol: newSignal.symbol,
+      type: newSignal.type,
+      price: newSignal.entryPrice,
+      leverage: leverage,
+      mode: tradingMode,
+      positionSize: balance * leverage * (riskPercent / 100)
+    });
+
     // Save to Supabase
-    storageService.saveTradeSignal(manualSignal);
+    storageService.saveTradeSignal(newSignal);
     
     // Trigger Webhook
-    sendWebhookNotification('SIGNAL_ENTRY', manualSignal).then(res => {
+    sendWebhookNotification('SIGNAL_ENTRY', newSignal).then(res => {
          if (res.success) {
             if (res.warning) {
                 showNotification(`Manual Order Placed (Blind Mode)`, 'warning');
@@ -743,7 +788,7 @@ function App() {
   const riskAmount = balance * (riskPercent / 100);
 
   return (
-    <div className="h-screen flex flex-col md:flex-row text-slate-200 overflow-hidden relative">
+    <div className="h-screen flex flex-col text-slate-200 overflow-hidden relative">
       
       {/* NOTIFICATION BANNER */}
       {notification && (
@@ -795,12 +840,12 @@ function App() {
         />
       )}
 
-      {/* Sidebar */}
-      <nav className="w-full md:w-20 bg-slate-900 border-r border-slate-800 flex md:flex-col items-center py-4 gap-6 z-20 shrink-0">
+      {/* Desktop Sidebar - Hidden on Mobile */}
+      <nav className="hidden md:flex md:w-20 bg-slate-900 border-r border-slate-800 flex-col items-center py-4 gap-6 z-20 shrink-0">
         <div className="p-3 bg-blue-600 rounded-xl shadow-lg shadow-blue-500/20">
           <BrainCircuit className="w-6 h-6 text-white" />
         </div>
-        <div className="flex md:flex-col gap-4 mx-auto w-full px-2 md:px-0">
+        <div className="flex flex-col gap-4">
           <button 
             onClick={() => setCurrentView('terminal')}
             className={`p-3 rounded-lg transition-colors flex justify-center ${currentView === 'terminal' ? 'bg-slate-800 text-blue-400' : 'text-slate-400 hover:bg-slate-800 hover:text-blue-400'}`}
@@ -852,28 +897,70 @@ function App() {
         </div>
       </nav>
 
+      {/* Mobile Bottom Navigation */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-slate-900 border-t border-slate-800 z-30 safe-area-inset-bottom">
+        <div className="flex items-center justify-around px-2 py-2">
+          <button 
+            onClick={() => setCurrentView('terminal')}
+            className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-colors min-w-[60px] ${currentView === 'terminal' ? 'text-blue-400' : 'text-slate-400'}`}
+          >
+            <LayoutDashboard className="w-6 h-6" />
+            <span className="text-[10px] font-medium">Terminal</span>
+          </button>
+          <button 
+            onClick={() => setCurrentView('backtest')}
+            className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-colors min-w-[60px] ${currentView === 'backtest' ? 'text-blue-400' : 'text-slate-400'}`}
+          >
+            <FlaskConical className="w-6 h-6" />
+            <span className="text-[10px] font-medium">Backtest</span>
+          </button>
+          <button 
+            onClick={() => setCurrentView('analytics')}
+            className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-colors min-w-[60px] ${currentView === 'analytics' ? 'text-purple-400' : 'text-slate-400'}`}
+          >
+            <Activity className="w-6 h-6" />
+            <span className="text-[10px] font-medium">Analytics</span>
+          </button>
+          <button 
+            onClick={() => setCurrentView('leverage')}
+            className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-colors min-w-[60px] ${currentView === 'leverage' ? 'text-amber-400' : 'text-slate-400'}`}
+          >
+            <Coins className="w-6 h-6" />
+            <span className="text-[10px] font-medium">Leverage</span>
+          </button>
+          <button 
+            onClick={() => setShowSettings(true)}
+            className="flex flex-col items-center gap-1 p-2 rounded-lg transition-colors min-w-[60px] text-slate-400"
+          >
+            <SettingsIcon className="w-6 h-6" />
+            <span className="text-[10px] font-medium">Settings</span>
+          </button>
+        </div>
+      </nav>
+
       {/* Main Content */}
-      <main className="flex-1 p-4 md:p-6 flex flex-col min-h-0 overflow-y-auto">
+      <main className="flex-1 p-3 md:p-6 pb-20 md:pb-6 flex flex-col min-h-0 overflow-y-auto">
         
         {/* Header */}
-        <header className="flex justify-between items-center mb-6 shrink-0">
-          <div className="flex items-center gap-4">
-            <div>
-              <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">
-                {currentView === 'terminal' ? 'NeuroTrade Terminal' : 'Strategy Backtest Lab'}
+        <header className="flex flex-col md:flex-row md:justify-between md:items-center gap-3 md:gap-0 mb-4 md:mb-6 shrink-0">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-4">
+            <div className="flex-1">
+              <h1 className="text-lg sm:text-xl md:text-2xl font-bold bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">
+                {currentView === 'terminal' ? 'NeuroTrade' : currentView === 'backtest' ? 'Backtest' : currentView === 'analytics' ? 'Analytics' : 'Leverage'}
               </h1>
               <div className="flex items-center gap-2 mt-1">
-                  <div className="flex flex-col gap-1 items-start">
-                    <span className="text-xs text-emerald-500 font-mono font-bold flex items-center gap-1">
+                  <div className="flex flex-col sm:flex-row gap-1 sm:gap-2 items-start sm:items-center">
+                    <span className="text-[10px] sm:text-xs text-emerald-500 font-mono font-bold flex items-center gap-1">
                         <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
-                        HYBRID AI ENGINE (RL + GEMINI) ACTIVE
+                        <span className="hidden sm:inline">HYBRID AI ENGINE</span>
+                        <span className="sm:hidden">AI ACTIVE</span>
                     </span>
-                    <div className="flex gap-2">
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded border ${dbConnected ? 'border-emerald-500/30 text-emerald-400 bg-emerald-500/10' : 'border-rose-500/30 text-rose-400 bg-rose-500/10'}`}>
-                            DB: {dbConnected ? 'ONLINE' : 'OFFLINE'}
+                    <div className="flex gap-1.5 sm:gap-2">
+                        <span className={`text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded border ${dbConnected ? 'border-emerald-500/30 text-emerald-400 bg-emerald-500/10' : 'border-rose-500/30 text-rose-400 bg-rose-500/10'}`}>
+                            DB: {dbConnected ? 'ON' : 'OFF'}
                         </span>
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded border ${aiReady ? 'border-blue-500/30 text-blue-400 bg-blue-500/10' : 'border-yellow-500/30 text-yellow-400 bg-yellow-500/10'}`}>
-                            AI: {aiReady ? 'READY' : 'NO KEY'}
+                        <span className={`text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded border ${aiReady ? 'border-blue-500/30 text-blue-400 bg-blue-500/10' : 'border-yellow-500/30 text-yellow-400 bg-yellow-500/10'}`}>
+                            AI: {aiReady ? 'OK' : 'NO KEY'}
                         </span>
                     </div>
                   </div>
@@ -885,16 +972,16 @@ function App() {
                 <div className="relative">
                     <button 
                         onClick={() => setIsAssetMenuOpen(!isAssetMenuOpen)}
-                        className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded-lg border border-slate-700 transition-colors"
+                        className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 px-3 py-2 rounded-lg border border-slate-700 transition-colors"
                     >
                         <Coins className="w-4 h-4 text-blue-400" />
-                        <span className="font-bold text-white">{selectedAsset.symbol}</span>
+                        <span className="font-bold text-white text-sm">{selectedAsset.symbol}</span>
                         <ChevronDown className="w-3 h-3 text-slate-400" />
                     </button>
 
                     {isAssetMenuOpen && (
-                        <div className="absolute top-full left-0 mt-2 w-56 bg-slate-900 border border-slate-700 rounded-lg shadow-2xl z-50 overflow-hidden">
-                             <div className="p-2 text-[10px] font-bold text-slate-500 uppercase">Select Asset</div>
+                        <div className="absolute top-full left-0 mt-2 w-56 bg-slate-900 border border-slate-700 rounded-lg shadow-2xl z-50 overflow-hidden max-h-[300px] overflow-y-auto">
+                             <div className="p-2 text-[10px] font-bold text-slate-500 uppercase sticky top-0 bg-slate-900">Select Asset</div>
                              {SUPPORTED_ASSETS.map(asset => (
                                  <button
                                     key={asset.symbol}
@@ -915,9 +1002,9 @@ function App() {
           </div>
           
           {currentView === 'terminal' && (
-            <div className="flex items-center gap-4">
-                {/* Market Sentiment Meter */}
-                <div className="hidden md:flex flex-col items-end mr-4">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-4 w-full sm:w-auto">
+                {/* Market Sentiment Meter - Hidden on mobile */}
+                <div className="hidden lg:flex flex-col items-end mr-4">
                     <span className="text-[10px] uppercase text-slate-500 font-bold mb-1">Market Sentiment</span>
                     <div className="flex items-center gap-2">
                          <div className="w-24 h-2 bg-slate-800 rounded-full overflow-hidden">
@@ -932,27 +1019,27 @@ function App() {
                     </div>
                 </div>
 
-                <div className="flex items-center gap-4 bg-slate-900 border border-slate-800 p-2 rounded-lg">
-                    <div className="px-3 border-r border-slate-800 flex items-center gap-2">
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-4 bg-slate-900 border border-slate-800 p-2 sm:p-2 rounded-lg">
+                    <div className="flex items-center justify-between sm:justify-start px-2 sm:px-3 sm:border-r border-slate-800 gap-2">
                         <span className="text-xs text-slate-500">AUTO-TRADE</span>
                         <button 
                             onClick={toggleAutoMode}
-                            className={`w-8 h-4 rounded-full transition-colors relative ${autoMode ? 'bg-emerald-500' : 'bg-slate-700'}`}
+                            className={`w-10 h-5 sm:w-8 sm:h-4 rounded-full transition-colors relative ${autoMode ? 'bg-emerald-500' : 'bg-slate-700'}`}
                         >
-                            <div className={`absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full transition-transform ${autoMode ? 'translate-x-4' : ''}`}></div>
+                            <div className={`absolute top-0.5 left-0.5 w-4 h-4 sm:w-3 sm:h-3 bg-white rounded-full transition-transform ${autoMode ? 'translate-x-5 sm:translate-x-4' : ''}`}></div>
                         </button>
                     </div>
-                    <div className="px-3 border-r border-slate-800">
+                    <div className="flex items-center justify-between sm:justify-start px-2 sm:px-3 sm:border-r border-slate-800">
                         <span className="text-xs text-slate-500 block">BALANCE</span>
-                        <span className="font-mono text-emerald-400 font-bold">${balance.toFixed(2)}</span>
+                        <span className="font-mono text-emerald-400 font-bold text-sm sm:text-base">${balance.toFixed(2)}</span>
                     </div>
-                    <div className="px-3">
+                    <div className="flex items-center justify-between sm:justify-start px-2 sm:px-3 gap-1">
                         <span className="text-xs text-slate-500 block">RISK</span>
                         <input 
                             type="number" 
                             value={riskPercent} 
                             onChange={(e) => setRiskPercent(Number(e.target.value))}
-                            className="w-12 bg-transparent text-white font-mono font-bold focus:outline-none border-b border-slate-700 focus:border-blue-500 text-center" 
+                            className="w-12 bg-transparent text-white font-mono font-bold focus:outline-none border-b border-slate-700 focus:border-blue-500 text-center text-sm" 
                         />
                         <span className="text-slate-500 text-xs">%</span>
                     </div>
@@ -961,10 +1048,11 @@ function App() {
                 {/* Manual Trade Button */}
                 <button 
                     onClick={() => setShowManualModal(true)}
-                    className="bg-slate-800 hover:bg-slate-700 text-white p-2.5 rounded-lg border border-slate-700 transition-colors"
+                    className="bg-slate-800 hover:bg-slate-700 text-white p-3 sm:p-2.5 rounded-lg border border-slate-700 transition-colors flex items-center justify-center gap-2"
                     title="Manual Trade Entry"
                 >
                     <PenTool className="w-5 h-5" />
+                    <span className="sm:hidden text-sm font-medium">Manual Trade</span>
                 </button>
             </div>
           )}
@@ -978,18 +1066,18 @@ function App() {
         ) : currentView === 'backtest' ? (
              <BacktestPanel candles={candles} />
         ) : (
-             <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 flex-1 min-h-0">
-                {/* LEFT COLUMN: Chart + Trade History (2 cols wide) */}
-                <div className="lg:col-span-2 space-y-4 flex flex-col h-full overflow-hidden">
-                    <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-xl flex-1 flex flex-col min-h-[300px]">
-                        <div className="flex justify-between items-center mb-4 shrink-0">
+             <div className="flex flex-col lg:grid lg:grid-cols-4 gap-3 md:gap-6 flex-1 min-h-0">
+                {/* LEFT COLUMN: Chart + Trade History (2 cols wide on desktop) */}
+                <div className="lg:col-span-2 space-y-3 md:space-y-4 flex flex-col overflow-hidden">
+                    <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 md:p-4 shadow-xl flex flex-col min-h-[250px] sm:min-h-[300px]">
+                        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 mb-3 md:mb-4 shrink-0">
                             <div className="flex gap-2 items-center">
-                                <span className="font-bold text-lg">{selectedAsset.symbol}</span>
+                                <span className="font-bold text-base sm:text-lg">{selectedAsset.symbol}</span>
                                 <span className={`px-2 py-0.5 rounded text-xs font-bold ${indicators?.trend === 'UP' ? 'bg-emerald-500/20 text-emerald-400' : indicators?.trend === 'DOWN' ? 'bg-rose-500/20 text-rose-400' : 'bg-slate-700 text-slate-300'}`}>
                                     {indicators?.trend}
                                 </span>
                             </div>
-                            <div className="flex gap-4 text-xs font-mono text-slate-400">
+                            <div className="flex gap-2 sm:gap-4 text-[10px] sm:text-xs font-mono text-slate-400">
                                 <span>RSI: <span className={indicators && indicators.rsi > 70 ? 'text-rose-400' : indicators && indicators.rsi < 30 ? 'text-emerald-400' : 'text-slate-200'}>{indicators?.rsi.toFixed(1)}</span></span>
                                 <span>SMA 200: {indicators?.sma200.toFixed(2)}</span>
                             </div>
@@ -1006,8 +1094,8 @@ function App() {
                     </div>
 
                     {/* Trade History Panel */}
-                    <div className="bg-slate-900 border border-slate-800 rounded-xl shadow-xl flex flex-col h-48 overflow-hidden">
-                        <div className="px-4 py-2 border-b border-slate-800 flex items-center gap-2">
+                    <div className="bg-slate-900 border border-slate-800 rounded-xl shadow-xl flex flex-col h-40 sm:h-48 overflow-hidden">
+                        <div className="px-3 md:px-4 py-2 border-b border-slate-800 flex items-center gap-2">
                              <List className="w-4 h-4 text-slate-400" />
                              <span className="text-xs font-bold text-slate-400">SESSION TRADE HISTORY</span>
                         </div>
@@ -1017,20 +1105,20 @@ function App() {
                     </div>
                 </div>
 
-                {/* MIDDLE COLUMN: Signal & Alerts (1 col wide) */}
-                <div className="lg:col-span-1 space-y-4 flex flex-col overflow-y-auto">
+                {/* MIDDLE COLUMN: Signal & Alerts (1 col wide on desktop) */}
+                <div className="lg:col-span-1 space-y-3 md:space-y-4 flex flex-col">
                     {/* Active Signal Card */}
-                    <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl relative overflow-hidden group shrink-0">
+                    <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 md:p-6 shadow-xl relative overflow-hidden group shrink-0">
                         <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/5 rounded-full blur-3xl group-hover:bg-blue-500/10 transition-all"></div>
                         
-                        <h2 className="text-slate-400 text-xs font-bold tracking-wider mb-4 flex items-center gap-2">
+                        <h2 className="text-slate-400 text-xs font-bold tracking-wider mb-3 md:mb-4 flex items-center gap-2">
                             <Target className="w-4 h-4" /> ACTIVE TRADE
                         </h2>
 
                         {activeSignal && activeSignal.outcome === 'PENDING' && activeSignal.symbol === selectedAsset.symbol ? (
-                            <div className="space-y-4 relative z-10">
+                            <div className="space-y-3 md:space-y-4 relative z-10">
                                 <div className="flex justify-between items-end">
-                                    <span className={`text-4xl font-black ${activeSignal.type === 'BUY' ? 'text-emerald-400' : activeSignal.type === 'SELL' ? 'text-rose-400' : 'text-yellow-400'}`}>
+                                    <span className={`text-3xl md:text-4xl font-black ${activeSignal.type === 'BUY' ? 'text-emerald-400' : activeSignal.type === 'SELL' ? 'text-rose-400' : 'text-yellow-400'}`}>
                                         {activeSignal.type}
                                     </span>
                                     <span className="text-slate-500 font-mono text-sm">Conf: {activeSignal.confidence}%</span>
@@ -1063,12 +1151,12 @@ function App() {
                                     </div>
                                 </div>
 
-                                {/* Manual Close Controls */}
+                                {/* Manual Close Controls - Larger buttons for mobile */}
                                 <div className="grid grid-cols-2 gap-2 mt-4">
-                                    <button onClick={() => handleFeedback('WIN')} className="bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 py-2 rounded-lg text-xs font-bold border border-emerald-500/30 transition-all">
+                                    <button onClick={() => handleFeedback('WIN')} className="bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 py-3 sm:py-2 rounded-lg text-xs font-bold border border-emerald-500/30 transition-all">
                                         CLOSE WIN
                                     </button>
-                                    <button onClick={() => handleFeedback('LOSS')} className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 py-2 rounded-lg text-xs font-bold border border-rose-500/30 transition-all">
+                                    <button onClick={() => handleFeedback('LOSS')} className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 py-3 sm:py-2 rounded-lg text-xs font-bold border border-rose-500/30 transition-all">
                                         CLOSE LOSS
                                     </button>
                                 </div>
@@ -1076,24 +1164,24 @@ function App() {
                         ) : (
                             <div className="h-40 flex flex-col items-center justify-center text-slate-600 space-y-2">
                                 <ShieldCheck className="w-8 h-8 opacity-50" />
-                                <span className="text-sm">
+                                <span className="text-sm text-center px-2">
                                     {activeSignal && activeSignal.outcome === 'PENDING' ? `Trade Active on ${activeSignal.symbol}` : "No Active Trade."}
                                 </span>
                                 <button 
                                     onClick={handleAnalyze} 
                                     disabled={isAnalyzing || (activeSignal?.outcome === 'PENDING' && activeSignal.symbol === selectedAsset.symbol)}
-                                    className={`mt-2 py-2 px-4 rounded-lg font-bold flex items-center justify-center gap-2 transition-all text-xs ${isAnalyzing ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500 text-white'}`}
+                                    className={`mt-2 py-3 sm:py-2 px-4 rounded-lg font-bold flex items-center justify-center gap-2 transition-all text-xs ${isAnalyzing ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500 text-white'}`}
                                 >
                                     {isAnalyzing ? <RefreshCw className="w-3 h-3 animate-spin" /> : <BrainCircuit className="w-3 h-3" />}
-                                    {isAnalyzing ? "Processing Neural Net..." : "Predict with ML"}
+                                    {isAnalyzing ? "Processing..." : "Predict with ML"}
                                 </button>
                             </div>
                         )}
                     </div>
 
                     {/* Trading Configuration Panel */}
-                    <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-xl flex-1 flex flex-col min-h-[200px]">
-                        <h3 className="text-sm font-bold text-slate-300 mb-3 flex items-center gap-2">
+                    <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 md:p-4 shadow-xl flex flex-col min-h-[200px]">
+                        <h3 className="text-xs sm:text-sm font-bold text-slate-300 mb-2 md:mb-3 flex items-center gap-2">
                             <Settings className="w-4 h-4" />
                             Trading Configuration
                         </h3>
@@ -1216,10 +1304,10 @@ function App() {
                     </div>
                 </div>
 
-                {/* RIGHT COLUMN: Training & News (1 col wide) */}
-                <div className="lg:col-span-1 space-y-4 flex flex-col overflow-y-auto">
+                {/* RIGHT COLUMN: Training & News (1 col wide on desktop) */}
+                <div className="lg:col-span-1 space-y-3 md:space-y-4 flex flex-col">
                      {/* AI Learning History */}
-                     <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-xl flex flex-col h-1/2 min-h-[250px]">
+                     <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 md:p-4 shadow-xl flex flex-col h-1/2 min-h-[200px] sm:min-h-[250px]">
                         <h2 className="text-slate-400 text-xs font-bold tracking-wider mb-4 flex items-center gap-2">
                             <BrainCircuit className="w-4 h-4" /> NEURAL FEEDBACK
                         </h2>
@@ -1251,7 +1339,7 @@ function App() {
                     </div>
 
                     {/* News Feed */}
-                    <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-xl flex-1 flex flex-col h-1/2 min-h-[250px]">
+                    <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 md:p-4 shadow-xl flex-1 flex flex-col h-1/2 min-h-[200px] sm:min-h-[250px]">
                         <h2 className="text-slate-400 text-xs font-bold tracking-wider mb-4 flex items-center gap-2">
                             <Globe className="w-4 h-4" /> NEWS WIRE
                         </h2>

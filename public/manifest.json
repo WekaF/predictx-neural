@@ -1,0 +1,51 @@
+{
+  "name": "PredictX - AI Trading Terminal",
+  "short_name": "PredictX",
+  "description": "AI-powered cryptocurrency trading terminal with real-time Binance integration and leverage trading",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#3b82f6",
+  "orientation": "portrait-primary",
+  "scope": "/",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/badge-72.png",
+      "sizes": "72x72",
+      "type": "image/png",
+      "purpose": "badge"
+    }
+  ],
+  "categories": ["finance", "productivity", "business"],
+  "screenshots": [
+    {
+      "src": "/screenshot-mobile.png",
+      "sizes": "390x844",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "NeuroTrade Terminal on mobile"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Terminal",
+      "short_name": "Terminal",
+      "description": "Open trading terminal",
+      "url": "/",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    }
+  ],
+  "prefer_related_applications": false
+}
