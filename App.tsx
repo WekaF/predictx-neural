@@ -10,6 +10,7 @@ import AlertsPanel from './components/AlertsPanel';
 import FeedbackEditorModal from './components/FeedbackEditorModal';
 import SettingsModal from './components/SettingsModal';
 import { AnalyticsDashboard } from './components/AnalyticsDashboard';
+import { LeverageDashboard } from './components/LeverageDashboard';
 import { generateMockData, calculateRSI, calculateFibonacci, analyzeTrend, calculateSMA, calculateEMA, findSupportResistance } from './utils/technical';
 import { analyzeMarket, trainModel, refreshModel } from './services/mlService';
 import { generateMarketNews, calculateAggregateSentiment } from './services/newsService';
@@ -97,7 +98,7 @@ function App() {
   const [sentimentScore, setSentimentScore] = useState(0); // -1 to 1
 
   // Navigation & Config
-  const [currentView, setCurrentView] = useState<'terminal' | 'backtest' | 'analytics'>('terminal');
+  const [currentView, setCurrentView] = useState<'terminal' | 'backtest' | 'analytics' | 'leverage'>('terminal');
   const [dbConnected, setDbConnected] = useState(false);
   const [aiReady, setAiReady] = useState(false);
 
@@ -785,6 +786,14 @@ function App() {
           </button>
           
           <button 
+            onClick={() => setCurrentView('leverage')}
+            className={`p-3 rounded-lg transition-colors flex justify-center ${currentView === 'leverage' ? 'bg-slate-800 text-amber-400' : 'text-slate-400 hover:bg-slate-800 hover:text-amber-400'}`}
+            title="Leverage Trading (10x)"
+          >
+            <Coins className="w-5 h-5" />
+          </button>
+          
+          <button 
             onClick={() => setShowStrategyGuide(true)}
             className="p-3 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-emerald-400 transition-colors flex justify-center"
             title="Strategy Guide"
@@ -925,6 +934,8 @@ function App() {
         {/* View Content */}
         {currentView === 'analytics' ? (
              <AnalyticsDashboard />
+        ) : currentView === 'leverage' ? (
+             <LeverageDashboard />
         ) : currentView === 'backtest' ? (
              <BacktestPanel candles={candles} />
         ) : (
