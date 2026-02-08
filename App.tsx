@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Activity, Zap, TrendingUp, TrendingDown, RefreshCw, ShieldCheck, DollarSign, BrainCircuit, Target, BookOpen, FlaskConical, LayoutDashboard, ChevronDown, Layers, Globe, Radio, PenTool, AlertCircle, CheckCircle2, List, Bell, Edit3, Settings as SettingsIcon, Coins, AlertTriangle, CheckCircle, XCircle, BarChart3, Trash2, Settings } from 'lucide-react';
+import { TradingJournal } from './components/TradingJournal';
+import { TradingLog } from './types';
 import ModernCandleChart from './components/CandleChart';
 import BacktestPanel from './components/BacktestPanel';
 import TradeConfirmationModal from './components/TradeConfirmationModal';
@@ -11,7 +13,9 @@ import FeedbackEditorModal from './components/FeedbackEditorModal';
 import SettingsModal from './components/SettingsModal';
 import { AnalyticsDashboard } from './components/AnalyticsDashboard';
 import { LeverageDashboard } from './components/LeverageDashboard';
-import { calculateRSI, calculateFibonacci, analyzeTrend, calculateSMA, calculateEMA, findSupportResistance } from './utils/technical';
+import { OrderBook } from './components/OrderBook';
+import { HeaderControls } from './components/HeaderControls';
+import { calculateRSI, calculateFibonacci, analyzeTrend, calculateSMA, calculateEMA, findSupportResistance, calculateMACD, calculateStochastic, calculateMomentum } from './utils/technical';
 import { getHistoricalKlines, getCurrentPrice } from './services/binanceService';
 import { getAccountBalances } from './services/binanceTradingService';
 import { analyzeMarket, trainModel, refreshModel } from './services/mlService';
@@ -67,6 +71,8 @@ function App() {
   const [showStrategyGuide, setShowStrategyGuide] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [editingFeedback, setEditingFeedback] = useState<TrainingData | null>(null);
+  const [terminalTab, setTerminalTab] = useState<'trade' | 'data'>('trade'); // Mobile Tab State
+  const [isMobileDataExpanded, setIsMobileDataExpanded] = useState(false); // Mobile collapsible state
   
   // Trading Configuration
   const [tradingMode, setTradingMode] = useState<'paper' | 'live'>('paper');
@@ -90,7 +96,7 @@ function App() {
   const [sentimentScore, setSentimentScore] = useState(0); // -1 to 1
 
   // Navigation & Config
-  const [currentView, setCurrentView] = useState<'terminal' | 'backtest' | 'analytics' | 'leverage'>('terminal');
+  const [currentView, setCurrentView] = useState<'terminal' | 'backtest' | 'analytics' | 'leverage' | 'journal'>('terminal');
   const [dbConnected, setDbConnected] = useState(false);
   const [aiReady, setAiReady] = useState(false);
 
@@ -178,6 +184,10 @@ function App() {
     // Load Auto Mode State
     const savedAutoMode = storageService.getAutoTradeState();
     setAutoMode(savedAutoMode);
+
+    return () => {
+       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
   }, []);
 
   // Initialize Data whenever Asset changes - REAL-TIME API INTEGRATION
@@ -297,6 +307,11 @@ function App() {
           const trend = analyzeTrend(binanceCandles, sma200);
           const supportResistance = findSupportResistance(binanceCandles);
           
+          // New Indicators
+          const macd = calculateMACD(closePrices);
+          const stochastic = calculateStochastic(binanceCandles);
+          const momentum = calculateMomentum(closePrices);
+
           setIndicators({
             rsi,
             sma20,
@@ -308,7 +323,14 @@ function App() {
             fibLevels: fibonacci,
             trend,
             nearestSupport: supportResistance.support,
-            nearestResistance: supportResistance.resistance
+            nearestResistance: supportResistance.resistance,
+            macd: {
+                value: macd.macd,
+                signal: macd.signal,
+                histogram: macd.histogram
+            },
+            stochastic,
+            momentum
           });
           
           showNotification(`✅ Loaded ${binanceCandles.length} candles from Binance`, 'success');
@@ -341,7 +363,7 @@ function App() {
     return () => {
       isActive = false;
       
-      if (ws) {
+      if (ws && typeof ws.close === 'function') {
         console.log(`[App] Closing WebSocket for ${selectedAsset.symbol}`);
         ws.close();
       }
@@ -425,6 +447,11 @@ function App() {
         const trend = analyzeTrend(newData, sma200);
         const sr = findSupportResistance(newData);
         
+        // Calculate new indicators for simulation
+        const macd = calculateMACD(closes);
+        const stochastic = calculateStochastic(newData);
+        const momentum = calculateMomentum(closes);
+
         const newIndicators = {
           rsi: currentRsi,
           fibLevels: calculateFibonacci(high, low, trend),
@@ -434,7 +461,14 @@ function App() {
           ema20: calculateEMA(closes, 20),
           volumeSma: calculateSMA(volumes, 20),
           nearestSupport: sr.support,
-          nearestResistance: sr.resistance
+          nearestResistance: sr.resistance,
+          macd: {
+              value: macd.macd,
+              signal: macd.signal,
+              histogram: macd.histogram
+          },
+          stochastic,
+          momentum
         };
 
         setIndicators(newIndicators);
@@ -580,17 +614,11 @@ function App() {
     if (signal && signal.type !== 'HOLD') {
       const fullSignal = { ...signal, symbol: selectedAsset.symbol };
 
-      if (autoMode) {
+      if (autoMode || tradingMode === 'paper') {
           // --- AUTOMATIC EXECUTION (AUTO-SEND) ---
-          // Set as pending first, then confirm automatically
-          setPendingSignal(fullSignal);
-          
-          // Auto-confirm immediately (this will trigger webhook and save to Supabase)
-          setTimeout(() => {
-              confirmTrade();
-          }, 100);
+          confirmTrade(fullSignal);
       } else {
-          // --- MANUAL CONFIRMATION ---
+          // --- MANUAL CONFIRMATION (LIVE MODE) ---
           setPendingSignal(fullSignal);
       }
     } else if (signal && signal.type === 'HOLD') {
@@ -599,7 +627,7 @@ function App() {
             showNotification("Market conditions unclear. Neural Net advises HOLD.", "info");
         }
     }
-  }, [candles, indicators, trainingHistory, marketNews, activeSignal, pendingSignal, autoMode, selectedAsset]);
+  }, [candles, indicators, trainingHistory, marketNews, activeSignal, pendingSignal, autoMode, selectedAsset, tradingMode]);
 
   // --- AUTOMATIC TRADING LOOP ---
   useEffect(() => {
@@ -618,28 +646,56 @@ function App() {
 
 
   // Execute Trade after Confirmation
-  const confirmTrade = () => {
-    if (!pendingSignal) return;
+  const confirmTrade = (signalOverride?: TradeSignal) => {
+    const signal = signalOverride || pendingSignal;
+    if (!signal) return;
 
     // Execute the trade
-    setActiveSignal({ ...pendingSignal, outcome: 'PENDING' });
+    setActiveSignal({ ...signal, outcome: 'PENDING' });
     setPendingSignal(null);
     
     // Send push notification
     NotificationService.sendTradeNotification({
-      symbol: pendingSignal.symbol,
-      type: pendingSignal.type,
-      price: pendingSignal.entryPrice,
+      symbol: signal.symbol,
+      type: signal.type as 'BUY' | 'SELL',
+      price: signal.entryPrice,
       leverage: leverage,
       mode: tradingMode,
       positionSize: balance * leverage * (riskPercent / 100)
     });
 
     // Save signal to Supabase
-    storageService.saveTradeSignal(pendingSignal);
+    storageService.saveTradeSignal(signal);
+
+    // --- SAVE TRADING LOG (JOURNAL) ---
+    if (indicators) {
+        const log: TradingLog = {
+            id: generateUUID(),
+            tradeId: signal.id,
+            timestamp: Date.now(),
+            symbol: signal.symbol,
+            type: signal.type as 'BUY' | 'SELL',
+            items: {
+                snapshot: {
+                    price: signal.entryPrice,
+                    rsi: indicators.rsi,
+                    trend: indicators.trend,
+                    newsSentiment: sentimentScore,
+                    condition: indicators.rsi > 70 ? 'Overbought' : indicators.rsi < 30 ? 'Oversold' : 'Neutral'
+                },
+                chartHistory: candles.slice(-60),
+                aiReasoning: signal.reasoning,
+                aiConfidence: signal.confidence,
+                aiPrediction: "AI generated signal based on current market conditions." 
+            },
+            notes: "",
+            tags: ["AI", "Auto"]
+        };
+        storageService.saveTradingLog(log);
+    }
 
     // Send webhook notification
-    sendWebhookNotification('SIGNAL_ENTRY', pendingSignal).then(res => {
+    sendWebhookNotification('SIGNAL_ENTRY', signal).then(res => {
       if (res.success) {
         if (res.warning) {
           showNotification(`Order Placed (Blind Mode). Check n8n.`, "warning");
@@ -653,7 +709,7 @@ function App() {
       }
     });
 
-    showNotification(`Trade executed: ${pendingSignal.type} ${pendingSignal.symbol} at $${pendingSignal.entryPrice.toFixed(2)}`, 'success');
+    showNotification(`Trade executed: ${signal.type} ${signal.symbol} at $${signal.entryPrice.toFixed(2)}`, 'success');
   };
 
   const rejectTrade = () => {
@@ -682,7 +738,7 @@ function App() {
     // Send push notification for manual trade
     NotificationService.sendTradeNotification({
       symbol: newSignal.symbol,
-      type: newSignal.type,
+      type: newSignal.type as 'BUY' | 'SELL',
       price: newSignal.entryPrice,
       leverage: leverage,
       mode: tradingMode,
@@ -691,6 +747,33 @@ function App() {
 
     // Save to Supabase
     storageService.saveTradeSignal(newSignal);
+
+    // --- SAVE TRADING LOG (JOURNAL) ---
+    if (indicators) {
+        const log: TradingLog = {
+            id: generateUUID(),
+            tradeId: newSignal.id,
+            timestamp: Date.now(),
+            symbol: newSignal.symbol,
+            type: newSignal.type as 'BUY' | 'SELL',
+            items: {
+                snapshot: {
+                    price: newSignal.entryPrice,
+                    rsi: indicators.rsi,
+                    trend: indicators.trend,
+                    newsSentiment: sentimentScore,
+                    condition: indicators.rsi > 70 ? 'Overbought' : indicators.rsi < 30 ? 'Oversold' : 'Neutral'
+                },
+                chartHistory: candles.slice(-60),
+                aiReasoning: newSignal.reasoning,
+                aiConfidence: newSignal.confidence,
+                aiPrediction: "Manual entry."
+            },
+            notes: "Manual trade executed by user.",
+            tags: ["Manual"]
+        };
+        storageService.saveTradingLog(log);
+    }
     
     // Trigger Webhook
     sendWebhookNotification('SIGNAL_ENTRY', newSignal).then(res => {
@@ -788,7 +871,7 @@ function App() {
   const riskAmount = balance * (riskPercent / 100);
 
   return (
-    <div className="h-screen flex flex-col text-slate-200 overflow-hidden relative">
+    <div className="h-screen flex flex-col md:flex-row text-slate-200 overflow-hidden relative">
       
       {/* NOTIFICATION BANNER */}
       {notification && (
@@ -876,6 +959,14 @@ function App() {
           >
             <Coins className="w-5 h-5" />
           </button>
+
+          <button 
+            onClick={() => setCurrentView('journal')}
+            className={`p-3 rounded-lg transition-colors flex justify-center ${currentView === 'journal' ? 'bg-slate-800 text-emerald-400' : 'text-slate-400 hover:bg-slate-800 hover:text-emerald-400'}`}
+            title="Trading Journal"
+          >
+            <BookOpen className="w-5 h-5" />
+          </button>
           
           <button 
             onClick={() => setShowStrategyGuide(true)}
@@ -927,6 +1018,13 @@ function App() {
           >
             <Coins className="w-6 h-6" />
             <span className="text-[10px] font-medium">Leverage</span>
+          </button>
+          <button 
+            onClick={() => setCurrentView('journal')}
+            className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-colors min-w-[60px] ${currentView === 'journal' ? 'text-emerald-400' : 'text-slate-400'}`}
+          >
+            <BookOpen className="w-6 h-6" />
+            <span className="text-[10px] font-medium">Journal</span>
           </button>
           <button 
             onClick={() => setShowSettings(true)}
@@ -1019,41 +1117,14 @@ function App() {
                     </div>
                 </div>
 
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-4 bg-slate-900 border border-slate-800 p-2 sm:p-2 rounded-lg">
-                    <div className="flex items-center justify-between sm:justify-start px-2 sm:px-3 sm:border-r border-slate-800 gap-2">
-                        <span className="text-xs text-slate-500">AUTO-TRADE</span>
-                        <button 
-                            onClick={toggleAutoMode}
-                            className={`w-10 h-5 sm:w-8 sm:h-4 rounded-full transition-colors relative ${autoMode ? 'bg-emerald-500' : 'bg-slate-700'}`}
-                        >
-                            <div className={`absolute top-0.5 left-0.5 w-4 h-4 sm:w-3 sm:h-3 bg-white rounded-full transition-transform ${autoMode ? 'translate-x-5 sm:translate-x-4' : ''}`}></div>
-                        </button>
-                    </div>
-                    <div className="flex items-center justify-between sm:justify-start px-2 sm:px-3 sm:border-r border-slate-800">
-                        <span className="text-xs text-slate-500 block">BALANCE</span>
-                        <span className="font-mono text-emerald-400 font-bold text-sm sm:text-base">${balance.toFixed(2)}</span>
-                    </div>
-                    <div className="flex items-center justify-between sm:justify-start px-2 sm:px-3 gap-1">
-                        <span className="text-xs text-slate-500 block">RISK</span>
-                        <input 
-                            type="number" 
-                            value={riskPercent} 
-                            onChange={(e) => setRiskPercent(Number(e.target.value))}
-                            className="w-12 bg-transparent text-white font-mono font-bold focus:outline-none border-b border-slate-700 focus:border-blue-500 text-center text-sm" 
-                        />
-                        <span className="text-slate-500 text-xs">%</span>
-                    </div>
-                </div>
-
-                {/* Manual Trade Button */}
-                <button 
-                    onClick={() => setShowManualModal(true)}
-                    className="bg-slate-800 hover:bg-slate-700 text-white p-3 sm:p-2.5 rounded-lg border border-slate-700 transition-colors flex items-center justify-center gap-2"
-                    title="Manual Trade Entry"
-                >
-                    <PenTool className="w-5 h-5" />
-                    <span className="sm:hidden text-sm font-medium">Manual Trade</span>
-                </button>
+                <HeaderControls 
+                    autoMode={autoMode}
+                    onToggleAuto={toggleAutoMode}
+                    balance={balance}
+                    riskPercent={riskPercent}
+                    setRiskPercent={setRiskPercent}
+                    onManualTrade={() => setShowManualModal(true)}
+                />
             </div>
           )}
         </header>
@@ -1063,12 +1134,41 @@ function App() {
              <AnalyticsDashboard />
         ) : currentView === 'leverage' ? (
              <LeverageDashboard />
+        ) : currentView === 'journal' ? (
+             <div className="h-full overflow-hidden">
+                 <TradingJournal />
+             </div>
         ) : currentView === 'backtest' ? (
              <BacktestPanel candles={candles} />
         ) : (
-             <div className="flex flex-col lg:grid lg:grid-cols-4 gap-3 md:gap-6 flex-1 min-h-0">
-                {/* LEFT COLUMN: Chart + Trade History (2 cols wide on desktop) */}
-                <div className="lg:col-span-2 space-y-3 md:space-y-4 flex flex-col overflow-hidden">
+             <div className="flex flex-col h-full overflow-hidden">
+                {/* Mobile Terminal Tabs */}
+                <div className="flex md:hidden bg-slate-900 p-1 rounded-lg mb-2 gap-1 border border-slate-800 shrink-0 mx-1">
+                    <button
+                        onClick={() => setTerminalTab('trade')}
+                        className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${
+                            terminalTab === 'trade' 
+                                ? 'bg-blue-600 text-white shadow-lg' 
+                                : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                    >
+                        Chart & Trade
+                    </button>
+                    <button
+                        onClick={() => setTerminalTab('data')}
+                        className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${
+                            terminalTab === 'data' 
+                                ? 'bg-blue-600 text-white shadow-lg' 
+                                : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                    >
+                        News & Data
+                    </button>
+                </div>
+
+                <div className="flex flex-col lg:grid lg:grid-cols-4 gap-3 md:gap-6 flex-1 min-h-0">
+                {/* LEFT COLUMN: Chart + Trade History */}
+                <div className={`lg:col-span-2 space-y-3 md:space-y-4 flex-col overflow-hidden ${terminalTab === 'trade' ? 'flex' : 'hidden lg:flex'}`}>
                     <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 md:p-4 shadow-xl flex flex-col min-h-[250px] sm:min-h-[300px]">
                         <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 mb-3 md:mb-4 shrink-0">
                             <div className="flex gap-2 items-center">
@@ -1105,8 +1205,8 @@ function App() {
                     </div>
                 </div>
 
-                {/* MIDDLE COLUMN: Signal & Alerts (1 col wide on desktop) */}
-                <div className="lg:col-span-1 space-y-3 md:space-y-4 flex flex-col">
+                {/* MIDDLE COLUMN: Signal & Alerts */}
+                <div className={`lg:col-span-1 space-y-3 md:space-y-4 flex-col ${terminalTab === 'trade' ? 'flex' : 'hidden lg:flex'}`}>
                     {/* Active Signal Card */}
                     <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 md:p-6 shadow-xl relative overflow-hidden group shrink-0">
                         <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/5 rounded-full blur-3xl group-hover:bg-blue-500/10 transition-all"></div>
@@ -1304,10 +1404,10 @@ function App() {
                     </div>
                 </div>
 
-                {/* RIGHT COLUMN: Training & News (1 col wide on desktop) */}
-                <div className="lg:col-span-1 space-y-3 md:space-y-4 flex flex-col">
+                {/* RIGHT COLUMN: Training & News */}
+                <div className={`lg:col-span-1 space-y-3 md:space-y-4 flex-col overflow-y-auto ${terminalTab === 'data' ? 'flex' : 'hidden lg:flex'}`}>
                      {/* AI Learning History */}
-                     <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 md:p-4 shadow-xl flex flex-col h-1/2 min-h-[200px] sm:min-h-[250px]">
+                     <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 md:p-4 shadow-xl flex flex-col h-64 shrink-0">
                         <h2 className="text-slate-400 text-xs font-bold tracking-wider mb-4 flex items-center gap-2">
                             <BrainCircuit className="w-4 h-4" /> NEURAL FEEDBACK
                         </h2>
@@ -1338,8 +1438,13 @@ function App() {
                         </div>
                     </div>
 
+                    {/* Order Book Component */}
+                    <div className="shrink-0">
+                        <OrderBook symbol={selectedAsset.symbol} />
+                    </div>
+                    
                     {/* News Feed */}
-                    <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 md:p-4 shadow-xl flex-1 flex flex-col h-1/2 min-h-[200px] sm:min-h-[250px]">
+                    <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 md:p-4 shadow-xl flex flex-col min-h-[300px] shrink-0">
                         <h2 className="text-slate-400 text-xs font-bold tracking-wider mb-4 flex items-center gap-2">
                             <Globe className="w-4 h-4" /> NEWS WIRE
                         </h2>
@@ -1360,6 +1465,7 @@ function App() {
                         </div>
                     </div>
                 </div>
+             </div>
              </div>
         )}
       </main>

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Candle, TradeSignal, BacktestTrade, TechnicalIndicators } from '../types';
 
 interface CandleChartProps {
@@ -10,58 +10,110 @@ interface CandleChartProps {
 }
 
 const ModernCandleChart: React.FC<CandleChartProps> = ({ data, pendingSignal, activeTrade, trades = [], fibLevels }) => {
-  const containerRef = React.useRef<HTMLDivElement>(null);
-  const [hoveredCandle, setHoveredCandle] = React.useState<Candle | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [hoveredCandle, setHoveredCandle] = useState<Candle | null>(null);
+  const [cursorPos, setCursorPos] = useState<{x: number, y: number} | null>(null);
 
   if (data.length === 0) return <div className="h-64 flex items-center justify-center text-slate-500">Loading Market Data...</div>;
 
   const maxPrice = Math.max(...data.map(c => c.high));
   const minPrice = Math.min(...data.map(c => c.low));
+  const maxVolume = Math.max(...data.map(c => c.volume));
   const priceRange = maxPrice - minPrice;
   const padding = priceRange * 0.1;
 
+  // Chart dimensions in percentage (SVG viewbox 0-100)
+  const CHART_HEIGHT = 80;
+  const VOLUME_HEIGHT = 20;
+
   const getY = (price: number) => {
-    return 100 - ((price - (minPrice - padding)) / (priceRange + padding * 2)) * 100;
+    return CHART_HEIGHT - ((price - (minPrice - padding)) / (priceRange + padding * 2)) * CHART_HEIGHT;
   };
 
-  // Helper to find X coordinate for a specific time string
   const getXForTime = (time: string) => {
     const index = data.findIndex(c => c.time === time);
-    return index !== -1 ? index * 10 : -1;
+    return index !== -1 ? index * 10 + 5 : -1; // Center of candle
   };
 
-  return (
-    <div className="relative w-full h-full min-h-[300px] bg-slate-950 border border-slate-800 rounded-lg overflow-hidden select-none" ref={containerRef}>
-      {/* Grid Lines */}
-      <div className="absolute inset-0 flex flex-col justify-between p-4 opacity-10 pointer-events-none">
-        {[0, 1, 2, 3, 4].map(i => <div key={i} className="w-full h-px bg-slate-400"></div>)}
-      </div>
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    
+    // Calculate index from x
+    const candleWidth = rect.width / data.length;
+    const index = Math.floor(x / candleWidth);
+    
+    if (index >= 0 && index < data.length) {
+      setHoveredCandle(data[index]);
+    }
+    setCursorPos({ x, y });
+  };
 
-      <svg className="w-full h-full p-4" viewBox={`0 0 ${data.length * 10} 100`} preserveAspectRatio="none">
+  const handleMouseLeave = () => {
+    setHoveredCandle(null);
+    setCursorPos(null);
+  };
+
+  // Generate Y-axis labels (Price)
+  const yLabels = Array.from({ length: 6 }, (_, i) => {
+    const price = minPrice + (priceRange * (i / 5));
+    return { y: getY(price), price };
+  });
+
+  // Generate X-axis labels (Time) - Show every 20th candle
+  const xLabels = data.filter((_, i) => i % 20 === 0).map((c, i) => ({
+    x: (data.indexOf(c) * 10) + 5,
+    time: c.time
+  }));
+
+  return (
+    <div 
+      className="relative w-full h-full min-h-[300px] bg-slate-950 border border-slate-800 rounded-lg overflow-hidden select-none cursor-crosshair" 
+      ref={containerRef}
+      onMouseMove={handleMouseMove}
+      onMouseLeave={handleMouseLeave}
+    >
+      
+      {/* SVG CHART */}
+      <svg className="w-full h-full" viewBox={`0 0 ${data.length * 10} 100`} preserveAspectRatio="none">
         
+        {/* Grid Lines (Horizontal) */}
+        {yLabels.map((label, i) => (
+            <line key={`grid-y-${i}`} x1="0" y1={label.y} x2={data.length * 10} y2={label.y} stroke="#334155" strokeWidth="0.1" strokeDasharray="2 2" />
+        ))}
+
+        {/* Volume Bars (Bottom) */}
+        {data.map((candle, i) => {
+            const x = i * 10;
+            const height = (candle.volume / maxVolume) * VOLUME_HEIGHT;
+            const y = 100 - height;
+            const isGreen = candle.close >= candle.open;
+            return (
+                <rect key={`vol-${i}`} x={x + 1} y={y} width="8" height={height} fill={isGreen ? '#10b981' : '#ef4444'} opacity="0.2" />
+            );
+        })}
+
         {/* Fibonacci Levels */}
         {fibLevels && Object.entries(fibLevels).map(([level, val]) => {
            const price = val as number;
            const y = getY(price);
-           if (y < -10 || y > 110) return null; // Don't draw if far off screen
+           if (y < 0 || y > CHART_HEIGHT) return null;
            
-           // Format level name e.g. level618 -> 61.8%
-           const label = level === 'level0' ? '0%' : 
-                         level === 'level100' ? '100%' :
-                         `${level.replace('level', '').replace(/(\d{2})(\d)/, '$1.$2')}%`;
-            
            const isGolden = level === 'level618' || level === 'level500';
 
            return (
-             <g key={level} opacity="0.6">
+             <g key={level}>
                <line 
                   x1="0" y1={y} x2={data.length * 10} y2={y} 
                   stroke={isGolden ? '#fbbf24' : '#64748b'} 
-                  strokeWidth={isGolden ? 0.5 : 0.3} 
+                  strokeWidth={isGolden ? 0.3 : 0.1} 
                   strokeDasharray="2 2" 
+                  opacity="0.5"
                />
-               <text x={(data.length * 10) - 5} y={y - 1} textAnchor="end" fontSize="3" fill={isGolden ? '#fbbf24' : '#64748b'} fontWeight={isGolden ? 'bold' : 'normal'}>
-                  {label} ({price.toFixed(2)})
+               <text x={(data.length * 10) - 2} y={y - 1} textAnchor="end" fontSize="2.5" fill={isGolden ? '#fbbf24' : '#64748b'}>
+                  {level.replace('level', '')}
                </text>
              </g>
            )
@@ -76,87 +128,89 @@ const ModernCandleChart: React.FC<CandleChartProps> = ({ data, pendingSignal, ac
           const yOpen = getY(candle.open);
           const yClose = getY(candle.close);
           const isGreen = candle.close >= candle.open;
-          const color = isGreen ? '#10b981' : '#ef4444'; // emerald-500 : red-500
+          const color = isGreen ? '#10b981' : '#ef4444'; 
 
           return (
-            <g key={`candle-${i}-${candle.time}`} 
-               onMouseEnter={() => setHoveredCandle(candle)}
-               className="hover:opacity-80 transition-opacity cursor-crosshair">
-              {/* Wick */}
-              <line x1={x + w/2} y1={yHigh} x2={x + w/2} y2={yLow} stroke={color} strokeWidth="0.5" />
-              {/* Body */}
-              <rect x={x} y={Math.min(yOpen, yClose)} width={w} height={Math.abs(yClose - yOpen) || 0.5} fill={color} />
+            <g key={`candle-${i}`}>
+              <line x1={x + 5} y1={yHigh} x2={x + 5} y2={yLow} stroke={color} strokeWidth="0.5" />
+              <rect x={x + 2} y={Math.min(yOpen, yClose)} width={w} height={Math.abs(yClose - yOpen) || 0.5} fill={color} />
             </g>
           );
         })}
 
-        {/* Backtest Trades Visualization */}
-        {trades.map((trade, i) => {
-          const xEntry = getXForTime(trade.entryTime);
-          const xExit = trade.exitTime ? getXForTime(trade.exitTime) : data.length * 10;
-          
-          if (xEntry === -1) return null;
-
-          const yEntry = getY(trade.entryPrice);
-          const yExit = trade.exitPrice ? getY(trade.exitPrice) : yEntry;
-          
-          const color = trade.outcome === 'WIN' ? '#10b981' : trade.outcome === 'LOSS' ? '#ef4444' : '#3b82f6';
-
-          return (
-            <g key={`trade-${i}`}>
-              <circle cx={xEntry + 3} cy={yEntry} r="2" fill={trade.type === 'BUY' ? '#3b82f6' : '#f59e0b'} />
-              {xExit > xEntry && (
-                <line 
-                    x1={xEntry + 3} y1={yEntry} x2={xExit + 3} y2={yExit} 
-                    stroke={color} strokeWidth="0.5" strokeDasharray="1 1" opacity="0.8"
-                />
-              )}
-              {trade.exitTime && <circle cx={xExit + 3} cy={yExit} r="2" fill={color} />}
-            </g>
-          );
-        })}
-
-        {/* PENDING Signal Overlay (Dashed, Lighter) */}
+        {/* Pending Signal */}
         {pendingSignal && (
-            <g className="animate-pulse">
-                <line x1="0" y1={getY(pendingSignal.entryPrice)} x2={data.length * 10} y2={getY(pendingSignal.entryPrice)} stroke="#3b82f6" strokeWidth="0.5" strokeDasharray="4 4" opacity="0.7" />
-                <line x1="0" y1={getY(pendingSignal.stopLoss)} x2={data.length * 10} y2={getY(pendingSignal.stopLoss)} stroke="#ef4444" strokeWidth="0.5" strokeDasharray="4 4" opacity="0.7" />
-                <line x1="0" y1={getY(pendingSignal.takeProfit)} x2={data.length * 10} y2={getY(pendingSignal.takeProfit)} stroke="#10b981" strokeWidth="0.5" strokeDasharray="4 4" opacity="0.7" />
-                
-                <text x="5" y={getY(pendingSignal.entryPrice) - 2} fontSize="3" fill="#3b82f6" opacity="0.7">PENDING ENTRY</text>
-                <text x="5" y={getY(pendingSignal.takeProfit) - 2} fontSize="3" fill="#10b981" opacity="0.7">TARGET</text>
+            <g>
+                <line x1="0" y1={getY(pendingSignal.entryPrice)} x2={data.length * 10} y2={getY(pendingSignal.entryPrice)} stroke="#3b82f6" strokeWidth="0.4" strokeDasharray="4 4" />
+                <line x1="0" y1={getY(pendingSignal.stopLoss)} x2={data.length * 10} y2={getY(pendingSignal.stopLoss)} stroke="#ef4444" strokeWidth="0.4" strokeDasharray="4 4" />
+                <line x1="0" y1={getY(pendingSignal.takeProfit)} x2={data.length * 10} y2={getY(pendingSignal.takeProfit)} stroke="#10b981" strokeWidth="0.4" strokeDasharray="4 4" />
             </g>
         )}
 
-        {/* ACTIVE Trade Overlay (Solid, Bold) */}
+        {/* Active Trade */}
         {activeTrade && activeTrade.outcome === 'PENDING' && (
             <g>
-                <line x1="0" y1={getY(activeTrade.entryPrice)} x2={data.length * 10} y2={getY(activeTrade.entryPrice)} stroke="#3b82f6" strokeWidth="0.8" />
-                <line x1="0" y1={getY(activeTrade.stopLoss)} x2={data.length * 10} y2={getY(activeTrade.stopLoss)} stroke="#ef4444" strokeWidth="0.8" />
-                <line x1="0" y1={getY(activeTrade.takeProfit)} x2={data.length * 10} y2={getY(activeTrade.takeProfit)} stroke="#10b981" strokeWidth="0.8" />
-                
-                <text x={data.length * 10 - 5} y={getY(activeTrade.entryPrice) - 2} textAnchor="end" fontSize="3" fontWeight="bold" fill="#3b82f6">ACTIVE ENTRY</text>
-                <text x={data.length * 10 - 5} y={getY(activeTrade.stopLoss) - 2} textAnchor="end" fontSize="3" fontWeight="bold" fill="#ef4444">STOP LOSS</text>
-                <text x={data.length * 10 - 5} y={getY(activeTrade.takeProfit) - 2} textAnchor="end" fontSize="3" fontWeight="bold" fill="#10b981">TAKE PROFIT</text>
+                <line x1="0" y1={getY(activeTrade.entryPrice)} x2={data.length * 10} y2={getY(activeTrade.entryPrice)} stroke="#3b82f6" strokeWidth="0.5" />
+                <line x1="0" y1={getY(activeTrade.stopLoss)} x2={data.length * 10} y2={getY(activeTrade.stopLoss)} stroke="#ef4444" strokeWidth="0.5" />
+                <line x1="0" y1={getY(activeTrade.takeProfit)} x2={data.length * 10} y2={getY(activeTrade.takeProfit)} stroke="#10b981" strokeWidth="0.5" />
             </g>
         )}
-
       </svg>
-
-      {/* Hover Info */}
-      <div className="absolute top-2 left-2 bg-slate-900/80 backdrop-blur border border-slate-700 p-2 rounded text-xs font-mono text-slate-300 pointer-events-none">
-        {hoveredCandle ? (
-          <div>
-            <span className="mr-2 text-slate-400">{hoveredCandle.time}</span>
-            <span className="mr-2">O: <span className="text-white">{hoveredCandle.open.toFixed(2)}</span></span>
-            <span className="mr-2">H: <span className="text-white">{hoveredCandle.high.toFixed(2)}</span></span>
-            <span className="mr-2">L: <span className="text-white">{hoveredCandle.low.toFixed(2)}</span></span>
-            <span>C: <span className={hoveredCandle.close >= hoveredCandle.open ? "text-emerald-400" : "text-rose-400"}>{hoveredCandle.close.toFixed(2)}</span></span>
-          </div>
-        ) : (
-          "Hover for OHLC"
-        )}
+      
+      {/* OVERLAY ELEMENTS (HTML) for clearer text */}
+      
+      {/* Price Axis (Right) */}
+      <div className="absolute top-0 right-0 bottom-0 w-12 flex flex-col justify-between pointer-events-none text-[9px] font-mono text-slate-500 py-4 border-l border-slate-800/50 bg-slate-900/20">
+         {yLabels.map((lbl, i) => (
+             <span key={i} className="absolute right-1" style={{ top: `${(lbl.y / 100) * 100}%`, transform: 'translateY(-50%)' }}>
+                 {lbl.price.toFixed(2)}
+             </span>
+         ))}
       </div>
+
+      {/* Time Axis (Bottom) */}
+      <div className="absolute bottom-0 left-0 right-12 h-6 flex pointer-events-none text-[9px] font-mono text-slate-500 border-t border-slate-800/50 bg-slate-900/20 overflow-hidden">
+         {xLabels.map((lbl, i) => (
+             <span key={i} className="absolute bottom-1 transform -translate-x-1/2 whitespace-nowrap" style={{ left: `${(data.indexOf(data.find(c => c.time === lbl.time)!) / data.length) * 100}%` }}>
+                 {new Date(lbl.time).getHours()}:{String(new Date(lbl.time).getMinutes()).padStart(2, '0')}
+             </span>
+         ))}
+      </div>
+
+      {/* Crosshair & Tooltip */}
+      {hoveredCandle && cursorPos && (
+        <>
+            {/* Horizontal Line (Price) */}
+            <div className="absolute left-0 right-0 border-t border-white/20 border-dashed pointer-events-none" style={{ top: cursorPos.y }} />
+            {/* Vertical Line (Time) */}
+            <div className="absolute top-0 bottom-0 border-l border-white/20 border-dashed pointer-events-none" style={{ left: cursorPos.x }} />
+            
+            {/* Hover Tooltip */}
+            <div className="absolute top-2 left-2 z-20 bg-slate-900/90 backdrop-blur border border-slate-700 p-2 rounded shadow-xl pointer-events-none">
+                <div className="text-[10px] text-slate-400 mb-1 font-mono">{hoveredCandle.time}</div>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs font-mono">
+                    <span className="text-slate-500">Open:</span> <span className="text-slate-200">{hoveredCandle.open.toFixed(2)}</span>
+                    <span className="text-slate-500">High:</span> <span className="text-emerald-400">{hoveredCandle.high.toFixed(2)}</span>
+                    <span className="text-slate-500">Low:</span> <span className="text-rose-400">{hoveredCandle.low.toFixed(2)}</span>
+                    <span className="text-slate-500">Close:</span> <span className={hoveredCandle.close >= hoveredCandle.open ? "text-emerald-400" : "text-rose-400"}>{hoveredCandle.close.toFixed(2)}</span>
+                    <span className="text-slate-500">Vol:</span> <span className="text-yellow-400">{hoveredCandle.volume.toLocaleString()}</span>
+                </div>
+            </div>
+            
+            {/* Price Cursor Label on Axis */}
+           {/* We can calculate the price at cursor Y, but simple visual crosshair is good for now */}
+        </>
+      )}
+
+      {/* Signal Badges */}
+      {activeTrade && activeTrade.outcome === 'PENDING' && (
+          <div className="absolute top-1/2 right-14 transform -translate-y-1/2 flex flex-col items-end gap-1 pointer-events-none opacity-80">
+              <span className="bg-emerald-500/20 text-emerald-400 text-[9px] px-1 rounded border border-emerald-500/30">TP: {activeTrade.takeProfit}</span>
+              <span className="bg-blue-500/20 text-blue-400 text-[9px] px-1 rounded border border-blue-500/30">ENTRY: {activeTrade.entryPrice}</span>
+              <span className="bg-rose-500/20 text-rose-400 text-[9px] px-1 rounded border border-rose-500/30">SL: {activeTrade.stopLoss}</span>
+          </div>
+      )}
+
     </div>
   );
 };

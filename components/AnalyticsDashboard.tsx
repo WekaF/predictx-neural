@@ -1,13 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { analyticsService, PerformanceMetrics, AssetPerformance, TradeSignalData } from '../services/analyticsService';
+import { analyticsService, PerformanceMetrics, AssetPerformance, TradeSignalData, RiskMetrics, GrowthData } from '../services/analyticsService';
 import { MetricCard } from './MetricCard';
 import { PieChart } from './PieChart';
+import { RiskRadarChart } from './RiskRadarChart';
+import { GrowthChart } from './GrowthChart';
 import { updateLearningRate, updateEpsilon, resetModel, exportWeights, importWeights, getModelStats } from '../services/mlService';
 
 export const AnalyticsDashboard: React.FC = () => {
   const [metrics, setMetrics] = useState<PerformanceMetrics | null>(null);
   const [assetPerf, setAssetPerf] = useState<AssetPerformance[]>([]);
   const [recentTrades, setRecentTrades] = useState<TradeSignalData[]>([]);
+  const [riskMetrics, setRiskMetrics] = useState<RiskMetrics | null>(null);
+  const [growthData, setGrowthData] = useState<GrowthData[]>([]);
   const [loading, setLoading] = useState(true);
   
   // AI Tuning States
@@ -19,15 +23,19 @@ export const AnalyticsDashboard: React.FC = () => {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [metricsData, assetData, tradesData] = await Promise.all([
+      const [metricsData, assetData, tradesData, riskData, growth] = await Promise.all([
         analyticsService.getPerformanceMetrics(),
         analyticsService.getAssetPerformance(),
-        analyticsService.getRecentTrades()
+        analyticsService.getRecentTrades(),
+        analyticsService.getRiskMetrics(),
+        analyticsService.getGrowthCurve()
       ]);
       
       setMetrics(metricsData);
       setAssetPerf(assetData);
       setRecentTrades(tradesData);
+      setRiskMetrics(riskData);
+      setGrowthData(growth);
       
       // Get model stats
       const stats = getModelStats();
@@ -125,8 +133,8 @@ export const AnalyticsDashboard: React.FC = () => {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-white mb-1">📊 AI Analytics</h1>
-          <p className="text-gray-400">Performance metrics & model tuning</p>
+          <h1 className="text-3xl font-bold text-white mb-1">📊 Professional Performance</h1>
+          <p className="text-gray-400">Advanced Analytics & Metric Tracking</p>
         </div>
         <button
           onClick={loadData}
@@ -136,7 +144,7 @@ export const AnalyticsDashboard: React.FC = () => {
         </button>
       </div>
 
-      {/* Metrics Grid */}
+      {/* Primary Metrics Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <MetricCard
           icon="📈"
@@ -152,32 +160,81 @@ export const AnalyticsDashboard: React.FC = () => {
           color="green"
         />
         <MetricCard
-          icon="💡"
-          title="Avg Confidence"
-          value={`${(metrics?.avgConfidence || 0).toFixed(1)}%`}
-          color="purple"
+          icon="💰"
+          title="Expectancy"
+          value={`$${(metrics?.expectancy || 0).toFixed(2)}`}
+          color={metrics && metrics.expectancy > 0 ? "green" : "red"}
         />
         <MetricCard
-          icon="🔥"
-          title="Best Trade"
-          value={metrics?.bestTrade ? `${metrics.bestTrade.confidence.toFixed(1)}%` : 'N/A'}
-          subtitle={metrics?.bestTrade?.symbol}
-          color="green"
+          icon="🛡️"
+          title="Max Drawdown"
+          value={`${(metrics?.maxDrawdown || 0).toFixed(1)}%`}
+          color="red"
         />
       </div>
 
-      {/* Charts Section */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Win/Loss Distribution */}
-        <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-6">
-          <h2 className="text-xl font-bold text-white mb-4">Win/Loss Distribution</h2>
-          <PieChart data={pieData} size={220} />
+      {/* Advanced Visualizations */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        
+        {/* Growth Chart */}
+        <div className="lg:col-span-2 bg-gray-800/50 border border-gray-700 rounded-lg p-6">
+          <h2 className="text-xl font-bold text-white mb-4">Equity Growth Curve</h2>
+          <GrowthChart data={growthData} />
         </div>
 
+        {/* Risk Radar */}
+        <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-6">
+          <h2 className="text-xl font-bold text-white mb-4">Performance Radar</h2>
+          {riskMetrics && <RiskRadarChart metrics={riskMetrics} />}
+        </div>
+      </div>
+
+      {/* Detailed Stats & Pie Chart */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-6">
+              <h2 className="text-xl font-bold text-white mb-4">Trade Distribution</h2>
+              <PieChart data={pieData} size={200} />
+          </div>
+
+          <div className="col-span-2 bg-gray-800/50 border border-gray-700 rounded-lg p-6">
+              <h2 className="text-xl font-bold text-white mb-4">Detailed Statistics</h2>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="p-3 bg-gray-900/50 rounded border border-gray-700">
+                      <div className="text-gray-400 text-xs">Profit Factor</div>
+                      <div className="text-xl font-bold text-white">{metrics?.profitFactor.toFixed(2)}</div>
+                  </div>
+                  <div className="p-3 bg-gray-900/50 rounded border border-gray-700">
+                      <div className="text-gray-400 text-xs">Sharpe Ratio</div>
+                      <div className="text-xl font-bold text-white">{metrics?.sharpeRatio.toFixed(2)}</div>
+                  </div>
+                  <div className="p-3 bg-gray-900/50 rounded border border-gray-700">
+                      <div className="text-gray-400 text-xs">Average Win</div>
+                      <div className="text-xl font-bold text-emerald-400">${metrics?.avgWin.toFixed(2)}</div>
+                  </div>
+                  <div className="p-3 bg-gray-900/50 rounded border border-gray-700">
+                      <div className="text-gray-400 text-xs">Average Loss</div>
+                      <div className="text-xl font-bold text-rose-400">${metrics?.avgLoss.toFixed(2)}</div>
+                  </div>
+                   <div className="p-3 bg-gray-900/50 rounded border border-gray-700">
+                      <div className="text-gray-400 text-xs">Total Net Profit</div>
+                      <div className={`text-xl font-bold ${metrics && metrics.netProfit >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                        ${metrics?.netProfit.toFixed(2)}
+                      </div>
+                  </div>
+                  <div className="p-3 bg-gray-900/50 rounded border border-gray-700">
+                      <div className="text-gray-400 text-xs">Avg Confidence</div>
+                      <div className="text-xl font-bold text-purple-400">{metrics?.avgConfidence.toFixed(1)}%</div>
+                  </div>
+              </div>
+          </div>
+      </div>
+
+      {/* AI Tuning & Asset Performance (Existing functionality kept) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Asset Performance */}
         <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-6">
           <h2 className="text-xl font-bold text-white mb-4">Asset Performance</h2>
-          <div className="space-y-3">
+          <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2">
             {assetPerf.length === 0 ? (
               <p className="text-gray-500 text-center py-8">No asset data yet</p>
             ) : (
@@ -200,152 +257,49 @@ export const AnalyticsDashboard: React.FC = () => {
             )}
           </div>
         </div>
-      </div>
 
-      {/* AI Tuning Controls */}
-      <div className="bg-gradient-to-br from-purple-900/20 to-blue-900/20 border border-purple-500/30 rounded-lg p-6">
-        <h2 className="text-xl font-bold text-white mb-4">🎛️ AI Model Tuning</h2>
-        
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-          {/* Learning Rate */}
-          <div>
-            <label className="block text-sm text-gray-400 mb-2">
-              Learning Rate: <span className="text-white font-bold">{learningRate.toFixed(4)}</span>
-            </label>
-            <input
-              type="range"
-              min="0.001"
-              max="0.1"
-              step="0.001"
-              value={learningRate}
-              onChange={(e) => handleLearningRateChange(parseFloat(e.target.value))}
-              className="w-full"
-            />
-            <p className="text-xs text-gray-500 mt-1">How fast the AI learns from mistakes</p>
-          </div>
-
-          {/* Epsilon (Exploration) */}
-          <div>
-            <label className="block text-sm text-gray-400 mb-2">
-              Exploration Rate: <span className="text-white font-bold">{(epsilon * 100).toFixed(1)}%</span>
-            </label>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value={epsilon}
-              onChange={(e) => handleEpsilonChange(parseFloat(e.target.value))}
-              className="w-full"
-            />
-            <p className="text-xs text-gray-500 mt-1">How often AI tries random actions</p>
-          </div>
-        </div>
-
-        {/* Model Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-          <div className="bg-gray-800/50 p-3 rounded-lg">
-            <p className="text-xs text-gray-400">Training Iterations</p>
-            <p className="text-lg font-bold text-white">{modelStats?.trainingCount || 0}</p>
-          </div>
-          <div className="bg-gray-800/50 p-3 rounded-lg">
-            <p className="text-xs text-gray-400">Input Nodes</p>
-            <p className="text-lg font-bold text-white">{modelStats?.inputNodes || 0}</p>
-          </div>
-          <div className="bg-gray-800/50 p-3 rounded-lg">
-            <p className="text-xs text-gray-400">Hidden Nodes</p>
-            <p className="text-lg font-bold text-white">{modelStats?.hiddenNodes || 0}</p>
-          </div>
-          <div className="bg-gray-800/50 p-3 rounded-lg">
-            <p className="text-xs text-gray-400">Output Nodes</p>
-            <p className="text-lg font-bold text-white">{modelStats?.outputNodes || 3}</p>
-          </div>
-        </div>
-
-        {/* Action Buttons */}
-        <div className="flex flex-wrap gap-3">
-          <button
-            onClick={handleExportWeights}
-            className="px-4 py-2 bg-blue-500/20 text-blue-400 rounded-lg hover:bg-blue-500/30 border border-blue-500/30"
-          >
-            💾 Export Weights
-          </button>
-          <button
-            onClick={handleImportWeights}
-            className="px-4 py-2 bg-green-500/20 text-green-400 rounded-lg hover:bg-green-500/30 border border-green-500/30"
-          >
-            📥 Import Weights
-          </button>
-          <button
-            onClick={handleResetModel}
-            className="px-4 py-2 bg-red-500/20 text-red-400 rounded-lg hover:bg-red-500/30 border border-red-500/30"
-          >
-            🔄 Reset Model
-          </button>
+        {/* AI Tuning Controls */}
+        <div className="bg-gradient-to-br from-purple-900/20 to-blue-900/20 border border-purple-500/30 rounded-lg p-6">
+            <h2 className="text-xl font-bold text-white mb-4">🎛️ AI Model Tuning</h2>
+            {/* ... Only critical controls ... */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+              <div>
+                <label className="block text-sm text-gray-400 mb-2">
+                  Learning Rate: <span className="text-white font-bold">{learningRate.toFixed(4)}</span>
+                </label>
+                <input
+                  type="range"
+                  min="0.001"
+                  max="0.1"
+                  step="0.001"
+                  value={learningRate}
+                  onChange={(e) => handleLearningRateChange(parseFloat(e.target.value))}
+                  className="w-full"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-gray-400 mb-2">
+                  Exploration Rate: <span className="text-white font-bold">{(epsilon * 100).toFixed(1)}%</span>
+                </label>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  value={epsilon}
+                  onChange={(e) => handleEpsilonChange(parseFloat(e.target.value))}
+                  className="w-full"
+                />
+              </div>
+            </div>
+             <div className="flex flex-wrap gap-3">
+              <button onClick={handleExportWeights} className="px-3 py-1 bg-blue-500/20 text-blue-400 rounded text-sm hover:bg-blue-500/30">💾 Export Weights</button>
+              <button onClick={handleImportWeights} className="px-3 py-1 bg-green-500/20 text-green-400 rounded text-sm hover:bg-green-500/30">📥 Import</button>
+              <button onClick={handleResetModel} className="px-3 py-1 bg-red-500/20 text-red-400 rounded text-sm hover:bg-red-500/30">🔄 Reset</button>
+            </div>
         </div>
       </div>
-
-      {/* Recent Trades Table */}
-      <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-6">
-        <h2 className="text-xl font-bold text-white mb-4">Recent Trades</h2>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-gray-700">
-                <th className="text-left text-gray-400 pb-2">Time</th>
-                <th className="text-left text-gray-400 pb-2">Asset</th>
-                <th className="text-left text-gray-400 pb-2">Type</th>
-                <th className="text-left text-gray-400 pb-2">Entry</th>
-                <th className="text-left text-gray-400 pb-2">Confidence</th>
-                <th className="text-left text-gray-400 pb-2">Outcome</th>
-                <th className="text-left text-gray-400 pb-2">Source</th>
-              </tr>
-            </thead>
-            <tbody>
-              {recentTrades.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="text-center text-gray-500 py-8">
-                    No trades yet
-                  </td>
-                </tr>
-              ) : (
-                recentTrades.map((trade) => (
-                  <tr key={trade.id} className="border-b border-gray-800">
-                    <td className="py-3 text-gray-300">
-                      {new Date(trade.created_at).toLocaleString('en-US', { 
-                        month: 'short', 
-                        day: 'numeric', 
-                        hour: '2-digit', 
-                        minute: '2-digit' 
-                      })}
-                    </td>
-                    <td className="py-3 text-white font-bold">{trade.symbol}</td>
-                    <td className="py-3">
-                      <span className={`px-2 py-1 rounded text-xs ${
-                        trade.type === 'BUY' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
-                      }`}>
-                        {trade.type}
-                      </span>
-                    </td>
-                    <td className="py-3 text-gray-300">${trade.entry_price.toFixed(2)}</td>
-                    <td className="py-3 text-gray-300">{trade.confidence.toFixed(1)}%</td>
-                    <td className="py-3">
-                      <span className={`px-2 py-1 rounded text-xs ${
-                        trade.outcome === 'WIN' ? 'bg-green-500/20 text-green-400' :
-                        trade.outcome === 'LOSS' ? 'bg-red-500/20 text-red-400' :
-                        'bg-blue-500/20 text-blue-400'
-                      }`}>
-                        {trade.outcome}
-                      </span>
-                    </td>
-                    <td className="py-3 text-gray-400 text-xs">{trade.source}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      
     </div>
   );
 };

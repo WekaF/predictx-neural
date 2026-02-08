@@ -50,6 +50,16 @@ export interface TechnicalIndicators {
   trend: 'UP' | 'DOWN' | 'SIDEWAYS';
   nearestSupport: number;
   nearestResistance: number;
+  macd: {
+      value: number;
+      signal: number;
+      histogram: number;
+  };
+  stochastic: {
+      k: number;
+      d: number;
+  };
+  momentum: number;
 }
 
 export interface TrainingData {
@@ -128,4 +138,29 @@ export interface ActivityLog {
   details: string;
   metadata?: any;
   created_at: string;
+}
+
+export interface MarketSnapshot {
+    price: number;
+    rsi: number;
+    trend: 'UP' | 'DOWN' | 'SIDEWAYS';
+    newsSentiment: number;
+    condition: string; // e.g. "Overbought", "Oversold"
+}
+
+export interface TradingLog {
+    id: string;
+    tradeId: string;
+    timestamp: number; // Entry Time
+    symbol: string;
+    type: 'BUY' | 'SELL';
+    items: {
+        snapshot: MarketSnapshot;
+        chartHistory: Candle[]; // Stored candles for visualization
+        aiReasoning: string;
+        aiConfidence: number;
+        aiPrediction?: string; // e.g. "Price likely to bounce off SMA200"
+    };
+    notes?: string;
+    tags?: string[]; // e.g. ["Scalp", "News", "Reversal"]
 }

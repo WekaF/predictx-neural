@@ -1,5 +1,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Candle, TechnicalIndicators, TradeSignal, TrainingData, NewsItem } from "../types";
+import { AUTONOMOUS_MARKET_ANALYST_PROMPT, RISK_ACCURACY_OPTIMIZER_PROMPT, VERIFIABLE_INFERENCE_PROMPT, PREDICTX_SYSTEM_INSTRUCTION } from "./aiPrompts";
+import { AutonomousMarketAnalystResponse, RiskAccuracyOptimizerResponse, VerifiableInferenceResponse } from "../types/aiTypes";
 
 const cleanJsonString = (str: string) => {
   return str.replace(/```json\n?|```/g, '').trim();
@@ -112,6 +114,7 @@ export const analyzeMarketWithAI = async (
         model: modelName,
         contents: prompt,
         config: {
+          systemInstruction: PREDICTX_SYSTEM_INSTRUCTION,
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.OBJECT,
@@ -172,4 +175,41 @@ export const analyzeMarketWithAI = async (
   }
 
   return null;
+};
+
+// --- REPLACED WITH LOCAL AI ENGINE ---
+import { localAutonomousMarketAnalyst, localRiskAccuracyOptimizer, localVerifiableInference } from "./localAIService";
+
+export const runAutonomousMarketAnalyst = async (
+  candles: Candle[],
+  ma7: number,
+  ma14: number,
+  volatility: number,
+  modelName: string = 'local-Simulated'
+): Promise<AutonomousMarketAnalystResponse | null> => {
+  console.log("[LocalAI] Running Autonomous Market Analyst...");
+  // Simulate async delay for realism
+  await wait(500); 
+  return localAutonomousMarketAnalyst(candles, ma7, ma14, volatility);
+};
+
+export const runRiskAccuracyOptimizer = async (
+  errorData: any[], 
+  modelName: string = 'local-Simulated'
+): Promise<RiskAccuracyOptimizerResponse | null> => {
+   console.log("[LocalAI] Running Risk Accuracy Optimizer...");
+   await wait(500);
+   return localRiskAccuracyOptimizer(errorData);
+};
+
+export const runVerifiableInference = async (
+  currentTrend: 'Bullish' | 'Bearish' | 'Neutral',
+  lastClose: number,
+  ma7: number,
+  volatility: number,
+  modelName: string = 'local-Simulated'
+): Promise<VerifiableInferenceResponse | null> => {
+  console.log("[LocalAI] Running Verifiable Inference...");
+  await wait(500);
+  return localVerifiableInference(currentTrend, lastClose, ma7, volatility);
 };

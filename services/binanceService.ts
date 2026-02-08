@@ -1,7 +1,7 @@
 import { Candle } from '../types';
 
 // Binance API Configuration
-const BINANCE_REST_API = 'https://api.binance.com/api/v3';
+const BINANCE_REST_API = '/api/api/v3';
 const BINANCE_WS_API = 'wss://stream.binance.com:9443/ws';
 
 // Symbol mapping: App format → Binance format
@@ -191,3 +191,44 @@ export async function getCurrentPrice(symbol: string): Promise<number> {
 export function isBinanceSupported(symbol: string): boolean {
     return symbol in SYMBOL_MAP;
 }
+// --- Order Book Data ---
+export const getOrderBook = async (symbol: string, limit: number = 10) => {
+    const binanceSymbol = toBinanceSymbol(symbol);
+    const url = `${BINANCE_REST_API}/depth?symbol=${binanceSymbol}&limit=${limit}`;
+
+    try {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error('Failed to fetch order book');
+        const data = await response.json();
+        return data;
+    } catch (error) {
+        console.error('Error fetching order book:', error);
+        return { bids: [], asks: [] };
+    }
+};
+
+export const connectOrderBookStream = (
+    symbol: string, 
+    onUpdate: (data: { bids: string[][], asks: string[][] }) => void
+): WebSocket => {
+    const binanceSymbol = toBinanceSymbol(symbol).toLowerCase();
+    const stream = `${binanceSymbol}@depth10@100ms`; // 10 levels, 100ms update
+    const url = `${BINANCE_WS_API}/${stream}`;
+
+    const ws = new WebSocket(url);
+
+    ws.onmessage = (event) => {
+        try {
+            const data = JSON.parse(event.data);
+            // Binance depth stream update
+            onUpdate({
+                bids: data.bids,
+                asks: data.asks
+            });
+        } catch (error) {
+            console.error('OrderBook WebSocket Error:', error);
+        }
+    };
+
+    return ws;
+};

@@ -353,5 +353,44 @@ export const storageService = {
           console.error('[Supabase] Auto-trade state save failed:', e);
         }
       }
+  },
+
+  // --- Trading Journal (NEW) ---
+  getTradingLogs: (): any[] => {
+      try {
+          const key = 'neurotrade_trading_logs';
+          const data = localStorage.getItem(key);
+          return data ? JSON.parse(data) : [];
+      } catch (e) {
+          console.error("Failed to load trading logs", e);
+          return [];
+      }
+  },
+
+  saveTradingLog: async (log: any) => {
+      try {
+          const key = 'neurotrade_trading_logs';
+          const existing = storageService.getTradingLogs();
+          const updated = [log, ...existing];
+          localStorage.setItem(key, JSON.stringify(updated));
+          
+          if (supabase) {
+              const { error } = await supabase
+                  .from('trading_journal')
+                  .insert({
+                      id: log.id,
+                      trade_id: log.tradeId,
+                      symbol: log.symbol,
+                      type: log.type,
+                      ai_reasoning: log.items.aiReasoning,
+                      ai_confidence: log.items.aiConfidence,
+                      market_snapshot: log.items.snapshot
+                  });
+              
+              if (error) console.error('[Supabase] Journal save error:', error);
+          }
+      } catch (e) {
+          console.error("Failed to save trading log", e);
+      }
   }
 };

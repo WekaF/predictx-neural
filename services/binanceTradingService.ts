@@ -6,7 +6,7 @@
 import crypto from 'crypto-js';
 
 // Binance API Configuration
-const BINANCE_API_BASE = 'https://api.binance.com';
+const BINANCE_API_BASE = '/api';
 
 // Load API credentials from environment (works in both browser and Node.js)
 const BINANCE_API_KEY = typeof import.meta !== 'undefined' && import.meta.env 
