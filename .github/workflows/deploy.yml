@@ -28,10 +28,9 @@ jobs:
 
       # Notify deployment started
       - name: Notify n8n - Deployment Started
-        if: secrets.N8N_WEBHOOK_URL
         continue-on-error: true
         run: |
-          curl -X POST "${{ secrets.N8N_WEBHOOK_URL }}" \
+          curl -X POST "https://weka.app.n8n.cloud/webhook/trading-webhook" \
             -H "Content-Type: application/json" \
             -d '{
               "event": "deployment",
@@ -83,10 +82,10 @@ jobs:
 
       # Notify deployment success
       - name: Notify n8n - Deployment Success
-        if: success() && secrets.N8N_WEBHOOK_URL
+        if: success()
         continue-on-error: true
         run: |
-          curl -X POST "${{ secrets.N8N_WEBHOOK_URL }}" \
+          curl -X POST "https://weka.app.n8n.cloud/webhook/trading-webhook" \
             -H "Content-Type: application/json" \
             -d '{
               "event": "deployment",
@@ -113,10 +112,10 @@ jobs:
 
       # Notify deployment failure
       - name: Notify n8n - Deployment Failed
-        if: failure() && secrets.N8N_WEBHOOK_URL
+        if: failure()
         continue-on-error: true
         run: |
-          curl -X POST "${{ secrets.N8N_WEBHOOK_URL }}" \
+          curl -X POST "https://weka.app.n8n.cloud/webhook/trading-webhook" \
             -H "Content-Type: application/json" \
             -d '{
               "event": "deployment",

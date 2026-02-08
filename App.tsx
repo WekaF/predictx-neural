@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Activity, Zap, TrendingUp, TrendingDown, RefreshCw, ShieldCheck, DollarSign, BrainCircuit, Target, BookOpen, FlaskConical, LayoutDashboard, ChevronDown, Layers, Globe, Radio, PenTool, AlertCircle, CheckCircle2, List, Bell, Edit3, Settings as SettingsIcon, Coins, AlertTriangle } from 'lucide-react';
+import { Activity, Zap, TrendingUp, TrendingDown, RefreshCw, ShieldCheck, DollarSign, BrainCircuit, Target, BookOpen, FlaskConical, LayoutDashboard, ChevronDown, Layers, Globe, Radio, PenTool, AlertCircle, CheckCircle2, List, Bell, Edit3, Settings as SettingsIcon, Coins, AlertTriangle, CheckCircle, XCircle, BarChart3, Trash2, Settings } from 'lucide-react';
 import ModernCandleChart from './components/CandleChart';
 import BacktestPanel from './components/BacktestPanel';
 import TradeConfirmationModal from './components/TradeConfirmationModal';
@@ -67,8 +67,9 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [editingFeedback, setEditingFeedback] = useState<TrainingData | null>(null);
   
-  // Alerts
-  const [alerts, setAlerts] = useState<Alert[]>([]);
+  // Trading Configuration
+  const [tradingMode, setTradingMode] = useState<'paper' | 'live'>('paper');
+  const [leverage, setLeverage] = useState(10); // 1-20x
   
   // Notification State
   const [notification, setNotification] = useState<{message: string, type: 'success' | 'error' | 'info' | 'warning'} | null>(null);
@@ -328,16 +329,6 @@ function App() {
       setTimeout(() => setNotification(null), 5000); // Auto hide after 5s
   };
 
-  // Alert Helpers
-  const addAlert = (newAlert: Omit<Alert, 'id' | 'active'>) => {
-    setAlerts(prev => [...prev, { ...newAlert, id: generateUUID(), active: true }]);
-    showNotification("Alert set successfully", "info");
-  };
-
-  const removeAlert = (id: string) => {
-    setAlerts(prev => prev.filter(a => a.id !== id));
-  };
-
   // Toggle Auto Mode with Persistence
   const toggleAutoMode = () => {
       const newState = !autoMode;
@@ -417,23 +408,6 @@ function App() {
         };
 
         setIndicators(newIndicators);
-
-        // --- CHECK CUSTOM ALERTS ---
-        alerts.forEach(alert => {
-            let triggered = false;
-            if (alert.type === 'PRICE') {
-                if (alert.condition === 'ABOVE' && newClose > alert.value) triggered = true;
-                if (alert.condition === 'BELOW' && newClose < alert.value) triggered = true;
-            } else if (alert.type === 'RSI') {
-                if (alert.condition === 'ABOVE' && currentRsi > alert.value) triggered = true;
-                if (alert.condition === 'BELOW' && currentRsi < alert.value) triggered = true;
-            }
-
-            if (triggered) {
-                showNotification(`ALERT TRIGGERED: ${alert.message}`, 'info');
-                setAlerts(curr => curr.filter(a => a.id !== alert.id));
-            }
-        });
 
         // --- REAL-TIME TP/SL MONITORING ---
         setActiveSignal(currentSignal => {
@@ -556,7 +530,7 @@ function App() {
     }, 2000); 
 
     return () => clearInterval(interval);
-  }, [currentView, alerts, sentimentScore, balance, riskPercent, selectedAsset, activeSignal]); // Added selectedAsset deps
+  }, [currentView, sentimentScore, balance, riskPercent, selectedAsset, activeSignal]); // Removed alerts dependency
 
   // Trigger Local ML Analysis
   const handleAnalyze = useCallback(async () => {
@@ -1117,9 +1091,128 @@ function App() {
                         )}
                     </div>
 
-                    {/* Alerts Panel */}
+                    {/* Trading Configuration Panel */}
                     <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-xl flex-1 flex flex-col min-h-[200px]">
-                        <AlertsPanel alerts={alerts} onAdd={addAlert} onRemove={removeAlert} />
+                        <h3 className="text-sm font-bold text-slate-300 mb-3 flex items-center gap-2">
+                            <Settings className="w-4 h-4" />
+                            Trading Configuration
+                        </h3>
+                        
+                        {/* Trading Mode Toggle */}
+                        <div className="mb-4">
+                            <label className="text-xs text-slate-400 mb-2 block">Trading Mode</label>
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={() => setTradingMode('paper')}
+                                    className={`flex-1 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${
+                                        tradingMode === 'paper'
+                                            ? 'bg-blue-500/20 text-blue-400 border-2 border-blue-500'
+                                            : 'bg-slate-800 text-slate-400 border-2 border-slate-700 hover:border-slate-600'
+                                    }`}
+                                >
+                                    📄 Paper Trading
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        if (balance < 1) {
+                                            showNotification('⚠️ Insufficient balance for live trading. Deposit USDT/FDUSD to your Binance account.', 'warning');
+                                            return;
+                                        }
+                                        if (window.confirm('⚠️ WARNING: You are about to enable LIVE TRADING mode.\n\nReal money will be used for trades.\n\nAre you sure?')) {
+                                            setTradingMode('live');
+                                            showNotification('🔴 Live Trading Mode Enabled - Real money will be used!', 'warning');
+                                        }
+                                    }}
+                                    className={`flex-1 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${
+                                        tradingMode === 'live'
+                                            ? 'bg-rose-500/20 text-rose-400 border-2 border-rose-500'
+                                            : 'bg-slate-800 text-slate-400 border-2 border-slate-700 hover:border-slate-600'
+                                    }`}
+                                >
+                                    🔴 Live Trading
+                                </button>
+                            </div>
+                            {tradingMode === 'live' && (
+                                <div className="mt-2 p-2 bg-rose-500/10 border border-rose-500/30 rounded text-[10px] text-rose-400">
+                                    ⚠️ Live mode active - Real money will be used
+                                </div>
+                            )}
+                        </div>
+                        
+                        {/* Leverage Configuration */}
+                        <div className="mb-4">
+                            <label className="text-xs text-slate-400 mb-2 block">
+                                Leverage: <span className="text-amber-400 font-bold">{leverage}x</span>
+                            </label>
+                            <input
+                                type="range"
+                                min="1"
+                                max="20"
+                                value={leverage}
+                                onChange={(e) => {
+                                    const newLeverage = parseInt(e.target.value);
+                                    setLeverage(newLeverage);
+                                    if (newLeverage > 15) {
+                                        showNotification(`⚠️ High leverage (${newLeverage}x) increases risk significantly!`, 'warning');
+                                    }
+                                }}
+                                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                            />
+                            <div className="flex justify-between text-[10px] text-slate-500 mt-1">
+                                <span>1x</span>
+                                <span>5x</span>
+                                <span>10x</span>
+                                <span>15x</span>
+                                <span>20x</span>
+                            </div>
+                            
+                            {/* Leverage Presets */}
+                            <div className="flex gap-1 mt-2">
+                                {[5, 10, 15, 20].map(preset => (
+                                    <button
+                                        key={preset}
+                                        onClick={() => setLeverage(preset)}
+                                        className={`flex-1 px-2 py-1 rounded text-[10px] font-semibold transition-all ${
+                                            leverage === preset
+                                                ? 'bg-amber-500/20 text-amber-400 border border-amber-500'
+                                                : 'bg-slate-800 text-slate-400 border border-slate-700 hover:border-slate-600'
+                                        }`}
+                                    >
+                                        {preset}x
+                                    </button>
+                                ))}
+                            </div>
+                            
+                            {leverage > 15 && (
+                                <div className="mt-2 p-2 bg-amber-500/10 border border-amber-500/30 rounded text-[10px] text-amber-400">
+                                    ⚠️ High leverage = High risk. You can lose your entire balance quickly.
+                                </div>
+                            )}
+                        </div>
+                        
+                        {/* Info Display */}
+                        <div className="mt-auto pt-3 border-t border-slate-800">
+                            <div className="grid grid-cols-2 gap-2 text-[10px]">
+                                <div>
+                                    <span className="text-slate-500">Mode:</span>
+                                    <span className={`ml-1 font-semibold ${tradingMode === 'live' ? 'text-rose-400' : 'text-blue-400'}`}>
+                                        {tradingMode === 'paper' ? 'Paper' : 'Live'}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="text-slate-500">Leverage:</span>
+                                    <span className="ml-1 font-semibold text-amber-400">{leverage}x</span>
+                                </div>
+                                <div>
+                                    <span className="text-slate-500">Balance:</span>
+                                    <span className="ml-1 font-semibold text-emerald-400">${balance.toFixed(2)}</span>
+                                </div>
+                                <div>
+                                    <span className="text-slate-500">Max Position:</span>
+                                    <span className="ml-1 font-semibold text-emerald-400">${(balance * leverage * (riskPercent / 100)).toFixed(2)}</span>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
