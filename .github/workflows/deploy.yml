@@ -26,6 +26,35 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
+      # Notify deployment started
+      - name: Notify n8n - Deployment Started
+        if: secrets.N8N_WEBHOOK_URL != ''
+        continue-on-error: true
+        run: |
+          curl -X POST "${{ secrets.N8N_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "event": "deployment",
+              "status": "started",
+              "commit": {
+                "hash": "${{ github.sha }}",
+                "message": "${{ github.event.head_commit.message }}",
+                "author": "${{ github.event.head_commit.author.name }}",
+                "url": "${{ github.event.head_commit.url }}"
+              },
+              "deployment": {
+                "environment": "production",
+                "timestamp": "${{ github.event.head_commit.timestamp }}",
+                "repository": "${{ github.repository }}",
+                "branch": "${{ github.ref_name }}"
+              },
+              "workflow": {
+                "run_id": "${{ github.run_id }}",
+                "run_number": "${{ github.run_number }}",
+                "run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              }
+            }'
+
       - name: Install dependencies
         run: npm ci
 
@@ -46,4 +75,70 @@ jobs:
         run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
 
       - name: Deploy Project Artifacts to Vercel
-        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+        id: deploy
+        run: |
+          DEPLOYMENT_URL=$(vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }})
+          echo "url=$DEPLOYMENT_URL" >> $GITHUB_OUTPUT
+          echo "Deployed to: $DEPLOYMENT_URL"
+
+      # Notify deployment success
+      - name: Notify n8n - Deployment Success
+        if: success() && secrets.N8N_WEBHOOK_URL != ''
+        continue-on-error: true
+        run: |
+          curl -X POST "${{ secrets.N8N_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "event": "deployment",
+              "status": "success",
+              "commit": {
+                "hash": "${{ github.sha }}",
+                "message": "${{ github.event.head_commit.message }}",
+                "author": "${{ github.event.head_commit.author.name }}",
+                "url": "${{ github.event.head_commit.url }}"
+              },
+              "deployment": {
+                "url": "${{ steps.deploy.outputs.url }}",
+                "environment": "production",
+                "timestamp": "${{ github.event.head_commit.timestamp }}",
+                "repository": "${{ github.repository }}",
+                "branch": "${{ github.ref_name }}"
+              },
+              "workflow": {
+                "run_id": "${{ github.run_id }}",
+                "run_number": "${{ github.run_number }}",
+                "run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              }
+            }'
+
+      # Notify deployment failure
+      - name: Notify n8n - Deployment Failed
+        if: failure() && secrets.N8N_WEBHOOK_URL != ''
+        continue-on-error: true
+        run: |
+          curl -X POST "${{ secrets.N8N_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "event": "deployment",
+              "status": "failed",
+              "commit": {
+                "hash": "${{ github.sha }}",
+                "message": "${{ github.event.head_commit.message }}",
+                "author": "${{ github.event.head_commit.author.name }}",
+                "url": "${{ github.event.head_commit.url }}"
+              },
+              "deployment": {
+                "environment": "production",
+                "timestamp": "${{ github.event.head_commit.timestamp }}",
+                "repository": "${{ github.repository }}",
+                "branch": "${{ github.ref_name }}"
+              },
+              "workflow": {
+                "run_id": "${{ github.run_id }}",
+                "run_number": "${{ github.run_number }}",
+                "run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              },
+              "error": {
+                "message": "Deployment failed. Check workflow logs for details."
+              }
+            }'
