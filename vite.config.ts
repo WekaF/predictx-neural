@@ -15,6 +15,9 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true
           // rewrite removed: we want to pass /api to the target
         }
+      },
+      watch: {
+        ignored: ['**/backend/**', '**/models/**', '**/*.log']
       }
     },
     plugins: [react()],

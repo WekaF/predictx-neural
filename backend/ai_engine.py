@@ -4,12 +4,24 @@ import pandas as pd
 from torch.utils.data import DataLoader
 from services.lstm_service import LSTMModel, train_model, predict, TimeSeriesDataset
 from services.data_service import get_historical_data
+from services.db_service import db_service
 import os
+import logging
+import time
+
+# Configure Logging
+logging.basicConfig(
+    filename='training.log',
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 
 class AIEngine:
     def __init__(self):
         self.models_loaded = False
         print("Initializing AI Engine...")
+        logging.info("Initializing AI Engine...")
         
         self.input_size = 1 # Using 'Close' price only for now
         self.seq_length = 60 # Lookback period
@@ -44,12 +56,26 @@ class AIEngine:
         return np.array(xs), np.array(ys)
 
     def train(self, symbol="BTC-USD", epochs=20):
+        start_time = time.time()
         print(f"Starting training for {symbol}...")
+        logging.info(f"Starting training session for {symbol} with {epochs} epochs")
         
         # 1. Fetch Data
         raw_data = get_historical_data(symbol, period="2y", interval="1h")
         if "error" in raw_data:
-            return {"status": "error", "message": raw_data["error"]}
+            error_msg = raw_data["error"]
+            logging.error(f"Data fetch error: {error_msg}")
+            
+            # Log Failure to DB
+            db_service.log_training_session({
+                "symbol": symbol,
+                "epochs": epochs,
+                "status": "FAILED",
+                "error_message": error_msg,
+                "duration_seconds": 0
+            })
+            
+            return {"status": "error", "message": error_msg}
             
         df = pd.DataFrame(raw_data["data"])
         
@@ -93,8 +119,21 @@ class AIEngine:
         self.models_loaded = True
         
         final_loss = history['loss'][-1] if history['loss'] else 0
+        end_time = time.time()
+        duration = end_time - start_time
         
         print(f"Training complete. Final Loss: {final_loss:.6f}")
+        logging.info(f"Training complete. Final Loss: {final_loss:.6f}")
+        
+        # Log Success to DB
+        db_service.log_training_session({
+            "symbol": symbol,
+            "epochs": epochs,
+            "final_loss": float(final_loss),
+            "status": "SUCCESS",
+            "duration_seconds": round(duration, 2),
+            "metadata": {"min_val": float(self.min_val), "max_val": float(self.max_val)}
+        })
         
         return {
             "status": "success", 

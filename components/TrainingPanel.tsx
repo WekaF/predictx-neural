@@ -2,11 +2,23 @@ import React, { useState, useEffect } from 'react';
 import { BrainCircuit, Play, Loader2, CheckCircle2, AlertCircle, Terminal, BarChart2, Zap } from 'lucide-react';
 import { aiBackendService, TrainingResponse } from '../services/apiService';
 
-export const TrainingPanel: React.FC = () => {
+interface TrainingPanelProps {
+    className?: string;
+    selectedSymbol?: string;
+}
+
+export const TrainingPanel: React.FC<TrainingPanelProps> = ({ selectedSymbol = 'BTC-USD' }) => {
     const [isLoading, setIsLoading] = useState(false);
-    const [symbol, setSymbol] = useState('BTC-USD');
-    const [epochs, setEpochs] = useState(1); // Default to 1 for faster feedback
+    const [symbol, setSymbol] = useState(selectedSymbol);
+    const [epochs, setEpochs] = useState(5); // Increased default for better results
     const [result, setResult] = useState<TrainingResponse | null>(null);
+
+    // Sync with global selection
+    useEffect(() => {
+        if (selectedSymbol) {
+            setSymbol(selectedSymbol);
+        }
+    }, [selectedSymbol]);
 
     const handleTrain = async () => {
         setIsLoading(true);

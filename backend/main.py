@@ -4,6 +4,12 @@ from pydantic import BaseModel
 from typing import List, Optional
 import uvicorn
 import os
+from dotenv import load_dotenv
+from pathlib import Path
+
+# Load environment variables from .env.local in parent directory
+env_path = Path(__file__).parent.parent / '.env.local'
+load_dotenv(dotenv_path=env_path)
 
 app = FastAPI(title="PredictX AI Engine", version="1.0.0")
 

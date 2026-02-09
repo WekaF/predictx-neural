@@ -15,6 +15,7 @@ import { AnalyticsDashboard } from './components/AnalyticsDashboard';
 import { LeverageDashboard } from './components/LeverageDashboard';
 import { OrderBook } from './components/OrderBook';
 import { TrainingPanel } from './components/TrainingPanel';
+import { TrainingHistory } from './components/TrainingHistory';
 import { HeaderControls } from './components/HeaderControls';
 import { calculateRSI, calculateFibonacci, analyzeTrend, calculateSMA, calculateEMA, findSupportResistance, calculateMACD, calculateStochastic, calculateMomentum } from './utils/technical';
 import { getHistoricalKlines, getCurrentPrice } from './services/binanceService';
@@ -100,7 +101,7 @@ function App() {
   const [sentimentScore, setSentimentScore] = useState(0); // -1 to 1
 
   // Navigation & Config
-  const [currentView, setCurrentView] = useState<'terminal' | 'backtest' | 'analytics' | 'leverage' | 'journal'>('terminal');
+  const [currentView, setCurrentView] = useState<'terminal' | 'backtest' | 'analytics' | 'leverage' | 'journal' | 'training'>('terminal');
   const [dbConnected, setDbConnected] = useState(false);
   const [aiReady, setAiReady] = useState(false);
 
@@ -957,6 +958,14 @@ function App() {
           </button>
           
           <button 
+            onClick={() => setCurrentView('training')}
+            className={`p-3 rounded-lg transition-colors flex justify-center ${currentView === 'training' ? 'bg-slate-800 text-pink-400' : 'text-slate-400 hover:bg-slate-800 hover:text-pink-400'}`}
+            title="AI Training Dashboard"
+          >
+            <BrainCircuit className="w-5 h-5" />
+          </button>
+          
+          <button 
             onClick={() => setCurrentView('leverage')}
             className={`p-3 rounded-lg transition-colors flex justify-center ${currentView === 'leverage' ? 'bg-slate-800 text-amber-400' : 'text-slate-400 hover:bg-slate-800 hover:text-amber-400'}`}
             title="Leverage Trading (10x)"
@@ -1017,6 +1026,13 @@ function App() {
             <span className="text-[10px] font-medium">Analytics</span>
           </button>
           <button 
+            onClick={() => setCurrentView('training')}
+            className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-colors min-w-[60px] ${currentView === 'training' ? 'text-pink-400' : 'text-slate-400'}`}
+          >
+            <BrainCircuit className="w-6 h-6" />
+            <span className="text-[10px] font-medium">Training</span>
+          </button>
+          <button 
             onClick={() => setCurrentView('leverage')}
             className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-colors min-w-[60px] ${currentView === 'leverage' ? 'text-amber-400' : 'text-slate-400'}`}
           >
@@ -1048,7 +1064,7 @@ function App() {
           <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-4">
             <div className="flex-1">
               <h1 className="text-lg sm:text-xl md:text-2xl font-bold bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">
-                {currentView === 'terminal' ? 'NeuroTrade' : currentView === 'backtest' ? 'Backtest' : currentView === 'analytics' ? 'Analytics' : 'Leverage'}
+                {currentView === 'terminal' ? 'NeuroTrade' : currentView === 'backtest' ? 'Backtest' : currentView === 'analytics' ? 'Analytics' : currentView === 'training' ? 'AI Training' : 'Leverage'}
               </h1>
               <div className="flex items-center gap-2 mt-1">
                   <div className="flex flex-col sm:flex-row gap-1 sm:gap-2 items-start sm:items-center">
@@ -1162,6 +1178,27 @@ function App() {
         ) : currentView === 'journal' ? (
              <div className="h-full overflow-hidden">
                  <TradingJournal />
+             </div>
+        ) : currentView === 'training' ? (
+             <div className="h-full overflow-y-auto space-y-6">
+                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                     <div className="space-y-6">
+                         <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl">
+                             <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
+                                 <BrainCircuit className="w-6 h-6 text-pink-400" />
+                                 Active Training Control
+                             </h2>
+                             <p className="text-slate-400 mb-6 text-sm">
+                                 Trigger the Python LSTM Backend to learn from the latest market data. 
+                                 Ensure your backend is running and connected to Supabase.
+                             </p>
+                             <TrainingPanel selectedSymbol={selectedAsset.symbol} />
+                         </div>
+                     </div>
+                     <div className="space-y-6">
+                         <TrainingHistory />
+                     </div>
+                 </div>
              </div>
         ) : currentView === 'backtest' ? (
              <div className="flex-1 min-h-0 relative">
@@ -1446,7 +1483,7 @@ function App() {
                     </div>
 
                     {/* AI Training Panel */}
-                    <TrainingPanel />
+                    <TrainingPanel selectedSymbol={selectedAsset.symbol} />
                 </div>
 
                 {/* RIGHT COLUMN: Training & News */}

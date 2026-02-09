@@ -160,6 +160,20 @@ CREATE TABLE IF NOT EXISTS user_sessions (
     ip_address TEXT
 );
 
+-- 8. TRAINING SESSIONS TABLE (NEW!)
+-- Logs backend training runs
+CREATE TABLE IF NOT EXISTS training_sessions (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    symbol TEXT NOT NULL,
+    epochs INTEGER NOT NULL,
+    final_loss NUMERIC,
+    status TEXT CHECK (status IN ('SUCCESS', 'FAILED', 'RUNNING')),
+    duration_seconds NUMERIC,
+    error_message TEXT,
+    metadata JSONB -- Store additional params like learning rate, batch size
+);
+
 -- =====================================================
 -- INDEXES FOR PERFORMANCE
 -- =====================================================
