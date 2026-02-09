@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { ArrowDown, ArrowUp, Activity } from 'lucide-react';
-import { getOrderBook, connectOrderBookStream } from '../services/binanceService';
+import { connectOrderBookStream } from '../services/binanceService';
 
 interface OrderBookProps {
   symbol: string;
@@ -22,16 +22,8 @@ export const OrderBook: React.FC<OrderBookProps> = ({ symbol }) => {
     let ws: WebSocket | null = null;
     let isActive = true;
 
-    const loadInitialData = async () => {
-      const data = await getOrderBook(symbol);
-      if (isActive && data) {
-        setBids(data.bids || []);
-        setAsks(data.asks || []);
-      }
-    };
-
-    loadInitialData();
-
+    // Connect to WebSocket directly - no initial REST fetch needed
+    // The @depth10@100ms stream provides snapshots, so we just update state
     ws = connectOrderBookStream(symbol, (data) => {
         if (!isActive) return;
         
@@ -41,8 +33,8 @@ export const OrderBook: React.FC<OrderBookProps> = ({ symbol }) => {
     });
 
     return () => {
-      isActive = false;
-      if (ws && typeof ws.close === 'function') ws.close();
+        isActive = false;
+        if (ws && typeof ws.close === 'function') ws.close();
     };
   }, [symbol]);
 

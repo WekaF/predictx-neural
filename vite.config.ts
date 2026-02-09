@@ -11,9 +11,9 @@ export default defineConfig(({ mode }) => {
       host: '0.0.0.0',
       proxy: {
         '/api': {
-          target: 'https://api.binance.com',
-          changeOrigin: true,
-          rewrite: (path) => path.replace(/^\/api/, '')
+          target: 'https://api1.binance.com', // Using api1 as fallback for main domain blocks
+          changeOrigin: true
+          // rewrite removed: we want to pass /api to the target
         }
       }
     },

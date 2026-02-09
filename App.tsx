@@ -27,6 +27,8 @@ import * as binanceService from './services/binanceService';
 import * as forexService from './services/forexService';
 import { Candle, TechnicalIndicators, TradeSignal, TrainingData, NewsItem, Alert, ExecutedTrade, Asset } from './types';
 import { generateUUID } from './utils/uuid';
+import { Analytics } from "@vercel/analytics/react"
+
 
 
 
@@ -60,6 +62,7 @@ function App() {
   // Asset State
   const [selectedAsset, setSelectedAsset] = useState<Asset>(SUPPORTED_ASSETS[0]);
   const [isAssetMenuOpen, setIsAssetMenuOpen] = useState(false);
+  const [selectedInterval, setSelectedInterval] = useState<string>('5m'); // Candle interval
 
   // Trade States
   const [pendingSignal, setPendingSignal] = useState<TradeSignal | null>(null); // Awaiting confirmation
@@ -216,7 +219,7 @@ function App() {
         // CRYPTO ASSETS - Use Binance WebSocket
         if (selectedAsset.type === 'CRYPTO' && binanceService.isBinanceSupported(selectedAsset.symbol)) {
           // 1. Fetch historical data (1000 candles for chart + indicators)
-          const historicalCandles = await binanceService.getHistoricalKlines(selectedAsset.symbol, '1m', 1000);
+          const historicalCandles = await binanceService.getHistoricalKlines(selectedAsset.symbol, selectedInterval, 1000);
           
           if (!isActive) return; // Component unmounted
           
@@ -284,7 +287,7 @@ function App() {
           setSelectedAsset(prev => ({ ...prev, price: currentPrice }));
           
           // Fetch historical candles from Binance (last 1000 1-minute candles)
-          const binanceCandles = await getHistoricalKlines(selectedAsset.symbol, '1m', 1000);
+          const binanceCandles = await getHistoricalKlines(selectedAsset.symbol, selectedInterval, 1000);
           
           if (!isActive) return;
           
@@ -1097,6 +1100,27 @@ function App() {
                     )}
                 </div>
             )}
+            
+            {/* Interval Selector */}
+            {currentView === 'terminal' && (
+                <div className="relative">
+                    <select
+                        value={selectedInterval}
+                        onChange={(e) => setSelectedInterval(e.target.value)}
+                        className="bg-slate-800 hover:bg-slate-700 px-3 py-2 rounded-lg border border-slate-700 transition-colors text-white text-sm font-bold cursor-pointer appearance-none pr-8"
+                        style={{ backgroundImage: 'none' }}
+                    >
+                        <option value="1m">1 Min</option>
+                        <option value="5m">5 Min</option>
+                        <option value="15m">15 Min</option>
+                        <option value="30m">30 Min</option>
+                        <option value="1h">1 Hour</option>
+                        <option value="4h">4 Hour</option>
+                        <option value="1d">1 Day</option>
+                    </select>
+                    <ChevronDown className="w-3 h-3 text-slate-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+                </div>
+            )}
           </div>
           
           {currentView === 'terminal' && (
@@ -1468,6 +1492,7 @@ function App() {
              </div>
              </div>
         )}
+        <Analytics />
       </main>
     </div>
   );
