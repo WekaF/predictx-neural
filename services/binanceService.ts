@@ -11,6 +11,25 @@ const CORS_PROXIES = [
 const BINANCE_API_BASE = 'https://api.binance.com/api/v3';
 
 /**
+ * Helper to fetch with timeout
+ */
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeout = 8000) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeout);
+    try {
+        const response = await fetch(url, {
+            ...options,
+            signal: controller.signal
+        });
+        clearTimeout(id);
+        return response;
+    } catch (error) {
+        clearTimeout(id);
+        throw error;
+    }
+}
+
+/**
  * Fetch data from Binance using rotating proxies
  */
 async function fetchWithFallback(endpoint: string, params: string) {
@@ -18,15 +37,15 @@ async function fetchWithFallback(endpoint: string, params: string) {
     try {
         // Construct relative URL: /api/v3/ticker/price...
         const proxyUrl = `/api/v3${endpoint}?${params}`;
-        const response = await fetch(proxyUrl);
+        const response = await fetchWithTimeout(proxyUrl, {}, 5000); // 5s timeout for local proxy
         
         if (response.ok) {
              return await response.json();
         }
         
-        // If 404/500 from own proxy, might be because it's not configured, fall through to external proxies
     } catch (e) {
         // Fallback to external CORS proxies
+        console.warn(`[Binance] Local proxy failed for ${endpoint}, switching to backups...`);
     }
 
     // 2. Fallback to external CORS proxies
@@ -38,7 +57,7 @@ async function fetchWithFallback(endpoint: string, params: string) {
                 ? `${proxy.url}${encodeURIComponent(targetUrl)}`
                 : `${proxy.url}${targetUrl}`;
                 
-            const response = await fetch(proxyUrl);
+            const response = await fetchWithTimeout(proxyUrl, {}, 10000); // 10s timeout for external proxies
             
             if (!response.ok) {
                 // If 429 (Rate Limit) or 418 (IP Ban), definitely switch proxy
@@ -193,7 +212,25 @@ export async function getHistoricalKlines(
         return cached;
     }
     
-    // Use CoinGecko directly (no proxy issues, no geo-restrictions)
+    // 1. Try Binance API (via Proxy)
+    try {
+        const binanceSymbol = toBinanceSymbol(symbol);
+        console.log(`[Binance] Fetching ${limit} ${interval} candles for ${binanceSymbol}...`);
+        
+        const data = await fetchWithFallback('/klines', `symbol=${binanceSymbol}&interval=${interval}&limit=${limit}`);
+        
+        // Normalize data
+        const candles = data.map((k: any[]) => normalizeKlineArray(k));
+        
+        // Cache and return
+        setCachedData(symbol, interval, candles);
+        return candles;
+        
+    } catch (error) {
+        console.warn(`[Binance] Failed to fetch klines, falling back to CoinGecko:`, error);
+    }
+    
+    // 2. Fallback to CoinGecko
     console.log(`[Data] Fetching ${limit} ${interval} candles for ${symbol} via CoinGecko...`);
     const data = await getHistoricalKlinesFromCoinGecko(symbol, interval, limit);
     
@@ -238,7 +275,7 @@ async function getHistoricalKlinesFromCoinGecko(
         console.log(`[CoinGecko] Fetching ${limit} candles for ${symbol} (${geckoId})...`);
         
         const url = `${COINGECKO_API}/coins/${geckoId}/market_chart?vs_currency=usd&days=${days}`;
-        const response = await fetch(url);
+        const response = await fetchWithTimeout(url, {}, 10000); // 10s timeout
         
         // Check for rate limit
         if (response.status === 429) {
@@ -409,8 +446,20 @@ export const getOrderBook = async (symbol: string, limit: number = 10) => {
     const binanceSymbol = toBinanceSymbol(symbol);
     
     try {
+        // Fetch order book with the requested limit (keep it low to avoid API weights)
         const data = await fetchWithFallback('/depth', `symbol=${binanceSymbol}&limit=${limit}`);
-        return data;
+        
+        // Filter bids and asks where quantity > 1
+        // Structure is [price, quantity]
+        const filterByQuantity = (entries: string[][]) => {
+            return entries.filter(entry => parseFloat(entry[1]) > 1);
+        };
+
+        return {
+            lastUpdateId: data.lastUpdateId,
+            bids: filterByQuantity(data.bids || []),
+            asks: filterByQuantity(data.asks || [])
+        };
     } catch (error) {
         console.error('Error fetching order book:', error);
         return { bids: [], asks: [] };
@@ -431,9 +480,14 @@ export const connectOrderBookStream = (
         try {
             const data = JSON.parse(event.data);
             // Binance depth stream update
+            // Filter updates where quantity > 1
+            const filterByQuantity = (entries: string[][]) => {
+                return entries.filter(entry => parseFloat(entry[1]) > 1);
+            };
+
             onUpdate({
-                bids: data.bids,
-                asks: data.asks
+                bids: filterByQuantity(data.bids || []),
+                asks: filterByQuantity(data.asks || [])
             });
         } catch (error) {
             console.error('OrderBook WebSocket Error:', error);

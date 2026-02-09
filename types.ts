@@ -91,13 +91,33 @@ export interface ExecutedTrade extends BacktestTrade {
 }
 
 export interface BacktestStats {
+  // Returns
+  netProfit: number;
+  agentReturn: number; // % Return on initial balance
+  avgMonthlyProfit: number; // Estimated
+  buyHoldReturn: number;
+  sellHoldReturn?: number; // Optional if only doing long/short analysis
+
+  // Risk
+  maxDrawdown: number; // %
+  sharpeRatio: number;
+  calmarRatio: number;
+
+  // Trade Statistics
   totalTrades: number;
   wins: number;
   losses: number;
-  winRate: number;
-  netProfit: number;
+  winRate: number; // %
   profitFactor: number;
-  maxDrawdown: number;
+  expectancy: number; // Average R per trade
+  riskRewardRatio: number; // Average realize R:R
+  avgWin: number;
+  avgLoss: number;
+  timeInMarket: number; // % of time with open positions
+
+  // Counts
+  longCount: number;
+  shortCount: number;
 }
 
 export interface BacktestConfig {

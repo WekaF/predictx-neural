@@ -311,16 +311,21 @@ export const analyzeMarket = async (
     indicators: TechnicalIndicators,
     trainingHistory: TrainingData[],
     news: NewsItem[],
-    assetSymbol: string = 'Unknown'
+    assetSymbol: string = 'Unknown',
+    strategy: 'SCALP' | 'SWING' = 'SCALP'
 ): Promise<TradeSignal | null> => {
     
     // 1. Run Local RL Analysis (Fast, Free)
     // ------------------------------------
+    const last = candles[candles.length - 1]; // Moved up for Guard Rails
     const sentimentScore = news.length > 0 ? 
         news.reduce((acc, n) => acc + (n.sentiment === 'POSITIVE' ? 1 : n.sentiment === 'NEGATIVE' ? -1 : 0), 0) / Math.max(1, news.length) 
         : 0;
 
     const state = getMarketState(candles, indicators, sentimentScore);
+
+
+
 
     // Q-values: [Q_Buy, Q_Sell, Q_Hold]
     const qValues = brain.predict(state);
@@ -347,7 +352,13 @@ export const analyzeMarket = async (
         console.log(`[RL Agent] 🎲 Exploration Mode (${(brain.epsilon * 100).toFixed(0)}%): Chose ${decision} with Q-value ${confidence.toFixed(3)}`);
     } else {
         // EXPLOITATION MODE (95% of the time) - Use learned patterns
-        const ACTION_THRESHOLD = 0.45; // TUNED: Lowered from 0.51 to encourage action
+        
+        // Strategy Adjustment: Swing mode requires stronger validation
+        let ACTION_THRESHOLD = 0.45; // Default for Scalp
+        
+        if (strategy === 'SWING') {
+            ACTION_THRESHOLD = 0.55; // Swing requires higher confidence
+        }
 
         if (qBuy > qSell && qBuy > qHold && qBuy > ACTION_THRESHOLD) {
             decision = 'BUY';
@@ -356,7 +367,41 @@ export const analyzeMarket = async (
             decision = 'SELL';
             confidence = qSell;
         }
-        console.log(`[RL Agent] 🧠 Exploitation Mode: Q-values [BUY:${qBuy.toFixed(3)}, SELL:${qSell.toFixed(3)}, HOLD:${qHold.toFixed(3)}] → ${decision}`);
+        console.log(`[RL Agent] 🧠 Exploitation Mode (${strategy}): Q-values [BUY:${qBuy.toFixed(3)}, SELL:${qSell.toFixed(3)}, HOLD:${qHold.toFixed(3)}] → ${decision}`);
+    }
+
+    // --- GUARD RAILS (Heuristic Filters) ---
+    // 1. Trend Filter: Trade with the trend (Price vs SMA200)
+    const price = last.close;
+    const isUptrend = price > indicators.sma200;
+    const isDowntrend = price < indicators.sma200;
+    
+    // 2. RSI Filter: Avoid buying top / selling bottom
+    const isRsiSafeBuy = indicators.rsi < 70; // Don't buy if overbought
+    const isRsiSafeSell = indicators.rsi > 30; // Don't sell if oversold
+
+    // Apply Guard Rails to AI Decision
+    // If AI wants to BUY but we are in Downtrend or RSI is Overbought -> Force HOLD
+    if (decision === 'BUY') {
+        if (!isUptrend) {
+            decision = 'HOLD';
+            confidence = 0; // Reset confidence
+            console.log(`[Guard Rail] 🛡️ Blocked BUY: Counter-trend (Price < SMA200)`);
+        } else if (!isRsiSafeBuy) {
+            decision = 'HOLD';
+            confidence = 0;
+            console.log(`[Guard Rail] 🛡️ Blocked BUY: RSI Overbought (${indicators.rsi.toFixed(0)})`);
+        }
+    } else if (decision === 'SELL') {
+        if (!isDowntrend) {
+            decision = 'HOLD';
+            confidence = 0;
+            console.log(`[Guard Rail] 🛡️ Blocked SELL: Counter-trend (Price > SMA200)`);
+        } else if (!isRsiSafeSell) {
+            decision = 'HOLD';
+            confidence = 0;
+            console.log(`[Guard Rail] 🛡️ Blocked SELL: RSI Oversold (${indicators.rsi.toFixed(0)})`);
+        }
     }
 
     // 2. PURE SELF-LEARNING RL - NO EXTERNAL AI
@@ -405,6 +450,10 @@ export const analyzeMarket = async (
         } else if (indicators.trend === 'DOWN') {
             reasons.push("Strong downtrend detected");
         }
+
+        if (decision === 'HOLD') {
+             reasons.push("Guard rails or low confidence blocked trade.");
+        }
         
         return reasons.length > 0 
             ? reasons.join(". ") + "."
@@ -419,17 +468,21 @@ export const analyzeMarket = async (
             type: 'HOLD', 
             entryPrice: 0, stopLoss: 0, takeProfit: 0, 
             confidence: Math.round(enhancedConfidence), 
-            reasoning: `AI Strategy: Wait. Market conditions ambiguous. (Q-Hold: ${qHold.toFixed(2)})`,
+            reasoning: `AI Strategy (${strategy}): Wait. ${generateReasoning()}`,
             timestamp: Date.now() 
         };
     }
 
     // Construct Trade Signal from Local Decision
-    const last = candles[candles.length - 1];
     const atr = (Math.max(...candles.slice(-14).map(c => c.high)) - Math.min(...candles.slice(-14).map(c => c.low))) * 0.2; 
     let entry = last.close;
-    let sl = decision === 'BUY' ? entry - (atr * 2) : entry + (atr * 2);
-    let tp = decision === 'BUY' ? entry + (atr * 3) : entry - (atr * 3);
+    
+    // STRATEGY LOGIC: SL/TP Calculation
+    const slMult = strategy === 'SWING' ? 4 : 2;   // Swing: 4x ATR Stop (give room to breathe)
+    const tpMult = strategy === 'SWING' ? 8 : 3;   // Swing: 8x ATR Target (aim for big moves)
+
+    let sl = decision === 'BUY' ? entry - (atr * slMult) : entry + (atr * slMult);
+    let tp = decision === 'BUY' ? entry + (atr * tpMult) : entry - (atr * tpMult);
     
     if (decision === 'BUY') sl = Math.min(sl, indicators.nearestSupport * 0.999);
     else sl = Math.max(sl, indicators.nearestResistance * 1.001);
@@ -452,7 +505,7 @@ export const analyzeMarket = async (
         confidence: Math.round(enhancedConfidence), // Use enhanced confidence
         timestamp: Date.now(),
         patternDetected: `RL-DQN: ${currentPattern}`,
-        confluenceFactors: [`Enhanced Confidence: ${enhancedConfidence.toFixed(0)}%`, `Trend: ${indicators.trend}`, `RSI: ${indicators.rsi.toFixed(0)}`],
+        confluenceFactors: [`Strategy: ${strategy}`, `Enhanced Confidence: ${enhancedConfidence.toFixed(0)}%`, `Trend: ${indicators.trend}`, `RSI: ${indicators.rsi.toFixed(0)}`],
         riskRewardRatio: rr,
         outcome: 'PENDING'
     };
@@ -478,9 +531,11 @@ export const trainModel = (
     let reward = 0;
     if (outcome === 'WIN') {
         const rr = Math.abs(pnl) / (riskAmount || 1);
-        reward = 0.8 + (Math.min(rr, 3) * 0.1); // Base + bonus for high R:R
+        reward = 1.0 + (Math.min(rr, 3) * 0.2); // Increased Base + bonus for high R:R
     } else {
-        reward = 0.2; 
+        // Punish losses more severely
+        // -0.5 is a negative reward, discouraging the action
+        reward = -0.5; 
     }
 
     const actionIndex = type === 'BUY' ? 0 : 1;

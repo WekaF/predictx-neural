@@ -18,8 +18,6 @@ export const supabase = isValidUrl && isValidKey
         persistSession: true,
         autoRefreshToken: true,
         detectSessionInUrl: true,
-        // Disable navigator lock to prevent errors in some browser environments
-        lock: false
       }
     }) 
   : null;

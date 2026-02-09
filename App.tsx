@@ -14,6 +14,7 @@ import SettingsModal from './components/SettingsModal';
 import { AnalyticsDashboard } from './components/AnalyticsDashboard';
 import { LeverageDashboard } from './components/LeverageDashboard';
 import { OrderBook } from './components/OrderBook';
+import { TrainingPanel } from './components/TrainingPanel';
 import { HeaderControls } from './components/HeaderControls';
 import { calculateRSI, calculateFibonacci, analyzeTrend, calculateSMA, calculateEMA, findSupportResistance, calculateMACD, calculateStochastic, calculateMomentum } from './utils/technical';
 import { getHistoricalKlines, getCurrentPrice } from './services/binanceService';
@@ -1163,7 +1164,24 @@ function App() {
                  <TradingJournal />
              </div>
         ) : currentView === 'backtest' ? (
-             <BacktestPanel candles={candles} />
+             <div className="flex-1 min-h-0 relative">
+          {candles.length === 0 ? (
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950 text-slate-400 gap-3">
+                <RefreshCw className="w-8 h-8 animate-spin text-blue-500" />
+                <p className="text-sm font-mono animate-pulse">LOADING MARKET DATA...</p>
+                <p className="text-xs text-slate-600 max-w-[200px] text-center">
+                    Connecting to Binance or using fallback data...
+                </p>
+            </div>
+          ) : (
+            <BacktestPanel 
+                candles={candles} 
+                symbol={selectedAsset.symbol}
+                timeframe={selectedInterval}
+                initialBalance={10000}
+            />
+          )}
+      </div>
         ) : (
              <div className="flex flex-col h-full overflow-hidden">
                 {/* Mobile Terminal Tabs */}
@@ -1230,7 +1248,7 @@ function App() {
                 </div>
 
                 {/* MIDDLE COLUMN: Signal & Alerts */}
-                <div className={`lg:col-span-1 space-y-3 md:space-y-4 flex-col ${terminalTab === 'trade' ? 'flex' : 'hidden lg:flex'}`}>
+                <div className={`lg:col-span-1 space-y-3 md:space-y-4 flex-col overflow-y-auto ${terminalTab === 'trade' ? 'flex' : 'hidden lg:flex'}`}>
                     {/* Active Signal Card */}
                     <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 md:p-6 shadow-xl relative overflow-hidden group shrink-0">
                         <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/5 rounded-full blur-3xl group-hover:bg-blue-500/10 transition-all"></div>
@@ -1426,6 +1444,9 @@ function App() {
                             </div>
                         </div>
                     </div>
+
+                    {/* AI Training Panel */}
+                    <TrainingPanel />
                 </div>
 
                 {/* RIGHT COLUMN: Training & News */}
