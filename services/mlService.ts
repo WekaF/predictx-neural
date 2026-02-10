@@ -31,7 +31,7 @@ class DeepQNetwork {
     learningRate: number;
     discountFactor: number; // Gamma for Q-Learning
     epsilon: number; // Exploration Rate
-    
+
     // Pattern Memory System
     patternMemory: Map<string, PatternMemory>;
     totalTrainingIterations: number;
@@ -43,7 +43,7 @@ class DeepQNetwork {
         this.learningRate = 0.08; // TUNED: Faster learning for quicker adaptation
         this.discountFactor = 0.95; // TUNED: Higher value for better long-term planning
         this.epsilon = 0.05; // TUNED: 5% exploration (was 20%) - more exploitation of learned patterns
-        
+
         // Initialize pattern memory
         this.patternMemory = new Map();
         this.totalTrainingIterations = 0;
@@ -84,12 +84,12 @@ class DeepQNetwork {
 
     predict(inputs: number[]): number[] {
         // Input -> Hidden
-        let hidden = this.weightsIH.map((row, i) => 
+        let hidden = this.weightsIH.map((row, i) =>
             this.relu(row.reduce((sum, w, j) => sum + w * inputs[j], 0) + this.biasH[i])
         );
 
         // Hidden -> Output
-        let outputs = this.weightsHO.map((row, i) => 
+        let outputs = this.weightsHO.map((row, i) =>
             this.sigmoid(row.reduce((sum, w, j) => sum + w * hidden[j], 0) + this.biasO[i])
         );
 
@@ -99,17 +99,17 @@ class DeepQNetwork {
     // Q-Learning Training Step
     train(inputs: number[], actionIndex: number, reward: number) {
         // 1. Forward Pass
-        let hidden = this.weightsIH.map((row, i) => 
+        let hidden = this.weightsIH.map((row, i) =>
             this.relu(row.reduce((sum, w, j) => sum + w * inputs[j], 0) + this.biasH[i])
         );
-        let outputs = this.weightsHO.map((row, i) => 
+        let outputs = this.weightsHO.map((row, i) =>
             this.sigmoid(row.reduce((sum, w, j) => sum + w * hidden[j], 0) + this.biasO[i])
         );
 
         // 2. Target Q-Value
         const currentQ = outputs[actionIndex];
         const targetQ = currentQ + this.learningRate * (reward - currentQ);
-        
+
         const targets = [...outputs];
         targets[actionIndex] = targetQ;
 
@@ -118,18 +118,18 @@ class DeepQNetwork {
         let gradients = outputs.map((o, i) => outputErrors[i] * this.dsigmoid(o) * this.learningRate);
 
         const oldWeightsHO = this.weightsHO.map(row => [...row]);
-        this.weightsHO = this.weightsHO.map((row, i) => 
+        this.weightsHO = this.weightsHO.map((row, i) =>
             row.map((w, j) => w + gradients[i] * hidden[j])
         );
         this.biasO = this.biasO.map((b, i) => b + gradients[i]);
 
-        let hiddenErrors = hidden.map((_, i) => 
+        let hiddenErrors = hidden.map((_, i) =>
             oldWeightsHO.reduce((sum, row, j) => sum + row[i] * outputErrors[j], 0)
         );
 
         let hiddenGradients = hidden.map((h, i) => hiddenErrors[i] * this.drelu(h) * this.learningRate);
 
-        this.weightsIH = this.weightsIH.map((row, i) => 
+        this.weightsIH = this.weightsIH.map((row, i) =>
             row.map((w, j) => w + hiddenGradients[i] * inputs[j])
         );
         this.biasH = this.biasH.map((b, i) => b + hiddenGradients[i]);
@@ -144,58 +144,110 @@ class DeepQNetwork {
             biasH: this.biasH,
             biasO: this.biasO
         });
+
+        // Save Pattern Memory (Convert Map to Array for storage)
+        storageService.savePatternMemory(Array.from(this.patternMemory.entries()));
     }
 
-    load() {
-        const saved = storageService.getModelWeights();
-        if (saved) {
-            this.weightsIH = saved.weightsIH;
-            this.weightsHO = saved.weightsHO;
-            this.biasH = saved.biasH;
-            this.biasO = saved.biasO;
-            console.log("Model weights reloaded from storage.");
+    async load() {
+        const savedWeights = storageService.getModelWeights();
+        if (savedWeights) {
+            this.weightsIH = savedWeights.weightsIH;
+            this.weightsHO = savedWeights.weightsHO;
+            this.biasH = savedWeights.biasH;
+            this.biasO = savedWeights.biasO;
+        }
+
+        const savedMemory = await storageService.getPatternMemory();
+        if (savedMemory) {
+            this.patternMemory = new Map(savedMemory);
+            console.log(`[RL Agent] 🧠 Restored ${this.patternMemory.size} patterns from persistent memory.`);
         }
     }
-    
+
+    // Restore memory from historical training logs
+    restoreFromHistory(history: TrainingData[]) {
+        let newPatterns = 0;
+        let updates = 0;
+
+        history.forEach(item => {
+            // Check if pattern exists
+            let mem = this.patternMemory.get(item.pattern);
+            if (!mem) {
+                mem = {
+                    pattern: item.pattern,
+                    winCount: 0,
+                    lossCount: 0,
+                    totalPnl: 0,
+                    avgPnl: 0,
+                    confidence: 50,
+                    lastSeen: Date.now()
+                };
+                newPatterns++;
+            } else {
+                updates++;
+            }
+
+            if (item.outcome === 'WIN') {
+                mem.winCount++;
+                // Estimate PnL impact (simplified)
+                mem.totalPnl += (item.riskReward || 1.5) * 100;
+            } else {
+                mem.lossCount++;
+                mem.totalPnl -= 100;
+            }
+
+            // Recalculate Stats
+            const total = mem.winCount + mem.lossCount;
+            mem.confidence = (mem.winCount / total) * 100;
+            mem.avgPnl = mem.totalPnl / total;
+
+            this.patternMemory.set(item.pattern, mem);
+        });
+
+        console.log(`[RL Agent] 📜 History Replay: Added ${newPatterns} new patterns, Updated ${updates} existing.`);
+        this.save();
+    }
+
     // --- PATTERN MEMORY METHODS ---
-    
+
     /**
      * Identify market pattern from state
      */
     identifyPattern(state: number[]): string {
         const [rsi, trend, bb, volatility, sentiment, momentum] = state;
-        
+
         // Create pattern signature
         const patterns: string[] = [];
-        
+
         // RSI patterns
         if (rsi < 0.3) patterns.push("RSI_oversold");
         else if (rsi > 0.7) patterns.push("RSI_overbought");
         else patterns.push("RSI_neutral");
-        
+
         // Trend patterns
         if (trend > 0.6) patterns.push("uptrend");
         else if (trend < 0.4) patterns.push("downtrend");
         else patterns.push("sideways");
-        
+
         // BB patterns
         if (bb < 0.2) patterns.push("BB_lower");
         else if (bb > 0.8) patterns.push("BB_upper");
         else patterns.push("BB_mid");
-        
+
         // Volatility
         if (volatility > 0.7) patterns.push("high_vol");
         else if (volatility < 0.3) patterns.push("low_vol");
-        
+
         return patterns.join("_");
     }
-    
+
     /**
      * Update pattern memory after trade outcome
      */
     updatePatternMemory(state: number[], action: number, outcome: 'WIN' | 'LOSS', pnl: number) {
         const pattern = this.identifyPattern(state);
-        
+
         const memory = this.patternMemory.get(pattern) || {
             pattern,
             winCount: 0,
@@ -205,68 +257,125 @@ class DeepQNetwork {
             confidence: 50,
             lastSeen: Date.now()
         };
-        
+
         // Update counts
         if (outcome === 'WIN') {
             memory.winCount++;
         } else {
             memory.lossCount++;
         }
-        
+
         // Update PNL
         memory.totalPnl += pnl;
         const totalTrades = memory.winCount + memory.lossCount;
         memory.avgPnl = memory.totalPnl / totalTrades;
-        
+
         // Calculate confidence from win rate
         memory.confidence = (memory.winCount / totalTrades) * 100;
         memory.lastSeen = Date.now();
-        
+
         this.patternMemory.set(pattern, memory);
-        
+
         console.log(`[Pattern Memory] ${pattern}: ${memory.winCount}W/${memory.lossCount}L (${memory.confidence.toFixed(0)}% confidence, avg PNL: ${memory.avgPnl.toFixed(2)})`);
     }
-    
+
     /**
      * Get pattern confidence for current state
      */
     getPatternConfidence(state: number[]): number {
         const pattern = this.identifyPattern(state);
         const memory = this.patternMemory.get(pattern);
-        
+
         if (!memory) return 50; // Default 50% for unknown patterns
-        
-        // Require at least 3 trades to trust pattern
+
+        // ENHANCED: Require at least 5 trades to trust pattern (increased from 3)
+        // This ensures statistical significance before using pattern confidence
         const totalTrades = memory.winCount + memory.lossCount;
-        if (totalTrades < 3) return 50;
-        
+        if (totalTrades < 5) {
+            console.log(`[Pattern Memory] ⚠️ Pattern "${pattern}" has only ${totalTrades} trades (need 5+). Using default 50% confidence.`);
+            return 50;
+        }
+
         return memory.confidence;
     }
-    
+
     /**
      * Get enhanced confidence combining Q-values, pattern memory, and experience
+     * ENHANCED: Now includes Q-value separation validation and pattern quality scoring
      */
     getEnhancedConfidence(state: number[], action: number): number {
-        // 1. Q-value based confidence
+        // 1. Q-value based confidence with separation validation
         const qValues = this.predict(state);
         const maxQ = Math.max(...qValues);
         const minQ = Math.min(...qValues);
-        const qConfidence = ((qValues[action] - minQ) / (maxQ - minQ + 0.01)) * 100;
-        
-        // 2. Pattern memory confidence
+
+        // Sort Q-values to find second-best
+        const sortedQValues = [...qValues].sort((a, b) => b - a);
+        const bestQ = sortedQValues[0];
+        const secondBestQ = sortedQValues[1];
+
+        // ENHANCED: Require clear separation between best and second-best Q-value
+        const qSeparation = bestQ - secondBestQ;
+        const MIN_Q_SEPARATION = 0.10; // Require at least 0.10 difference (10% on 0-1 scale)
+
+        let qConfidence = ((qValues[action] - minQ) / (maxQ - minQ + 0.01)) * 100;
+
+        // Penalize if Q-values are too close (ambiguous signal)
+        if (qSeparation < MIN_Q_SEPARATION) {
+            const separationPenalty = (1 - (qSeparation / MIN_Q_SEPARATION)) * 30; // Up to -30% penalty
+            qConfidence = Math.max(0, qConfidence - separationPenalty);
+            console.log(`[Enhanced Confidence] ⚠️ Q-value separation low (${qSeparation.toFixed(3)}). Penalty: -${separationPenalty.toFixed(1)}%`);
+        }
+
+        // 2. Pattern memory confidence with quality scoring
         const patternConfidence = this.getPatternConfidence(state);
-        
+        const patternQuality = this.getPatternQualityScore(state);
+
         // 3. Experience-based confidence (improves with training)
         const experienceConfidence = Math.min(this.totalTrainingIterations / 100, 1) * 100;
-        
-        // 4. Weighted average
+
+        // 4. Weighted average (adjusted to include pattern quality)
         const confidence = (
-            qConfidence * 0.4 +
-            patternConfidence * 0.4 +
-            experienceConfidence * 0.2
+            qConfidence * 0.35 +                    // Q-value strength
+            patternConfidence * 0.30 +             // Pattern win rate
+            patternQuality * 0.20 +                // Pattern quality/consistency
+            experienceConfidence * 0.15             // Overall experience
         );
-        
+
         return Math.min(Math.max(confidence, 0), 100);
+    }
+
+    /**
+     * NEW: Get pattern quality score based on consistency and recency
+     * Returns 0-100 score representing the quality/reliability of the pattern
+     */
+    getPatternQualityScore(state: number[]): number {
+        const pattern = this.identifyPattern(state);
+        const memory = this.patternMemory.get(pattern);
+
+        if (!memory) return 0;
+
+        const totalTrades = memory.winCount + memory.lossCount;
+
+        // Factor 1: Sample size (more data = higher quality)
+        const sampleScore = Math.min(totalTrades / 20, 1) * 100; // Max at 20 trades
+
+        // Factor 2: Win rate consistency (high win rate = high quality)
+        const winRate = memory.winCount / totalTrades;
+        const consistencyScore = winRate * 100;
+
+        // Factor 3: Recency (prefer recently seen patterns)
+        const hoursSinceLastSeen = (Date.now() - memory.lastSeen) / (1000 * 60 * 60);
+        const recencyScore = Math.max(0, 100 - (hoursSinceLastSeen * 2)); // -2% per hour
+
+        // Weighted average
+        const qualityScore = (
+            sampleScore * 0.4 +
+            consistencyScore * 0.4 +
+            recencyScore * 0.2
+        );
+
+        return qualityScore;
     }
 }
 
@@ -286,7 +395,7 @@ const getMarketState = (candles: Candle[], indicators: TechnicalIndicators, sent
 
     const rsiFeature = indicators.rsi / 100;
     const trendFeature = last.close > indicators.sma200 ? 1 : 0;
-    
+
     let bbPosition = 0.5;
     if (bb.upper - bb.lower !== 0) {
         bbPosition = (last.close - bb.lower) / (bb.upper - bb.lower);
@@ -294,7 +403,7 @@ const getMarketState = (candles: Candle[], indicators: TechnicalIndicators, sent
     const bbFeature = Math.max(0, Math.min(1, bbPosition));
 
     const bandwidth = (bb.upper - bb.lower) / (bb.middle || 1);
-    const volatilityFeature = Math.min(1, bandwidth * 10); 
+    const volatilityFeature = Math.min(1, bandwidth * 10);
 
     const sentimentFeature = sentiment * 0.5 + 0.5;
 
@@ -312,14 +421,15 @@ export const analyzeMarket = async (
     trainingHistory: TrainingData[],
     news: NewsItem[],
     assetSymbol: string = 'Unknown',
-    strategy: 'SCALP' | 'SWING' = 'SCALP'
+    strategy: 'SCALP' | 'SWING' = 'SCALP',
+    isTraining: boolean = false // NEW: Allow lower confidence during training
 ): Promise<TradeSignal | null> => {
-    
+
     // 1. Run Local RL Analysis (Fast, Free)
     // ------------------------------------
     const last = candles[candles.length - 1]; // Moved up for Guard Rails
-    const sentimentScore = news.length > 0 ? 
-        news.reduce((acc, n) => acc + (n.sentiment === 'POSITIVE' ? 1 : n.sentiment === 'NEGATIVE' ? -1 : 0), 0) / Math.max(1, news.length) 
+    const sentimentScore = news.length > 0 ?
+        news.reduce((acc, n) => acc + (n.sentiment === 'POSITIVE' ? 1 : n.sentiment === 'NEGATIVE' ? -1 : 0), 0) / Math.max(1, news.length)
         : 0;
 
     const state = getMarketState(candles, indicators, sentimentScore);
@@ -352,13 +462,24 @@ export const analyzeMarket = async (
         console.log(`[RL Agent] 🎲 Exploration Mode (${(brain.epsilon * 100).toFixed(0)}%): Chose ${decision} with Q-value ${confidence.toFixed(3)}`);
     } else {
         // EXPLOITATION MODE (95% of the time) - Use learned patterns
-        
-        // Strategy Adjustment: Swing mode requires stronger validation
-        let ACTION_THRESHOLD = 0.45; // Default for Scalp
-        
+
+        // Strategy Adjustment: Lowered to allow more frequent trading
+        // ENHANCED: Reduced from 70% to 55% based on user feedback
+        let ACTION_THRESHOLD = 0.55; // SCALP: Minimum 55% confidence
+
         if (strategy === 'SWING') {
-            ACTION_THRESHOLD = 0.55; // Swing requires higher confidence
+            ACTION_THRESHOLD = 0.60; // SWING: Minimum 60% confidence
         }
+
+        // TRAINING MODE OVERRIDE
+        // Allow lower confidence trades to accelerate learning
+        // Untrained model ~43% confidence (28% Q + 15% Memory + 0% Quality + 0% Exp)
+        if (isTraining) {
+            ACTION_THRESHOLD = 0.25; // Drastically lower to allow untrained models to explore
+            console.log(`[RL Agent] 🎓 TRAINING MODE: Lowered threshold to ${(ACTION_THRESHOLD * 100).toFixed(0)}% to encourage exploration`);
+        }
+
+        console.log(`[RL Agent] 📊 Strategy: ${strategy} | Required Confidence Threshold: ${(ACTION_THRESHOLD * 100).toFixed(0)}%`);
 
         if (qBuy > qSell && qBuy > qHold && qBuy > ACTION_THRESHOLD) {
             decision = 'BUY';
@@ -375,7 +496,7 @@ export const analyzeMarket = async (
     const price = last.close;
     const isUptrend = price > indicators.sma200;
     const isDowntrend = price < indicators.sma200;
-    
+
     // 2. RSI Filter: Avoid buying top / selling bottom
     const isRsiSafeBuy = indicators.rsi < 70; // Don't buy if overbought
     const isRsiSafeSell = indicators.rsi > 30; // Don't sell if oversold
@@ -404,24 +525,38 @@ export const analyzeMarket = async (
         }
     }
 
-    // 2. PURE SELF-LEARNING RL - NO EXTERNAL AI
-    // -----------------------------------------
-    // Use enhanced confidence combining Q-values, pattern memory, and experience
-    
+    // --- ENHANCED CONFIDENCE PRE-FILTER (70%+ REQUIREMENT) ---
+    // CRITICAL: This filter ensures we only trade with high confidence based on deep RL analysis
+    // Calculate enhanced confidence BEFORE proceeding with signal generation
     const actionIndex = decision === 'BUY' ? 0 : decision === 'SELL' ? 1 : 2;
     const enhancedConfidence = brain.getEnhancedConfidence(state, actionIndex);
-    
+
+    const MINIMUM_ENHANCED_CONFIDENCE = 55; // Require 55%+ (User Request)
+
+    if (decision !== 'HOLD' && enhancedConfidence < MINIMUM_ENHANCED_CONFIDENCE) {
+        console.log(`[Enhanced Confidence Filter] ❌ BLOCKED ${decision}: Enhanced confidence ${enhancedConfidence.toFixed(1)}% < ${MINIMUM_ENHANCED_CONFIDENCE}% threshold`);
+        console.log(`[Enhanced Confidence Filter] 🔍 Analysis: Q-value passed, but pattern/experience confidence too low. Need more data.`);
+
+        decision = 'HOLD';
+        confidence = 0;
+    } else if (decision !== 'HOLD') {
+        console.log(`[Enhanced Confidence Filter] ✅ PASSED: ${decision} with ${enhancedConfidence.toFixed(1)}% enhanced confidence (threshold: ${MINIMUM_ENHANCED_CONFIDENCE}%)`);
+    }
+
+    // 2. PURE SELF-LEARNING RL - NO EXTERNAL AI
+    // -----------------------------------------
     // Generate rule-based reasoning from technical indicators
+
     const generateReasoning = (): string => {
         const reasons: string[] = [];
-        
+
         // RSI analysis
         if (indicators.rsi < 30) {
             reasons.push("RSI oversold (bullish signal)");
         } else if (indicators.rsi > 70) {
             reasons.push("RSI overbought (bearish signal)");
         }
-        
+
         // Bollinger Bands (using nearestSupport/Resistance as proxy)
         const last = candles[candles.length - 1];
         if (last.close < indicators.nearestSupport) {
@@ -429,21 +564,21 @@ export const analyzeMarket = async (
         } else if (last.close > indicators.nearestResistance) {
             reasons.push("Price near resistance (potential reversal)");
         }
-        
+
         // Moving averages
         if (indicators.ema20 > indicators.sma50) {
             reasons.push("EMA20 above SMA50 (bullish momentum)");
         } else if (indicators.ema20 < indicators.sma50) {
             reasons.push("EMA20 below SMA50 (bearish momentum)");
         }
-        
+
         // Pattern memory
         const pattern = brain.identifyPattern(state);
         const memory = brain.patternMemory.get(pattern);
         if (memory && memory.winCount > 2) {
             reasons.push(`Pattern "${pattern}" has ${memory.winCount} wins (${memory.confidence.toFixed(0)}% success rate)`);
         }
-        
+
         // Trend
         if (indicators.trend === 'UP') {
             reasons.push("Strong uptrend detected");
@@ -452,45 +587,45 @@ export const analyzeMarket = async (
         }
 
         if (decision === 'HOLD') {
-             reasons.push("Guard rails or low confidence blocked trade.");
+            reasons.push("Guard rails or low confidence blocked trade.");
         }
-        
-        return reasons.length > 0 
+
+        return reasons.length > 0
             ? reasons.join(". ") + "."
             : `Technical analysis suggests ${decision} action based on learned patterns.`;
     };
 
     // If HOLD, return early
     if (decision === 'HOLD') {
-        return { 
-            id: generateUUID(), 
+        return {
+            id: generateUUID(),
             symbol: assetSymbol,
-            type: 'HOLD', 
-            entryPrice: 0, stopLoss: 0, takeProfit: 0, 
-            confidence: Math.round(enhancedConfidence), 
+            type: 'HOLD',
+            entryPrice: 0, stopLoss: 0, takeProfit: 0,
+            confidence: Math.round(enhancedConfidence),
             reasoning: `AI Strategy (${strategy}): Wait. ${generateReasoning()}`,
-            timestamp: Date.now() 
+            timestamp: Date.now()
         };
     }
 
     // Construct Trade Signal from Local Decision
-    const atr = (Math.max(...candles.slice(-14).map(c => c.high)) - Math.min(...candles.slice(-14).map(c => c.low))) * 0.2; 
+    const atr = (Math.max(...candles.slice(-14).map(c => c.high)) - Math.min(...candles.slice(-14).map(c => c.low))) * 0.2;
     let entry = last.close;
-    
+
     // STRATEGY LOGIC: SL/TP Calculation
     const slMult = strategy === 'SWING' ? 4 : 2;   // Swing: 4x ATR Stop (give room to breathe)
     const tpMult = strategy === 'SWING' ? 8 : 3;   // Swing: 8x ATR Target (aim for big moves)
 
     let sl = decision === 'BUY' ? entry - (atr * slMult) : entry + (atr * slMult);
     let tp = decision === 'BUY' ? entry + (atr * tpMult) : entry - (atr * tpMult);
-    
+
     if (decision === 'BUY') sl = Math.min(sl, indicators.nearestSupport * 0.999);
     else sl = Math.max(sl, indicators.nearestResistance * 1.001);
 
     const risk = Math.abs(entry - sl);
     const reward = Math.abs(tp - entry);
-    const rr = risk === 0 ? 0 : Number((reward/risk).toFixed(2));
-    
+    const rr = risk === 0 ? 0 : Number((reward / risk).toFixed(2));
+
     // Get pattern for logging
     const currentPattern = brain.identifyPattern(state);
 
@@ -512,21 +647,21 @@ export const analyzeMarket = async (
 };
 
 // Backwards compatibility alias
-export const analyzeMarketWithLocalML = analyzeMarket; 
+export const analyzeMarketWithLocalML = analyzeMarket;
 
 
 export const trainModel = (
-    outcome: 'WIN' | 'LOSS', 
-    type: 'BUY' | 'SELL', 
-    candles: Candle[], 
+    outcome: 'WIN' | 'LOSS',
+    type: 'BUY' | 'SELL',
+    candles: Candle[],
     indicators: TechnicalIndicators,
     sentiment: number,
-    pnl: number, 
+    pnl: number,
     riskAmount: number,
     predictedConfidence?: number // NEW: Track predicted confidence
 ) => {
     const state = getMarketState(candles, indicators, sentiment);
-    
+
     // Enhanced reward calculation
     let reward = 0;
     if (outcome === 'WIN') {
@@ -535,36 +670,36 @@ export const trainModel = (
     } else {
         // Punish losses more severely
         // -0.5 is a negative reward, discouraging the action
-        reward = -0.5; 
+        reward = -0.5;
     }
 
     const actionIndex = type === 'BUY' ? 0 : 1;
-    
+
     // Train Q-values
     brain.train(state, actionIndex, reward);
-    
+
     // Update pattern memory
     brain.updatePatternMemory(state, actionIndex, outcome, pnl);
-    
+
     // Increment training iterations
     brain.totalTrainingIterations++;
-    
+
     // --- META-LEARNING INTEGRATION ---
-    
+
     // 1. Record prediction for confidence calibration
     if (predictedConfidence !== undefined) {
         confidenceCalibrator.recordPrediction(predictedConfidence, outcome);
     }
-    
+
     // 2. Update adaptive hyperparameters metrics
     const currentConfidence = brain.getEnhancedConfidence(state, actionIndex);
     adaptiveHyperparameters.updateMetrics(outcome, currentConfidence);
-    
+
     // 3. Auto-optimize hyperparameters every 10 trades
     if (brain.totalTrainingIterations % 10 === 0) {
         adaptiveHyperparameters.optimize(brain);
     }
-    
+
     // 4. Discover patterns every 20 trades
     if (brain.totalTrainingIterations % 20 === 0) {
         storageService.fetchTrainingDataFromSupabase().then(data => {
@@ -573,13 +708,14 @@ export const trainModel = (
             }
         });
     }
-    
+
     // Decay Epsilon (Reduce exploration over time) - now handled by adaptive hyperparameters
     // if (brain.epsilon > 0.05) {
     //     brain.epsilon *= 0.995; 
     // }
-    
-    console.log(`[RL Training] Action: ${type} | Result: ${outcome} | Reward: ${reward.toFixed(2)} | PNL: ${pnl.toFixed(2)} | Iterations: ${brain.totalTrainingIterations} | Epsilon: ${brain.epsilon.toFixed(3)}`);};
+
+    console.log(`[RL Training] Action: ${type} | Result: ${outcome} | Reward: ${reward.toFixed(2)} | PNL: ${pnl.toFixed(2)} | Iterations: ${brain.totalTrainingIterations} | Epsilon: ${brain.epsilon.toFixed(3)}`);
+};
 
 // --- AI TUNING FUNCTIONS ---
 
@@ -599,10 +735,10 @@ export const resetModel = () => {
     brain.weightsHO = Array(brain.outputNodes).fill(0).map(() => Array(brain.hiddenNodes).fill(0).map(() => Math.random() * 0.2 - 0.1));
     brain.biasH = Array(brain.hiddenNodes).fill(0).map(() => Math.random() * 0.2 - 0.1);
     brain.biasO = Array(brain.outputNodes).fill(0).map(() => Math.random() * 0.2 - 0.1);
-    
+
     // Reset epsilon to tuned default
     brain.epsilon = 0.05; // Match the new optimized default
-    
+
     // Clear saved weights
     storageService.saveModelWeights({
         weightsIH: brain.weightsIH,
@@ -610,7 +746,7 @@ export const resetModel = () => {
         biasH: brain.biasH,
         biasO: brain.biasO
     });
-    
+
     console.log('[ML] Model reset to initial state');
 };
 
@@ -632,10 +768,10 @@ export const importWeights = (weights: any) => {
         brain.weightsHO = weights.weightsHO;
         brain.biasH = weights.biasH;
         brain.biasO = weights.biasO;
-        
+
         if (weights.learningRate) brain.learningRate = weights.learningRate;
         if (weights.epsilon) brain.epsilon = weights.epsilon;
-        
+
         // Save to storage
         storageService.saveModelWeights({
             weightsIH: brain.weightsIH,
@@ -643,7 +779,7 @@ export const importWeights = (weights: any) => {
             biasH: brain.biasH,
             biasO: brain.biasO
         });
-        
+
         console.log('[ML] Weights imported successfully');
     } else {
         throw new Error('Invalid weights format');
@@ -668,10 +804,10 @@ export const getModelStats = () => {
 
 export const calculateAverageConfidence = (): number => {
     if (brain.patternMemory.size === 0) return 50;
-    
+
     let totalConf = 0;
     let count = 0;
-    
+
     for (const memory of brain.patternMemory.values()) {
         const trades = memory.winCount + memory.lossCount;
         if (trades >= 3) { // Only count patterns with enough data
@@ -679,7 +815,7 @@ export const calculateAverageConfidence = (): number => {
             count++;
         }
     }
-    
+
     return count > 0 ? totalConf / count : 50;
 };
 
@@ -700,36 +836,36 @@ export const batchTrainFromHistory = (
     onProgress?: (current: number, total: number, confidence: number) => void
 ): { totalTrained: number; avgConfidence: number; patternCount: number } => {
     console.log(`[Batch Training] 🚀 Starting with ${trainingData.length} historical trades...`);
-    
+
     let totalTrained = 0;
-    
+
     for (let i = 0; i < trainingData.length; i++) {
         const trade = trainingData[i];
-        
+
         if (!trade.outcome || !trade.pattern) continue;
-        
+
         const mockState = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5];
         const action = trade.pattern.toLowerCase().includes('buy') ? 0 : 1;
         const outcome = trade.outcome;
         const pnl = trade.riskReward || 0;
         const reward = outcome === 'WIN' ? 0.8 + (Math.min(Math.abs(pnl), 3) * 0.1) : 0.2;
-        
+
         brain.train(mockState, action, reward);
         brain.updatePatternMemory(mockState, action, outcome, pnl);
         brain.totalTrainingIterations++;
-        
+
         totalTrained++;
-        
+
         if (onProgress && (i + 1) % 5 === 0) {
             onProgress(i + 1, trainingData.length, calculateAverageConfidence());
         }
     }
-    
+
     brain.save();
-    
+
     const avgConfidence = calculateAverageConfidence();
     console.log(`[Batch Training] ✅ Trained: ${totalTrained}, Confidence: ${avgConfidence.toFixed(1)}%`);
-    
+
     return { totalTrained, avgConfidence, patternCount: brain.patternMemory.size };
 };
 
@@ -739,46 +875,46 @@ export const trainUntilConfident = async (
     onProgress?: (iteration: number, confidence: number) => void
 ): Promise<{ success: boolean; finalConfidence: number; iterations: number }> => {
     console.log(`[Iterative Training] 🎯 Target: ${targetConfidence}%`);
-    
+
     const trainingData = await storageService.fetchTrainingDataFromSupabase();
-    
+
     if (trainingData.length === 0) {
         console.warn('[Iterative Training] ❌ No training data');
         return { success: false, finalConfidence: 50, iterations: 0 };
     }
-    
+
     let iteration = 0;
     let currentConfidence = calculateAverageConfidence();
     let noImprovementCount = 0;
     let previousConfidence = currentConfidence;
-    
+
     while (currentConfidence < targetConfidence && iteration < maxIterations) {
         iteration++;
         batchTrainFromHistory(trainingData);
         currentConfidence = calculateAverageConfidence();
-        
+
         if (onProgress) onProgress(iteration, currentConfidence);
-        
+
         console.log(`[Iteration ${iteration}] Confidence: ${currentConfidence.toFixed(1)}%`);
-        
+
         if (currentConfidence <= previousConfidence + 0.5) {
             noImprovementCount++;
         } else {
             noImprovementCount = 0;
         }
-        
+
         if (noImprovementCount >= 5) {
             console.warn('[Iterative Training] ⚠️ No improvement. Stopping.');
             break;
         }
-        
+
         previousConfidence = currentConfidence;
     }
-    
+
     brain.save();
-    
+
     console.log(`[Iterative Training] ✅ Final: ${currentConfidence.toFixed(1)}%`);
-    
+
     return {
         success: currentConfidence >= targetConfidence,
         finalConfidence: currentConfidence,
@@ -812,16 +948,16 @@ export const testMetaLearningImpact = async () => {
     console.log('='.repeat(60));
     console.log('META-LEARNING IMPACT TEST');
     console.log('='.repeat(60));
-    
+
     const trainingData = await storageService.fetchTrainingDataFromSupabase();
-    
+
     if (trainingData.length < 20) {
         console.warn('⚠️ Need at least 20 trades for meaningful test');
         return;
     }
-    
+
     console.log(`\n📊 Testing with ${trainingData.length} historical trades\n`);
-    
+
     // Test 1: Confidence Calibration
     console.log('1️⃣ CONFIDENCE CALIBRATION TEST');
     console.log('-'.repeat(40));
@@ -829,9 +965,9 @@ export const testMetaLearningImpact = async () => {
     console.log(`Total predictions tracked: ${calibStats.totalPredictions}`);
     console.log('Calibration curve:');
     calibStats.calibrationCurve.forEach(([predicted, actual]) => {
-        console.log(`  ${predicted}-${predicted+20}% predicted → ${actual.toFixed(1)}% actual`);
+        console.log(`  ${predicted}-${predicted + 20}% predicted → ${actual.toFixed(1)}% actual`);
     });
-    
+
     // Test 2: Adaptive Hyperparameters
     console.log('\n2️⃣ ADAPTIVE HYPERPARAMETERS TEST');
     console.log('-'.repeat(40));
@@ -841,17 +977,17 @@ export const testMetaLearningImpact = async () => {
     console.log(`Learning progress: ${metrics.learningProgress.toFixed(2)}`);
     console.log(`Current LR: ${brain.learningRate.toFixed(4)}`);
     console.log(`Current Epsilon: ${brain.epsilon.toFixed(3)}`);
-    
+
     // Test 3: Pattern Discovery
     console.log('\n3️⃣ PATTERN DISCOVERY TEST');
     console.log('-'.repeat(40));
     const patterns = patternDiscovery.discoverPatterns(trainingData);
     console.log(`Patterns discovered: ${patterns.length}`);
     patterns.forEach((p, i) => {
-        console.log(`  ${i+1}. ${p.name}`);
+        console.log(`  ${i + 1}. ${p.name}`);
         console.log(`     Trades: ${p.tradeCount}, Win Rate: ${(p.winRate * 100).toFixed(0)}%, Avg PNL: ${p.avgPnl.toFixed(2)}`);
     });
-    
+
     // Test 4: Overall Impact
     console.log('\n4️⃣ OVERALL IMPACT');
     console.log('-'.repeat(40));
@@ -860,11 +996,11 @@ export const testMetaLearningImpact = async () => {
     console.log(`Average confidence: ${avgConf.toFixed(1)}%`);
     console.log(`Total patterns learned: ${patternStats.totalPatterns}`);
     console.log(`Total training iterations: ${brain.totalTrainingIterations}`);
-    
+
     console.log('\n' + '='.repeat(60));
     console.log('✅ META-LEARNING TEST COMPLETE');
     console.log('='.repeat(60));
-    
+
     return {
         calibration: calibStats,
         adaptive: metrics,
@@ -875,4 +1011,22 @@ export const testMetaLearningImpact = async () => {
             iterations: brain.totalTrainingIterations
         }
     };
+};
+// Initial Load of Persistent Memory
+brain.load().catch(err => console.error("Failed to load brain memory:", err));
+
+export const trainFromSavedHistory = async () => {
+    console.log("🔄 Starting training from saved history...");
+    try {
+        const data = await storageService.fetchTrainingDataFromSupabase();
+        if (data && data.length > 0) {
+            brain.restoreFromHistory(data);
+            return data.length;
+        }
+        console.log("⚠️ No history found in Supabase.");
+        return 0;
+    } catch (e) {
+        console.error("Error training from history:", e);
+        return 0;
+    }
 };

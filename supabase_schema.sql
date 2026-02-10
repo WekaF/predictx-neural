@@ -351,3 +351,47 @@ ON CONFLICT (id) DO NOTHING;
 --          Added indexes for better query performance
 --          Added auto-logging triggers
 --          Added helper views for analytics
+
+-- =====================================================
+-- BACKTEST LOGGING TABLES (NEW - 2026-02-10)
+-- =====================================================
+
+-- Backtest Event Logs Table
+CREATE TABLE IF NOT EXISTS backtest_logs (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    backtest_id TEXT NOT NULL,
+    log_type TEXT NOT NULL CHECK (log_type IN ('info', 'trade', 'error', 'success')),
+    message TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_backtest_logs_backtest_id ON backtest_logs(backtest_id);
+CREATE INDEX IF NOT EXISTS idx_backtest_logs_created_at ON backtest_logs(created_at DESC);
+
+-- Backtest Results Table  
+CREATE TABLE IF NOT EXISTS backtest_results (
+    id TEXT PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    strategy TEXT NOT NULL CHECK (strategy IN ('SCALP', 'SWING')),
+    total_trades INTEGER NOT NULL DEFAULT 0,
+    win_rate DECIMAL(5,2) NOT NULL DEFAULT 0,
+    net_profit DECIMAL(15,2) NOT NULL DEFAULT 0,
+    stats JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_backtest_results_symbol ON backtest_results(symbol);
+CREATE INDEX IF NOT EXISTS idx_backtest_results_created_at ON backtest_results(created_at DESC);
+
+-- Enable RLS
+ALTER TABLE backtest_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE backtest_results ENABLE ROW LEVEL SECURITY;
+
+-- Create policies
+CREATE POLICY \"Allow all operations on backtest_logs\" ON backtest_logs FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY \"Allow all operations on backtest_results\" ON backtest_results FOR ALL USING (true) WITH CHECK (true);
+
+-- Grant permissions
+GRANT ALL ON backtest_logs TO anon, authenticated;
+GRANT ALL ON backtest_results TO anon, authenticated;

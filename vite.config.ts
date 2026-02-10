@@ -13,7 +13,11 @@ export default defineConfig(({ mode }) => {
         '/api': {
           target: 'https://api.binance.com', // Standard endpoint
           changeOrigin: true
-          // rewrite removed: we want to pass /api to the target
+        },
+        '/ai-api': {
+          target: 'http://127.0.0.1:8000',
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/ai-api/, '/api')
         }
       },
       watch: {
@@ -29,11 +33,11 @@ export default defineConfig(({ mode }) => {
       alias: {
         '@': path.resolve(__dirname, './src'),
         // Fix for recharts issue with react-is
-        'react-is': path.resolve(__dirname, 'node_modules/react-is') 
+        'react-is': path.resolve(__dirname, 'node_modules/react-is')
       }
     },
     optimizeDeps: {
-      include: ['react-is'] 
+      include: ['react-is']
     }
   };
 });

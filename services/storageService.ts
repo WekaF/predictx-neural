@@ -15,9 +15,9 @@ export const storageService = {
     try {
       const data = localStorage.getItem(TRAINING_STORAGE_KEY);
       if (!data) return [];
-      
+
       const parsed = JSON.parse(data);
-      
+
       // Filter out old data with invalid UUID format
       const validData = parsed.filter((item: TrainingData) => {
         if (!item.id || !isValidUUID(item.id)) {
@@ -26,13 +26,13 @@ export const storageService = {
         }
         return true;
       });
-      
+
       // Save cleaned data back to localStorage
       if (validData.length !== parsed.length) {
         localStorage.setItem(TRAINING_STORAGE_KEY, JSON.stringify(validData));
         console.log(`[Storage] ✅ Cleaned ${parsed.length - validData.length} old training data entries`);
       }
-      
+
       return validData;
     } catch (e) {
       console.error("Failed to load training data from storage", e);
@@ -48,23 +48,23 @@ export const storageService = {
       .select('*')
       .order('created_at', { ascending: false })
       .limit(50);
-    
+
     if (error) {
       console.error("Supabase fetch error:", error);
       return [];
     }
-    
+
     // Update local cache
     if (data && data.length > 0) {
-       localStorage.setItem(TRAINING_STORAGE_KEY, JSON.stringify(data));
+      localStorage.setItem(TRAINING_STORAGE_KEY, JSON.stringify(data));
     }
     return data as TrainingData[] || [];
   },
-  
+
   saveTrainingData: async (data: TrainingData[]) => {
     try {
       console.log('[Storage] Saving training data...', { count: data.length, data });
-      
+
       // 1. Save Local
       localStorage.setItem(TRAINING_STORAGE_KEY, JSON.stringify(data));
       console.log('[Storage] ✅ Saved to localStorage');
@@ -75,7 +75,7 @@ export const storageService = {
         const uniqueData = Array.from(
           new Map(data.map(item => [item.id, item])).values()
         );
-        
+
         const supabaseData = uniqueData.map(item => ({
           id: item.id,
           pattern: item.pattern,
@@ -84,9 +84,9 @@ export const storageService = {
           risk_reward: item.riskReward, // Map to snake_case
           note: item.note
         }));
-        
+
         console.log('[Supabase] Upserting training data...', { count: supabaseData.length, deduplicated: data.length - uniqueData.length });
-        
+
         // Upsert one at a time to avoid "cannot affect row a second time" error
         for (const item of supabaseData) {
           const { error } = await supabase
@@ -97,7 +97,7 @@ export const storageService = {
             console.error(`[Supabase] ❌ Training data save error for ID ${item.id}:`, error);
           }
         }
-        
+
         console.log('[Supabase] ✅ Training data synced successfully!', { count: supabaseData.length });
       } else {
         console.warn('[Supabase] ⚠️ Supabase client not initialized');
@@ -110,7 +110,7 @@ export const storageService = {
   // --- Trade Signals (NEW) ---
   saveTradeSignal: async (signal: any) => {
     if (!supabase) return;
-    
+
     try {
       const { error } = await supabase
         .from('trade_signals')
@@ -126,7 +126,7 @@ export const storageService = {
           source: signal.patternDetected?.includes('Gemini') ? 'GEMINI' : signal.patternDetected?.includes('Manual') ? 'MANUAL' : 'AI',
           outcome: signal.outcome || 'PENDING'
         });
-      
+
       if (error) console.error('[Supabase] Signal save error:', error);
       else console.log('[Supabase] Signal saved ✅', signal.symbol, signal.type);
     } catch (e) {
@@ -136,36 +136,36 @@ export const storageService = {
 
   updateTradeSignalOutcome: async (signalId: string, outcome: 'WIN' | 'LOSS' | 'CANCELLED') => {
     if (!supabase) return;
-    
+
     try {
       const { error } = await supabase
         .from('trade_signals')
         .update({ outcome })
         .eq('id', signalId);
-      
+
       if (error) console.error('[Supabase] Signal update error:', error);
       else console.log('[Supabase] Signal outcome updated:', signalId, outcome);
     } catch (e) {
       console.error('[Supabase] Signal update failed:', e);
     }
   },
-  
+
   // Fetch activity logs from Supabase
   fetchActivityLogs: async (limit: number = 100): Promise<any[]> => {
     if (!supabase) return [];
-    
+
     try {
       const { data, error } = await supabase
         .from('activity_logs')
         .select('*')
         .order('created_at', { ascending: false })
         .limit(limit);
-      
+
       if (error) {
         console.error('[Supabase] Activity logs fetch error:', error);
         return [];
       }
-      
+
       console.log(`[Supabase] ✅ Fetched ${data?.length || 0} activity logs`);
       return data || [];
     } catch (e) {
@@ -175,77 +175,121 @@ export const storageService = {
   },
 
   clearData: () => {
-      localStorage.removeItem(TRAINING_STORAGE_KEY);
-      localStorage.removeItem(MODEL_WEIGHTS_KEY);
+    localStorage.removeItem(TRAINING_STORAGE_KEY);
+    localStorage.removeItem(MODEL_WEIGHTS_KEY);
   },
 
   // --- Machine Learning Model ---
   getModelWeights: (): any => {
-      try {
-          const data = localStorage.getItem(MODEL_WEIGHTS_KEY);
-          return data ? JSON.parse(data) : null;
-      } catch (e) {
-          console.error("Failed to load ML model", e);
-          return null;
-      }
+    try {
+      const data = localStorage.getItem(MODEL_WEIGHTS_KEY);
+      return data ? JSON.parse(data) : null;
+    } catch (e) {
+      console.error("Failed to load ML model", e);
+      return null;
+    }
   },
 
   saveModelWeights: async (weights: any) => {
-      try {
-          localStorage.setItem(MODEL_WEIGHTS_KEY, JSON.stringify(weights));
-          
-          if (supabase) {
-              const { error } = await supabase.from('model_storage').upsert({ 
-                  id: 'main_dqn_model', 
-                  weights_ih: weights.weightsIH,
-                  weights_ho: weights.weightsHO,
-                  bias_h: weights.biasH,
-                  bias_o: weights.biasO,
-                  metadata: { updated: new Date().toISOString() }
-              }); 
-              
-              if (error) console.error("Supabase model save error:", error);
-          }
-      } catch (e) {
-          console.error("Failed to save ML model", e);
+    try {
+      localStorage.setItem(MODEL_WEIGHTS_KEY, JSON.stringify(weights));
+
+      if (supabase) {
+        const { error } = await supabase.from('model_storage').upsert({
+          id: 'main_dqn_model',
+          weights_ih: weights.weightsIH,
+          weights_ho: weights.weightsHO,
+          bias_h: weights.biasH,
+          bias_o: weights.biasO,
+          metadata: { updated: new Date().toISOString() }
+        });
+
+        if (error) console.error("Supabase model save error:", error);
       }
+    } catch (e) {
+      console.error("Failed to save ML model", e);
+    }
+  },
+
+  // --- Pattern Memory Persistence ---
+  savePatternMemory: async (memory: any[]) => {
+    try {
+      localStorage.setItem('neurotrade_pattern_memory', JSON.stringify(memory));
+
+      if (supabase) {
+        const { error } = await supabase.from('model_storage').upsert({
+          id: 'pattern_memory',
+          metadata: { memory: memory, updated: new Date().toISOString() }
+        });
+
+        if (error) console.error("Supabase memory save error:", error);
+      }
+    } catch (e) {
+      console.error("Failed to save pattern memory", e);
+    }
+  },
+
+  getPatternMemory: async (): Promise<any[] | null> => {
+    try {
+      // Try Supabase first for sync
+      if (supabase) {
+        const { data, error } = await supabase
+          .from('model_storage')
+          .select('*')
+          .eq('id', 'pattern_memory')
+          .maybeSingle();
+
+        if (data && data.metadata && data.metadata.memory) {
+          // Update local
+          localStorage.setItem('neurotrade_pattern_memory', JSON.stringify(data.metadata.memory));
+          return data.metadata.memory;
+        }
+      }
+
+      // Fallback to local
+      const data = localStorage.getItem('neurotrade_pattern_memory');
+      return data ? JSON.parse(data) : null;
+    } catch (e) {
+      console.error("Failed to load pattern memory", e);
+      return null;
+    }
   },
 
   fetchModelWeightsFromSupabase: async () => {
-      if (!supabase) return null;
-      
-      try {
-          const { data, error } = await supabase
-              .from('model_storage')
-              .select('*')
-              .eq('id', 'main_dqn_model')
-              .maybeSingle(); // Use maybeSingle instead of single to avoid error if no rows
-          
-          if (error) {
-              // 406 or PGRST116 means no rows found, which is OK for first run
-              if (error.code === 'PGRST116' || error.message.includes('406')) {
-                  console.log('[Supabase] No model weights found in cloud (first run). Using local.');
-                  return null;
-              }
-              console.error('[Supabase] Model fetch error:', error);
-              return null;
-          }
-          
-          if (data) {
-              const weights = {
-                  weightsIH: data.weights_ih,
-                  weightsHO: data.weights_ho,
-                  biasH: data.bias_h,
-                  biasO: data.bias_o
-              };
-              localStorage.setItem(MODEL_WEIGHTS_KEY, JSON.stringify(weights));
-              return weights;
-          }
+    if (!supabase) return null;
+
+    try {
+      const { data, error } = await supabase
+        .from('model_storage')
+        .select('*')
+        .eq('id', 'main_dqn_model')
+        .maybeSingle(); // Use maybeSingle instead of single to avoid error if no rows
+
+      if (error) {
+        // 406 or PGRST116 means no rows found, which is OK for first run
+        if (error.code === 'PGRST116' || error.message.includes('406')) {
+          console.log('[Supabase] No model weights found in cloud (first run). Using local.');
           return null;
-      } catch (err) {
-          console.error('[Supabase] Unexpected error fetching model:', err);
-          return null;
+        }
+        console.error('[Supabase] Model fetch error:', error);
+        return null;
       }
+
+      if (data) {
+        const weights = {
+          weightsIH: data.weights_ih,
+          weightsHO: data.weights_ho,
+          biasH: data.bias_h,
+          biasO: data.bias_o
+        };
+        localStorage.setItem(MODEL_WEIGHTS_KEY, JSON.stringify(weights));
+        return weights;
+      }
+      return null;
+    } catch (err) {
+      console.error('[Supabase] Unexpected error fetching model:', err);
+      return null;
+    }
   },
 
   // --- Backtest Configurations ---
@@ -282,115 +326,197 @@ export const storageService = {
 
   // --- App Settings (Webhooks) ---
   getSettings: (): AppSettings => {
-    const defaultUrl = 'https://weka.app.n8n.cloud/webhook-test/b7252a1d-956c-4920-ad60-50daed75810e';
-    
+    const defaultUrl = 'https://weka.app.n8n.cloud/webhook/trading-webhook';
+
     try {
-        const data = localStorage.getItem(SETTINGS_STORAGE_KEY);
-        if (data) {
-            const parsed = JSON.parse(data);
-            const urlToUse = (parsed.webhookUrl && parsed.webhookUrl.trim() !== '') 
-                             ? parsed.webhookUrl 
-                             : defaultUrl;
-                             
-            return {
-                webhookUrl: urlToUse,
-                webhookMethod: parsed.webhookMethod || 'POST',
-                enableNotifications: parsed.enableNotifications ?? false
-            };
-        }
-        return { webhookUrl: defaultUrl, webhookMethod: 'POST', enableNotifications: false };
+      const data = localStorage.getItem(SETTINGS_STORAGE_KEY);
+      if (data) {
+        const parsed = JSON.parse(data);
+        const urlToUse = (parsed.webhookUrl && parsed.webhookUrl.trim() !== '')
+          ? parsed.webhookUrl
+          : defaultUrl;
+
+        return {
+          webhookUrl: urlToUse,
+          webhookMethod: parsed.webhookMethod || 'POST',
+          enableNotifications: parsed.enableNotifications ?? false
+        };
+      }
+      return { webhookUrl: defaultUrl, webhookMethod: 'POST', enableNotifications: false };
     } catch (e) {
-        return { webhookUrl: defaultUrl, webhookMethod: 'POST', enableNotifications: false };
+      return { webhookUrl: defaultUrl, webhookMethod: 'POST', enableNotifications: false };
     }
   },
 
   saveSettings: async (settings: AppSettings) => {
-      localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
-      
-      // Sync to Supabase
-      if (supabase) {
-        try {
-          const { error } = await supabase
-            .from('app_settings')
-            .upsert({
-              id: 'main_settings', // Single row for app settings
-              // Don't store webhook URL in DB for security
-              risk_tolerance: 1.0, // TODO: Add to AppSettings type
-              auto_trade_enabled: false // TODO: Add to AppSettings type
-            });
-          
-          if (error) console.error('[Supabase] Settings save error:', error);
-        } catch (e) {
-          console.error('[Supabase] Settings save failed:', e);
-        }
+    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+
+    // Sync to Supabase
+    if (supabase) {
+      try {
+        const { error } = await supabase
+          .from('app_settings')
+          .upsert({
+            id: 'main_settings', // Single row for app settings
+            // Don't store webhook URL in DB for security
+            risk_tolerance: 1.0, // TODO: Add to AppSettings type
+            auto_trade_enabled: false // TODO: Add to AppSettings type
+          });
+
+        if (error) console.error('[Supabase] Settings save error:', error);
+      } catch (e) {
+        console.error('[Supabase] Settings save failed:', e);
       }
+    }
   },
 
   // --- Auto Trade State ---
   getAutoTradeState: (): boolean => {
-      try {
-          return localStorage.getItem(AUTO_TRADE_KEY) === 'true';
-      } catch {
-          return false;
-      }
+    try {
+      return localStorage.getItem(AUTO_TRADE_KEY) === 'true';
+    } catch {
+      return false;
+    }
   },
 
   saveAutoTradeState: async (enabled: boolean) => {
-      localStorage.setItem(AUTO_TRADE_KEY, String(enabled));
-      
-      // Sync to Supabase
-      if (supabase) {
-        try {
-          const { error } = await supabase
-            .from('app_settings')
-            .upsert({
-              id: 'main_settings',
-              auto_trade_enabled: enabled
-            });
-          
-          if (error) console.error('[Supabase] Auto-trade state save error:', error);
-        } catch (e) {
-          console.error('[Supabase] Auto-trade state save failed:', e);
-        }
+    localStorage.setItem(AUTO_TRADE_KEY, String(enabled));
+
+    // Sync to Supabase
+    if (supabase) {
+      try {
+        const { error } = await supabase
+          .from('app_settings')
+          .upsert({
+            id: 'main_settings',
+            auto_trade_enabled: enabled
+          });
+
+        if (error) console.error('[Supabase] Auto-trade state save error:', error);
+      } catch (e) {
+        console.error('[Supabase] Auto-trade state save failed:', e);
       }
+    }
   },
 
   // --- Trading Journal (NEW) ---
   getTradingLogs: (): any[] => {
-      try {
-          const key = 'neurotrade_trading_logs';
-          const data = localStorage.getItem(key);
-          return data ? JSON.parse(data) : [];
-      } catch (e) {
-          console.error("Failed to load trading logs", e);
-          return [];
-      }
+    try {
+      const key = 'neurotrade_trading_logs';
+      const data = localStorage.getItem(key);
+      return data ? JSON.parse(data) : [];
+    } catch (e) {
+      console.error("Failed to load trading logs", e);
+      return [];
+    }
   },
 
   saveTradingLog: async (log: any) => {
-      try {
-          const key = 'neurotrade_trading_logs';
-          const existing = storageService.getTradingLogs();
-          const updated = [log, ...existing];
-          localStorage.setItem(key, JSON.stringify(updated));
-          
-          if (supabase) {
-              const { error } = await supabase
-                  .from('trading_journal')
-                  .insert({
-                      id: log.id,
-                      trade_id: log.tradeId,
-                      symbol: log.symbol,
-                      type: log.type,
-                      ai_reasoning: log.items.aiReasoning,
-                      ai_confidence: log.items.aiConfidence,
-                      market_snapshot: log.items.snapshot
-                  });
-              
-              if (error) console.error('[Supabase] Journal save error:', error);
-          }
-      } catch (e) {
-          console.error("Failed to save trading log", e);
+    try {
+      const key = 'neurotrade_trading_logs';
+      const existing = storageService.getTradingLogs();
+      const updated = [log, ...existing];
+      localStorage.setItem(key, JSON.stringify(updated));
+
+      if (supabase) {
+        const { error } = await supabase
+          .from('trading_journal')
+          .insert({
+            id: log.id,
+            trade_id: log.tradeId,
+            symbol: log.symbol,
+            type: log.type,
+            ai_reasoning: log.items.aiReasoning,
+            ai_confidence: log.items.aiConfidence,
+            market_snapshot: log.items.snapshot
+          });
+
+        if (error) console.error('[Supabase] Journal save error:', error);
       }
+    } catch (e) {
+      console.error("Failed to save trading log", e);
+    }
+  },
+
+  // --- Backtest Event Logs (NEW) ---
+  saveBacktestLog: async (log: { time: string; msg: string; type: string; backtestId?: string }) => {
+    try {
+      if (supabase) {
+        const { error } = await supabase
+          .from('backtest_logs')
+          .insert({
+            backtest_id: log.backtestId || 'default',
+            log_type: log.type,
+            message: log.msg,
+            timestamp: log.time
+          });
+
+        if (error) {
+          console.error('[Supabase] Backtest log save error:', error);
+          return false;
+        }
+
+        return true;
+      }
+      return false;
+    } catch (e) {
+      console.error("Failed to save backtest log", e);
+      return false;
+    }
+  },
+
+  fetchBacktestLogs: async (backtestId: string = 'default', limit: number = 100): Promise<any[]> => {
+    if (!supabase) return [];
+
+    try {
+      const { data, error } = await supabase
+        .from('backtest_logs')
+        .select('*')
+        .eq('backtest_id', backtestId)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+
+      if (error) {
+        console.error('[Supabase] Backtest logs fetch error:', error);
+        return [];
+      }
+
+      console.log(`[Supabase] ✅ Fetched ${data?.length || 0} backtest logs`);
+      return data || [];
+    } catch (e) {
+      console.error('[Supabase] Backtest logs fetch failed:', e);
+      return [];
+    }
+  },
+
+  saveBacktestResults: async (results: {
+    id: string;
+    symbol: string;
+    strategy: string;
+    totalTrades: number;
+    winRate: number;
+    netProfit: number;
+    stats: any;
+  }) => {
+    try {
+      if (supabase) {
+        const { error } = await supabase
+          .from('backtest_results')
+          .insert({
+            id: results.id,
+            symbol: results.symbol,
+            strategy: results.strategy,
+            total_trades: results.totalTrades,
+            win_rate: results.winRate,
+            net_profit: results.netProfit,
+            stats: results.stats
+          });
+
+        if (error) console.error('[Supabase] Backtest results save error:', error);
+        else console.log('[Supabase] ✅ Backtest results saved');
+      }
+    } catch (e) {
+      console.error("Failed to save backtest results", e);
+    }
   }
 };

@@ -1,0 +1,22 @@
+// TEMPORARY FIX - Add this manually to BacktestPanel.tsx
+
+// Around line 99, after "let currentIndex = progress === 0 ? 50 : progress;"
+// Add this code:
+
+if (progress === 0) {
+    addLog(`🚀 Simulation started: ${symbol} | Strategy: ${strategy}`, 'info');
+    addLog(`⚠️ Using 70% confidence - signals may be VERY rare`, 'info');
+}
+
+// Around line 188, after "const signal = await analyzeMarketWithLocalML(...)"
+// Add this code:
+
+if (signal && signal.type === 'HOLD' && currentIndex % 50 === 0) {
+    addLog(`ℹ️ Candle ${currentIndex}: Analyzing... (HOLD)`, 'info');
+}
+
+// Around line 230, before "setIsRunning(false);"
+// Add this code:
+
+addLog(`✅ Simulation complete! Trades: ${trades.length}`, 'success');
+addLog(`📊 Final P/L: $${(currentBalance - initialBalance).toFixed(2)}`, 'info');
