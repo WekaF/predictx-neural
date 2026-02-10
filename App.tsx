@@ -1028,8 +1028,8 @@ function App() {
         />
       )}
 
-      {/* Desktop Sidebar - Hidden on Mobile */}
-      <nav className="hidden md:flex md:w-20 bg-slate-900 border-r border-slate-800 flex-col items-center py-4 gap-6 z-20 shrink-0">
+      {/* Desktop Sidebar - Hidden on Mobile/Tablet */}
+      <nav className="hidden lg:flex lg:w-20 bg-slate-900 border-r border-slate-800 flex-col items-center py-4 gap-6 z-20 shrink-0">
         <div className="p-3 bg-blue-600 rounded-xl shadow-lg shadow-blue-500/20">
           <BrainCircuit className="w-6 h-6 text-white" />
         </div>
@@ -1101,8 +1101,8 @@ function App() {
         </div>
       </nav>
 
-      {/* Mobile Bottom Navigation */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-slate-900 border-t border-slate-800 z-30 safe-area-inset-bottom">
+      {/* Mobile/Tablet Bottom Navigation */}
+      <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-slate-900 border-t border-slate-800 z-30 safe-area-inset-bottom">
         <div className="flex items-center justify-around px-2 py-2">
           <button
             onClick={() => setCurrentView('terminal')}
@@ -1321,8 +1321,8 @@ function App() {
           </div>
         ) : (
           <div className="flex flex-col h-full overflow-hidden">
-            {/* Mobile Terminal Tabs */}
-            <div className="flex md:hidden bg-slate-900 p-1 rounded-lg mb-2 gap-1 border border-slate-800 shrink-0 mx-1">
+            {/* Mobile/Tablet Terminal Tabs */}
+            <div className="flex lg:hidden bg-slate-900 p-1 rounded-lg mb-2 gap-1 border border-slate-800 shrink-0 mx-1">
               <button
                 onClick={() => setTerminalTab('trade')}
                 className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${terminalTab === 'trade'
@@ -1343,9 +1343,9 @@ function App() {
               </button>
             </div>
 
-            <div className="flex flex-col lg:grid lg:grid-cols-4 gap-3 md:gap-6 flex-1 min-h-0">
+            <div className="flex flex-col lg:grid lg:grid-cols-4 gap-3 md:gap-6 flex-1 min-h-0 lg:overflow-hidden">
               {/* LEFT COLUMN: Chart + Trade History */}
-              <div className={`lg:col-span-2 space-y-3 md:space-y-4 flex-col overflow-hidden ${terminalTab === 'trade' ? 'flex' : 'hidden lg:flex'}`}>
+              <div className={`lg:col-span-2 space-y-3 md:space-y-4 flex-col lg:overflow-hidden ${terminalTab === 'trade' ? 'flex' : 'hidden lg:flex'}`}>
                 <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 md:p-4 shadow-xl flex flex-col min-h-[250px] sm:min-h-[300px]">
                   <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 mb-3 md:mb-4 shrink-0">
                     <div className="flex gap-2 items-center">
@@ -1383,27 +1383,30 @@ function App() {
               </div>
 
               {/* MIDDLE COLUMN: Signal & Alerts */}
-              <div className={`lg:col-span-1 space-y-3 md:space-y-4 flex-col overflow-y-auto ${terminalTab === 'trade' ? 'flex' : 'hidden lg:flex'}`}>
+              <div className={`lg:col-span-1 space-y-3 md:space-y-4 flex-col lg:overflow-y-auto ${terminalTab === 'trade' ? 'flex' : 'hidden lg:flex'}`}>
                 {/* Active Signal Card */}
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 md:p-6 shadow-xl relative overflow-hidden group shrink-0">
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-lg relative overflow-hidden group shrink-0">
                   <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/5 rounded-full blur-3xl group-hover:bg-blue-500/10 transition-all"></div>
 
-                  <h2 className="text-slate-400 text-xs font-bold tracking-wider mb-3 md:mb-4 flex items-center gap-2">
-                    <Target className="w-4 h-4" /> ACTIVE TRADE
+                  <h2 className="text-slate-400 text-xs font-bold tracking-wider mb-4 flex items-center gap-2 relative z-10">
+                    <Target className="w-4 h-4 text-blue-400" /> ACTIVE TRADE
                   </h2>
 
                   {activeSignal && activeSignal.outcome === 'PENDING' && activeSignal.symbol === selectedAsset.symbol ? (
-                    <div className="space-y-3 md:space-y-4 relative z-10">
+                    <div className="space-y-4 relative z-10">
                       <div className="flex justify-between items-end">
-                        <span className={`text-3xl md:text-4xl font-black ${activeSignal.type === 'BUY' ? 'text-emerald-400' : activeSignal.type === 'SELL' ? 'text-rose-400' : 'text-yellow-400'}`}>
+                        <span className={`text-3xl font-black tracking-tight ${activeSignal.type === 'BUY' ? 'text-emerald-400' : activeSignal.type === 'SELL' ? 'text-rose-400' : 'text-yellow-400'}`}>
                           {activeSignal.type}
                         </span>
-                        <span className="text-slate-500 font-mono text-sm">Conf: {activeSignal.confidence}%</span>
+                        <div className="flex flex-col items-end">
+                          <span className="text-slate-500 text-[10px] font-bold uppercase">Confidence</span>
+                          <span className="text-white font-mono text-lg font-bold">{activeSignal.confidence}%</span>
+                        </div>
                       </div>
 
-                      <div className="flex flex-wrap gap-2">
+                      <div className="flex flex-wrap gap-1.5">
                         {activeSignal.confluenceFactors?.map((factor, i) => (
-                          <span key={i} className="flex items-center gap-1 text-[10px] bg-slate-800 px-2 py-1 rounded text-slate-300 border border-slate-700">
+                          <span key={i} className="flex items-center gap-1 text-[10px] bg-slate-800/80 px-2 py-1 rounded-md text-slate-300 border border-slate-700/50">
                             {factor.includes('Trend') && <TrendingUp className="w-3 h-3 text-blue-400" />}
                             {factor.includes('RSI') && <Activity className="w-3 h-3 text-purple-400" />}
                             {factor.includes('Support') && <Layers className="w-3 h-3 text-emerald-400" />}
@@ -1413,176 +1416,158 @@ function App() {
                         ))}
                       </div>
 
-                      <div className="bg-slate-950 rounded-lg p-3 space-y-2 border border-slate-800/50">
-                        <div className="flex justify-between text-sm">
-                          <span className="text-slate-500">Entry</span>
-                          <span className="font-mono text-slate-200">{activeSignal.entryPrice}</span>
+                      <div className="grid grid-cols-3 gap-2 text-center bg-slate-950/50 rounded-lg p-3 border border-slate-800/50">
+                        <div>
+                          <span className="text-[10px] text-slate-500 block mb-0.5">Entry</span>
+                          <span className="text-xs font-mono text-slate-200">{activeSignal.entryPrice}</span>
                         </div>
-                        <div className="flex justify-between text-sm">
-                          <span className="text-slate-500">Stop Loss</span>
-                          <span className="font-mono text-rose-400">{activeSignal.stopLoss}</span>
+                        <div>
+                          <span className="text-[10px] text-slate-500 block mb-0.5">Stop</span>
+                          <span className="text-xs font-mono text-rose-400">{activeSignal.stopLoss}</span>
                         </div>
-                        <div className="flex justify-between text-sm">
-                          <span className="text-slate-500">Take Profit</span>
-                          <span className="font-mono text-emerald-400">{activeSignal.takeProfit}</span>
+                        <div>
+                          <span className="text-[10px] text-slate-500 block mb-0.5">Target</span>
+                          <span className="text-xs font-mono text-emerald-400">{activeSignal.takeProfit}</span>
                         </div>
                       </div>
 
-                      {/* Manual Close Controls - Larger buttons for mobile */}
-                      <div className="grid grid-cols-2 gap-2 mt-4">
-                        <button onClick={() => handleFeedback('WIN')} className="bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 py-3 sm:py-2 rounded-lg text-xs font-bold border border-emerald-500/30 transition-all">
-                          CLOSE WIN
+                      <div className="grid grid-cols-2 gap-3 pt-1">
+                        <button onClick={() => handleFeedback('WIN')} className="bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 py-2.5 rounded-lg text-xs font-bold border border-emerald-500/20 transition-all flex justify-center items-center gap-2">
+                          <CheckCircle2 className="w-3.5 h-3.5" /> WIN
                         </button>
-                        <button onClick={() => handleFeedback('LOSS')} className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 py-3 sm:py-2 rounded-lg text-xs font-bold border border-rose-500/30 transition-all">
-                          CLOSE LOSS
+                        <button onClick={() => handleFeedback('LOSS')} className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 py-2.5 rounded-lg text-xs font-bold border border-rose-500/20 transition-all flex justify-center items-center gap-2">
+                          <XCircle className="w-3.5 h-3.5" /> LOSS
                         </button>
                       </div>
                     </div>
                   ) : (
-                    <div className="h-40 flex flex-col items-center justify-center text-slate-600 space-y-2">
-                      <ShieldCheck className="w-8 h-8 opacity-50" />
-                      <span className="text-sm text-center px-2">
-                        {activeSignal && activeSignal.outcome === 'PENDING' ? `Trade Active on ${activeSignal.symbol}` : "No Active Trade."}
+                    <div className="py-6 flex flex-col items-center justify-center text-slate-600 space-y-3 relative z-10">
+                      <div className="w-12 h-12 rounded-full bg-slate-800/50 flex items-center justify-center">
+                        <ShieldCheck className="w-6 h-6 opacity-40" />
+                      </div>
+                      <span className="text-xs font-medium text-center text-slate-500">
+                        {activeSignal && activeSignal.outcome === 'PENDING' ? `Trade managed elsewhere` : "No active trade signal"}
                       </span>
-                      <button
-                        onClick={handleAnalyze}
-                        disabled={isAnalyzing || (activeSignal?.outcome === 'PENDING' && activeSignal.symbol === selectedAsset.symbol)}
-                        className={`mt-2 py-3 sm:py-2 px-4 rounded-lg font-bold flex items-center justify-center gap-2 transition-all text-xs ${isAnalyzing ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500 text-white'}`}
-                      >
-                        {isAnalyzing ? <RefreshCw className="w-3 h-3 animate-spin" /> : <BrainCircuit className="w-3 h-3" />}
-                        {isAnalyzing ? "Processing..." : "Predict with ML"}
-                      </button>
+                      
+                      <div className="grid grid-cols-2 gap-2 w-full mt-2">
+                         <button
+                          onClick={handleAnalyze}
+                          disabled={isAnalyzing || (activeSignal?.outcome === 'PENDING' && activeSignal.symbol === selectedAsset.symbol)}
+                          className={`py-2 px-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-all text-xs border ${isAnalyzing 
+                            ? 'bg-slate-800 border-slate-700 text-slate-500 cursor-not-allowed' 
+                            : 'bg-blue-600 border-blue-500 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/20'}`}
+                        >
+                          {isAnalyzing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <BrainCircuit className="w-3.5 h-3.5" />}
+                          {isAnalyzing ? "..." : "Predict"}
+                        </button>
 
-                      {/* Quick Train Button */}
-                      <button
-                        onClick={handleQuickTrain}
-                        disabled={isTraining || candles.length < 150}
-                        className={`mt-2 py-2 px-4 rounded-lg font-bold flex items-center justify-center gap-2 transition-all text-xs ${isTraining ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-500 text-white'}`}
-                        title="Train AI with 500 historical patterns to boost confidence"
-                      >
-                        {isTraining ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
-                        {isTraining ? `Training ${trainingProgress}%` : "⚡ Quick Train (500x)"}
-                      </button>
+                        <button
+                          onClick={handleQuickTrain}
+                          disabled={isTraining || candles.length < 150}
+                          className={`py-2 px-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-all text-xs border ${isTraining 
+                            ? 'bg-slate-800 border-slate-700 text-slate-500 cursor-not-allowed' 
+                            : 'bg-emerald-600 border-emerald-500 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-900/20'}`}
+                        >
+                          {isTraining ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+                          {isTraining ? `${trainingProgress}%` : "Train"}
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
 
                 {/* Trading Configuration Panel */}
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 md:p-4 shadow-xl flex flex-col min-h-[200px]">
-                  <h3 className="text-xs sm:text-sm font-bold text-slate-300 mb-2 md:mb-3 flex items-center gap-2">
-                    <Settings className="w-4 h-4" />
-                    Trading Configuration
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-lg flex flex-col shrink-0">
+                  <h3 className="text-xs font-bold text-slate-400 mb-4 flex items-center gap-2">
+                    <Settings className="w-4 h-4 text-slate-400" />
+                    TRADING CONFIG
                   </h3>
 
-                  {/* Trading Mode Toggle */}
-                  <div className="mb-4">
-                    <label className="text-xs text-slate-400 mb-2 block">Trading Mode</label>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => setTradingMode('paper')}
-                        className={`flex-1 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${tradingMode === 'paper'
-                          ? 'bg-blue-500/20 text-blue-400 border-2 border-blue-500'
-                          : 'bg-slate-800 text-slate-400 border-2 border-slate-700 hover:border-slate-600'
-                          }`}
-                      >
-                        📄 Paper Trading
-                      </button>
-                      <button
-                        onClick={() => {
-                          if (balance < 1) {
-                            showNotification('⚠️ Insufficient balance for live trading. Deposit USDT/FDUSD to your Binance account.', 'warning');
-                            return;
-                          }
-                          if (window.confirm('⚠️ WARNING: You are about to enable LIVE TRADING mode.\n\nReal money will be used for trades.\n\nAre you sure?')) {
-                            setTradingMode('live');
-                            showNotification('🔴 Live Trading Mode Enabled - Real money will be used!', 'warning');
-                          }
-                        }}
-                        className={`flex-1 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${tradingMode === 'live'
-                          ? 'bg-rose-500/20 text-rose-400 border-2 border-rose-500'
-                          : 'bg-slate-800 text-slate-400 border-2 border-slate-700 hover:border-slate-600'
-                          }`}
-                      >
-                        🔴 Live Trading
-                      </button>
-                    </div>
-                    {tradingMode === 'live' && (
-                      <div className="mt-2 p-2 bg-rose-500/10 border border-rose-500/30 rounded text-[10px] text-rose-400">
-                        ⚠️ Live mode active - Real money will be used
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Leverage Configuration */}
-                  <div className="mb-4">
-                    <label className="text-xs text-slate-400 mb-2 block">
-                      Leverage: <span className="text-amber-400 font-bold">{leverage}x</span>
-                    </label>
-                    <input
-                      type="range"
-                      min="1"
-                      max="20"
-                      value={leverage}
-                      onChange={(e) => {
-                        const newLeverage = parseInt(e.target.value);
-                        setLeverage(newLeverage);
-                        if (newLeverage > 15) {
-                          showNotification(`⚠️ High leverage (${newLeverage}x) increases risk significantly!`, 'warning');
-                        }
-                      }}
-                      className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
-                    />
-                    <div className="flex justify-between text-[10px] text-slate-500 mt-1">
-                      <span>1x</span>
-                      <span>5x</span>
-                      <span>10x</span>
-                      <span>15x</span>
-                      <span>20x</span>
-                    </div>
-
-                    {/* Leverage Presets */}
-                    <div className="flex gap-1 mt-2">
-                      {[5, 10, 15, 20].map(preset => (
+                  <div className="space-y-5">
+                    {/* Trading Mode Toggle */}
+                    <div className="space-y-2">
+                      <div className="flex bg-slate-950 p-1 rounded-lg border border-slate-800">
                         <button
-                          key={preset}
-                          onClick={() => setLeverage(preset)}
-                          className={`flex-1 px-2 py-1 rounded text-[10px] font-semibold transition-all ${leverage === preset
-                            ? 'bg-amber-500/20 text-amber-400 border border-amber-500'
-                            : 'bg-slate-800 text-slate-400 border border-slate-700 hover:border-slate-600'
+                          onClick={() => setTradingMode('paper')}
+                          className={`flex-1 py-1.5 rounded-md text-[10px] font-bold transition-all flex items-center justify-center gap-1.5 ${tradingMode === 'paper'
+                            ? 'bg-slate-800 text-blue-400 shadow-sm'
+                            : 'text-slate-500 hover:text-slate-300'
                             }`}
                         >
-                          {preset}x
+                          <BookOpen className="w-3 h-3" /> PAPER
                         </button>
-                      ))}
+                        <button
+                          onClick={() => {
+                            if (balance < 1) {
+                              showNotification('⚠️ Insufficient balance.', 'warning');
+                              return;
+                            }
+                            if (window.confirm('Enable LIVE TRADING mode? Real funds will be used.')) {
+                              setTradingMode('live');
+                            }
+                          }}
+                          className={`flex-1 py-1.5 rounded-md text-[10px] font-bold transition-all flex items-center justify-center gap-1.5 ${tradingMode === 'live'
+                            ? 'bg-rose-900/30 text-rose-400 shadow-sm'
+                            : 'text-slate-500 hover:text-slate-300'
+                            }`}
+                        >
+                          <Zap className="w-3 h-3" /> LIVE
+                        </button>
+                      </div>
+                      {tradingMode === 'live' && (
+                        <div className="text-[10px] text-center text-rose-400 bg-rose-500/5 py-1 rounded border border-rose-500/10">
+                           Real funds active
+                        </div>
+                      )}
                     </div>
 
-                    {leverage > 15 && (
-                      <div className="mt-2 p-2 bg-amber-500/10 border border-amber-500/30 rounded text-[10px] text-amber-400">
-                        ⚠️ High leverage = High risk. You can lose your entire balance quickly.
+                    {/* Leverage Configuration */}
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center">
+                        <label className="text-[10px] font-bold text-slate-500 uppercase">Leverage</label>
+                        <span className="text-xs font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">{leverage}x</span>
                       </div>
-                    )}
-                  </div>
+                      
+                      <div className="relative h-6 flex items-center">
+                        <div className="absolute w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                           <div className="h-full bg-amber-500/50" style={{ width: `${(leverage / 20) * 100}%` }}></div>
+                        </div>
+                        <input
+                          type="range" min="1" max="20" value={leverage}
+                          onChange={(e) => setLeverage(parseInt(e.target.value))}
+                          className="w-full h-6 opacity-0 cursor-pointer absolute z-10"
+                        />
+                        <div className="w-3 h-3 bg-amber-500 rounded-full shadow-lg absolute pointer-events-none transition-all" 
+                             style={{ left: `calc(${((leverage - 1) / 19) * 100}% - 6px)` }}></div>
+                      </div>
 
-                  {/* Info Display */}
-                  <div className="mt-auto pt-3 border-t border-slate-800">
-                    <div className="grid grid-cols-2 gap-2 text-[10px]">
-                      <div>
-                        <span className="text-slate-500">Mode:</span>
-                        <span className={`ml-1 font-semibold ${tradingMode === 'live' ? 'text-rose-400' : 'text-blue-400'}`}>
-                          {tradingMode === 'paper' ? 'Paper' : 'Live'}
-                        </span>
+                      <div className="flex justify-between gap-1">
+                        {[5, 10, 15, 20].map(preset => (
+                          <button
+                            key={preset}
+                            onClick={() => setLeverage(preset)}
+                            className={`flex-1 py-1 rounded text-[9px] font-bold transition-all border ${leverage === preset
+                              ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+                              : 'bg-slate-950 text-slate-500 border-slate-800 hover:border-slate-700'
+                              }`}
+                          >
+                            {preset}x
+                          </button>
+                        ))}
                       </div>
-                      <div>
-                        <span className="text-slate-500">Leverage:</span>
-                        <span className="ml-1 font-semibold text-amber-400">{leverage}x</span>
-                      </div>
-                      <div>
-                        <span className="text-slate-500">Balance:</span>
-                        <span className="ml-1 font-semibold text-emerald-400">${balance.toFixed(2)}</span>
-                      </div>
-                      <div>
-                        <span className="text-slate-500">Max Position:</span>
-                        <span className="ml-1 font-semibold text-emerald-400">${(balance * leverage * (riskPercent / 100)).toFixed(2)}</span>
+                    </div>
+
+                    {/* Info Display */}
+                    <div className="pt-3 border-t border-slate-800">
+                      <div className="grid grid-cols-2 gap-y-2 gap-x-4">
+                        <div className="flex justify-between items-center">
+                          <span className="text-[10px] text-slate-500">Balance</span>
+                          <span className="text-xs font-mono font-medium text-emerald-400">${balance.toFixed(0)} <span className="text-[9px] text-slate-600">.00</span></span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-[10px] text-slate-500">Max Size</span>
+                          <span className="text-xs font-mono font-medium text-slate-300">${(balance * leverage * (riskPercent / 100)).toFixed(0)}</span>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1593,7 +1578,7 @@ function App() {
               </div>
 
               {/* RIGHT COLUMN: Training & News */}
-              <div className={`lg:col-span-1 space-y-3 md:space-y-4 flex-col overflow-y-auto ${terminalTab === 'data' ? 'flex' : 'hidden lg:flex'}`}>
+              <div className={`lg:col-span-1 space-y-3 md:space-y-4 flex-col lg:overflow-y-auto ${terminalTab === 'data' ? 'flex' : 'hidden lg:flex'}`}>
                 {/* AI Learning History */}
                 <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 md:p-4 shadow-xl flex flex-col h-64 shrink-0">
                   <h2 className="text-slate-400 text-xs font-bold tracking-wider mb-4 flex items-center gap-2">

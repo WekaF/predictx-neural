@@ -31,6 +31,25 @@ export const aiBackendService = {
     },
 
     /**
+     * Get AI Prediction (Trend + Action)
+     */
+    async predictTrend(symbol: string, candles: any[]): Promise<any> {
+        try {
+            // Optimization: Only send last 60 candles (LSTM seq_length) + buffer
+            const payloadCandles = candles.slice(-100); 
+            
+            const response = await axios.post(`${API_URL}/predict`, {
+                symbol,
+                candles: payloadCandles
+            });
+            return response.data;
+        } catch (error: any) {
+            console.warn('[AI Backend] Prediction failed, falling back to local model:', error.message);
+            return null;
+        }
+    },
+
+    /**
      * Check Backend Health
      */
     async checkHealth(): Promise<boolean> {

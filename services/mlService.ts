@@ -1,9 +1,10 @@
-
 import { Candle, TechnicalIndicators, TradeSignal, TrainingData, NewsItem } from "../types";
 import { storageService } from "./storageService";
 import { calculateBollingerBands } from "../utils/technical";
 import { generateUUID } from "../utils/uuid";
 import { confidenceCalibrator, adaptiveHyperparameters, patternDiscovery } from "./metaLearning";
+import { aiBackendService } from "./apiService";
+
 // Gemini API removed - using pure self-learning RL agent
 // import { analyzeMarketWithAI } from "./geminiService";
 
@@ -444,6 +445,26 @@ export const analyzeMarket = async (
     let decision: 'BUY' | 'SELL' | 'HOLD' = 'HOLD';
     let confidence = qHold;
 
+    // --- 1.5 CALL PYTHON BACKEND (Tier 2 Inference) ---
+    // If enabled, this overrides or enhances local decision
+    // --------------------------------------------------
+    let backendAction = null;
+    let backendConfidence = 0;
+    
+    // Only call backend if not in rapid training loop (optimization)
+    if (!isTraining) {
+        try {
+            const backendRes = await aiBackendService.predictTrend(assetSymbol, candles);
+            if (backendRes && backendRes.agent_action) {
+                backendAction = backendRes.agent_action.action; // BUY, SELL, HOLD
+                backendConfidence = backendRes.agent_action.confidence; // 0-100
+                console.log(`[Python AI] ${backendAction} with ${backendConfidence}% confidence`);
+            }
+        } catch (e) {
+            console.warn("Backend inference skipped");
+        }
+    }
+
     // --- EPSILON GREEDY STRATEGY (Exploration) ---
     // If random number < epsilon, choose random action to learn
     if (Math.random() < brain.epsilon) {
@@ -489,6 +510,19 @@ export const analyzeMarket = async (
             confidence = qSell;
         }
         console.log(`[RL Agent] 🧠 Exploitation Mode (${strategy}): Q-values [BUY:${qBuy.toFixed(3)}, SELL:${qSell.toFixed(3)}, HOLD:${qHold.toFixed(3)}] → ${decision}`);
+    }
+
+    // --- MERGE STRATEGY: LOCAL + BACKEND ---
+    if (backendAction && backendAction !== 'HOLD' && backendConfidence > 50) {
+        // If Backend is confident, override Local
+        decision = backendAction as 'BUY' | 'SELL';
+        confidence = backendConfidence;
+        console.log(`[AI Merge] 🤝 Adopting Python Backend Signal: ${decision} (${confidence}%)`);
+    } else if (backendAction === 'HOLD' && backendConfidence > 80 && decision !== 'HOLD') {
+        // If Backend strongly says HOLD, override Local Buy/Sell (Veto power)
+        console.log(`[AI Merge] 🛑 Backend vetoed ${decision} (Backend Conf: ${backendConfidence}%)`);
+        decision = 'HOLD';
+        confidence = backendConfidence;
     }
 
     // --- GUARD RAILS (Heuristic Filters) ---

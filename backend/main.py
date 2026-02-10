@@ -17,6 +17,8 @@ app = FastAPI(title="PredictX AI Engine", version="1.0.0")
 origins = [
     "http://localhost:5173", # React Frontend
     "http://localhost:3000",
+    "https://predictx-neural.vercel.app", # Production Vercel App
+    "*" # Allow all for flexibility during testing
 ]
 
 app.add_middleware(
@@ -67,8 +69,8 @@ def predict_trend(request: PredictionRequest):
     # 1. Get LSTM Prediction
     trend_prob = ai_engine.predict_next_move(request.candles)
     
-    # 2. Get Agent Decision (Tier 2 - Placeholder)
-    action, confidence = ai_engine.decide_action({})
+    # 2. Get Agent Decision (Tier 2 - Rule Based)
+    action, confidence = ai_engine.decide_action(trend_prob)
     
     return {
         "symbol": request.symbol,

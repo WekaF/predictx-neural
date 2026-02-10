@@ -61,7 +61,8 @@ class AIEngine:
         logging.info(f"Starting training session for {symbol} with {epochs} epochs")
         
         # 1. Fetch Data
-        raw_data = get_historical_data(symbol, period="2y", interval="1h")
+        # OPTIMIZATION: Reduced from 2y to 6mo for faster feedback loop
+        raw_data = get_historical_data(symbol, period="6mo", interval="1h")
         if "error" in raw_data:
             error_msg = raw_data["error"]
             logging.error(f"Data fetch error: {error_msg}")
@@ -198,12 +199,21 @@ class AIEngine:
             print(f"Prediction error: {e}")
             return 0.5
 
-    def decide_action(self, market_state: dict):
+    def decide_action(self, trend_prob: float):
         """
-        Tier 2: PPO Agent Decision
+        Tier 2: Rule-based Decision (Temporary until PPO is ready)
         Returns: 'BUY', 'SELL', 'HOLD' and confidence
         """
-        # Mock logic
-        return "HOLD", 0.0
+        # Confidence: The absolute probability (0.6 = 60%, 0.9 = 90%)
+        # Previously we used relative difference from 0.5, but that was too conservative.
+        confidence = max(trend_prob, 1 - trend_prob) * 100
+        
+        # Lower threshold to catch more moves (0.55 = 55% probability)
+        if trend_prob > 0.55:
+            return "BUY", round(confidence, 1)
+        elif trend_prob < 0.45:
+            return "SELL", round(confidence, 1)
+        else:
+            return "HOLD", round(confidence, 1)
 
 ai_engine = AIEngine()
