@@ -8,6 +8,16 @@ from services.db_service import db_service
 import os
 import logging
 import time
+from sklearn.preprocessing import StandardScaler
+import joblib
+
+# RL Integration
+try:
+    from stable_baselines3 import PPO
+    RL_AVAILABLE = True
+except ImportError:
+    RL_AVAILABLE = False
+    print("⚠️ stable-baselines3 not installed. RL features disabled.")
 
 # Configure Logging
 logging.basicConfig(
@@ -17,90 +27,133 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
+def add_indicators(df):
+    """
+    Feature Engineering: Adds RSI, EMA Trend Difference, and EMA 200
+    """
+    # RSI (Relative Strength Index)
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df['rsi'] = 100 - (100 / (1 + rs))
+    
+    # EMA (Exponential Moving Average) - Trend Divergence
+    df['ema_20'] = df['close'].ewm(span=20, adjust=False).mean()
+    df['ema_diff'] = (df['close'] - df['ema_20']) / df['ema_20'] # Percentage distance to trend
+    
+    # EMA 200 - Major Trend Filter (Tier 5)
+    df['ema_200'] = df['close'].ewm(span=200, adjust=False).mean()
+    
+    # ATR (Average True Range) - Volatility
+    high_low = df['high'] - df['low']
+    high_close = np.abs(df['high'] - df['close'].shift())
+    low_close = np.abs(df['low'] - df['close'].shift())
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = np.max(ranges, axis=1)
+    df['atr'] = true_range.rolling(14).mean()
+
+    # Fill NaN from rolling calculations
+    df.bfill(inplace=True)
+    df.fillna(0, inplace=True) # Safety net
+    return df
+
 class AIEngine:
     def __init__(self):
         self.models_loaded = False
-        print("Initializing AI Engine...")
-        logging.info("Initializing AI Engine...")
+        print("Initializing AI Engine (Tier 5 - The Trend Surfer)...")
+        logging.info("Initializing AI Engine (Tier 5 - The Trend Surfer)...")
         
-        self.input_size = 1 # Using 'Close' price only for now
-        self.seq_length = 60 # Lookback period
-        self.hidden_size = 64
-        self.num_layers = 2
+        # New Feature Set: Close, RSI, EMA_Diff
+        self.input_size = 3 
+        self.seq_length = 60
+        self.hidden_size = 128 
+        self.num_layers = 3    
+        
+        self.scaler = StandardScaler()
+        self.scaler_path = 'models/scaler_v2.pkl'
+        self.model_path = 'models/predictx_v2.pth'
+        
+        # RL Agent (Tier 6)
+        self.rl_agent = None
+        self.rl_enabled = False
+        
+        # CNN Model (Tier 7)
+        self.cnn_model = None
+        self.cnn_enabled = False
         
         # Initialize LSTM Model
         try:
-            self.lstm_model = LSTMModel(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers)
-            
-            # Load weights if available
-            self.model_path = 'models/lstm_v1.pth'
-            if os.path.exists(self.model_path):
-                self.lstm_model.load_state_dict(torch.load(self.model_path))
-                self.lstm_model.eval()
-                self.models_loaded = True
-                print(f"LSTM Model Loaded from {self.model_path}")
-            else:
-                print("LSTM Model Initialized (Random Weights) - Waiting for training")
+            self.lstm_model = LSTMModel(input_size=self.input_size, 
+                                      hidden_size=self.hidden_size, 
+                                      num_layers=self.num_layers)
+            self.load_model()
+            self.load_rl_agent()
+            self.load_cnn_model()
                 
         except Exception as e:
             print(f"Failed to initialize LSTM: {e}")
             self.models_loaded = False
 
+    def load_model(self):
+        if os.path.exists(self.model_path):
+            try:
+                self.lstm_model.load_state_dict(torch.load(self.model_path))
+                self.lstm_model.eval()
+                
+                # Load Scaler if exists
+                if os.path.exists(self.scaler_path):
+                    self.scaler = joblib.load(self.scaler_path)
+                    
+                self.models_loaded = True
+                print(f"LSTM Model (Tier 5) Loaded from {self.model_path}")
+            except Exception as e:
+                print(f"Error loading model: {e}")
+        else:
+            print("LSTM Model Initialized (Random Weights) - Waiting for training")
+
     def prepare_data(self, data, seq_length):
         xs, ys = [], []
         for i in range(len(data) - seq_length):
             x = data[i:(i + seq_length)]
-            y = data[i + seq_length]
+            # Predict only Close price (index 0) for next step
+            y = data[i + seq_length, 0] 
             xs.append(x)
             ys.append(y)
         return np.array(xs), np.array(ys)
 
-    def train(self, symbol="BTC-USD", epochs=20):
+    def train(self, symbol="BTC-USD", epochs=50, interval="1h"):
         start_time = time.time()
-        print(f"Starting training for {symbol}...")
-        logging.info(f"Starting training session for {symbol} with {epochs} epochs")
+        print(f"Starting Tier 5 training for {symbol} ({interval})...")
+        logging.info(f"Starting Tier 5 training session for {symbol} ({interval}) with {epochs} epochs")
         
         # 1. Fetch Data
-        # OPTIMIZATION: Reduced from 2y to 6mo for faster feedback loop
-        raw_data = get_historical_data(symbol, period="6mo", interval="1h")
+        raw_data = get_historical_data(symbol, period="1y", interval=interval)
         if "error" in raw_data:
-            error_msg = raw_data["error"]
-            logging.error(f"Data fetch error: {error_msg}")
-            
-            # Log Failure to DB
-            db_service.log_training_session({
-                "symbol": symbol,
-                "epochs": epochs,
-                "status": "FAILED",
-                "error_message": error_msg,
-                "duration_seconds": 0
-            })
-            
-            return {"status": "error", "message": error_msg}
+            return {"status": "error", "message": raw_data["error"]}
             
         df = pd.DataFrame(raw_data["data"])
-        
         if df.empty:
              return {"status": "error", "message": "No data received"}
 
-        # 2. Preprocess
-        # Use simple MinMax Normalization on Close price
-        prices = df['close'].values.astype(float)
+        # 2. Feature Engineering
+        df = add_indicators(df)
         
-        self.min_val = np.min(prices)
-        self.max_val = np.max(prices) 
+        # Select features: Close, RSI, EMA_Diff
+        features = df[['close', 'rsi', 'ema_diff']].values
         
-        # Avoid division by zero
-        if self.max_val == self.min_val:
-             return {"status": "error", "message": "Flat data, cannot normalize"}
-             
-        normalized_data = (prices - self.min_val) / (self.max_val - self.min_val)
+        # 3. Scaling (Fit only on training data)
+        # For simplicity in this pipeline, we fit on the whole fetched dataset 
+        # (assuming it's a batch update)
+        scaled_data = self.scaler.fit_transform(features)
         
-        # Create sequences
-        X, y = self.prepare_data(normalized_data, self.seq_length)
+        # Save scaler for inference
+        if not os.path.exists('models'):
+            os.makedirs('models')
+        joblib.dump(self.scaler, self.scaler_path)
         
-        # Reshape X for LSTM [samples, seq_len, features]
-        X = X.reshape((X.shape[0], X.shape[1], 1))
+        # 4. Prepare Sequences
+        X, y = self.prepare_data(scaled_data, self.seq_length)
         
         # Split train/test
         train_size = int(len(X) * 0.8)
@@ -108,37 +161,34 @@ class AIEngine:
         y_train, y_test = y[:train_size], y[train_size:]
         
         train_dataset = TimeSeriesDataset(X_train, y_train)
-        train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+        train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
         
-        # 3. Train
+        # 5. Train
+        self.lstm_model.train()
         history = train_model(self.lstm_model, train_loader, num_epochs=epochs)
         
-        # 4. Save Model
-        if not os.path.exists('models'):
-            os.makedirs('models')
+        # 6. Save Model
         torch.save(self.lstm_model.state_dict(), self.model_path)
         self.models_loaded = True
         
         final_loss = history['loss'][-1] if history['loss'] else 0
-        end_time = time.time()
-        duration = end_time - start_time
+        duration = time.time() - start_time
         
         print(f"Training complete. Final Loss: {final_loss:.6f}")
-        logging.info(f"Training complete. Final Loss: {final_loss:.6f}")
         
-        # Log Success to DB
+        # Log to DB
         db_service.log_training_session({
             "symbol": symbol,
             "epochs": epochs,
             "final_loss": float(final_loss),
             "status": "SUCCESS",
             "duration_seconds": round(duration, 2),
-            "metadata": {"min_val": float(self.min_val), "max_val": float(self.max_val)}
+            "metadata": {"algorithm": "LSTM_Tier5_TrendSurfer"}
         })
         
         return {
             "status": "success", 
-            "message": "Model trained successfully", 
+            "message": "Tier 5 Model trained successfully", 
             "final_loss": final_loss,
             "epochs": epochs
         }
@@ -147,51 +197,62 @@ class AIEngine:
         """
         Returns probability of Uptrend next candle (0.0 - 1.0)
         """
-        if not self.models_loaded:
+        # Need enough data for lag features (EMA 200 needs 200 candles)
+        if not self.models_loaded or len(candles) < 205:
             return 0.5
             
         try:
-            # Extract close prices
-            if not candles: 
-                return 0.5
-                
-            closes = [c['close'] for c in candles]
-            
-            # We need at least seq_length candles
-            if len(closes) < self.seq_length:
-                return 0.5
-            
-            # Take last seq_length candles
-            input_seq = closes[-self.seq_length:]
-            last_close = input_seq[-1]
-            
-            # Normalize
-            if hasattr(self, 'min_val') and hasattr(self, 'max_val'):
-                 norm_input = (np.array(input_seq) - self.min_val) / (self.max_val - self.min_val)
-                 current_norm = norm_input[-1]
-            else:
-                # Fallback: self-normalize
-                local_min = np.min(input_seq)
-                local_max = np.max(input_seq)
-                if local_max == local_min: return 0.5
-                norm_input = (np.array(input_seq) - local_min) / (local_max - local_min)
-                current_norm = norm_input[-1]
+            df = pd.DataFrame(candles)
+            df = add_indicators(df)
 
-            # Reshape [seq_len, 1]
-            model_input = norm_input.reshape(self.seq_length, 1)
+            # Take last seq_length features
+            current_features = df[['close', 'rsi', 'ema_diff']].tail(self.seq_length).values
             
-            # Predict next normalized price
-            pred_norm = predict(self.lstm_model, model_input)
+            # Use saved scaler
+            scaled_input = self.scaler.transform(current_features)
+            last_close_norm = scaled_input[-1, 0]
             
-            # Convert to 'Up Probability'
-            # If pred > current, prob > 0.5
-            # We map the diff to a probability
-            diff = pred_norm - current_norm
+            # Predict
+            self.lstm_model.eval()
+            with torch.no_grad():
+                # [1, seq, feat]
+                input_tensor = torch.FloatTensor(scaled_input).unsqueeze(0) 
+                pred_norm = self.lstm_model(input_tensor).item()
             
-            # Sigmoid-like mapping for probability
-            # diff of 0 -> 0.5
-            # diff of +0.05 -> high confidence up
-            prob = 1 / (1 + np.exp(-diff * 50)) # Scaling factor 50 for sensitivity
+            # LOGIC: Scaled Difference Priority
+            diff = pred_norm - last_close_norm
+            
+            # Sigmoid with Sensitivity 15
+            prob = 1 / (1 + np.exp(-diff * 15)) 
+            
+            # --- TIER 5: TREND SURFER LOGIC ---
+            current_close = df['close'].iloc[-1]
+            ema_200 = df['ema_200'].iloc[-1]
+            current_rsi = df['rsi'].iloc[-1]
+            
+            # 1. Trend Filter (EMA 200)
+            # LONG ONLY if Price > EMA 200
+            if current_close > ema_200:
+                # Allow Bullish Prob. Suppress Bearish Prob.
+                if prob < 0.5:
+                    prob = 0.5 # Neutralize Bearish Signal (Don't short uptrend)
+                # Boost Bullish Confidence slightly if strong trend
+                prob *= 1.05 
+            
+            # SHORT ONLY if Price < EMA 200
+            elif current_close < ema_200:
+                # Allow Bearish Prob. Suppress Bullish Prob.
+                if prob > 0.5:
+                    prob = 0.5 # Neutralize Bullish Signal (Don't buy downtrend)
+                # Boost Bearish Confidence slightly
+                prob *= 0.95
+            
+            # 2. RSI Sanity Check (Relaxed)
+            # Prevent longing the absolute top (>80) or shorting absolute bottom (<20)
+            if current_rsi > 80: 
+                prob = min(prob, 0.5) # Kill buy signal
+            if current_rsi < 20: 
+                prob = max(prob, 0.5) # Kill sell signal
             
             return float(prob)
             
@@ -199,19 +260,146 @@ class AIEngine:
             print(f"Prediction error: {e}")
             return 0.5
 
-    def decide_action(self, trend_prob: float):
+    def load_rl_agent(self):
         """
-        Tier 2: Rule-based Decision (Temporary until PPO is ready)
-        Returns: 'BUY', 'SELL', 'HOLD' and confidence
+        Load trained PPO agent for Tier 6 hybrid decision-making
         """
-        # Confidence: The absolute probability (0.6 = 60%, 0.9 = 90%)
-        # Previously we used relative difference from 0.5, but that was too conservative.
-        confidence = max(trend_prob, 1 - trend_prob) * 100
+        if not RL_AVAILABLE:
+            print("⚠️ RL agent not available (stable-baselines3 not installed)")
+            return
+            
+        rl_model_path = "models/ppo_agent.zip"
+        if os.path.exists(rl_model_path):
+            try:
+                self.rl_agent = PPO.load(rl_model_path)
+                self.rl_enabled = True
+                print(f"✅ RL Agent (PPO) Loaded from {rl_model_path}")
+            except Exception as e:
+                print(f"⚠️ Failed to load RL agent: {e}")
+        else:
+            print(f"⚠️ RL model not found at {rl_model_path}. Run train_rl_agent.py first.")
+    
+    def get_rl_recommendation(self, state_vector):
+        """
+        Get action recommendation from RL agent
+        Returns: (action_name, leverage, confidence)
+        """
+        if not self.rl_enabled or self.rl_agent is None:
+            return None
+            
+        try:
+            action, _states = self.rl_agent.predict(state_vector, deterministic=True)
+            
+            # Map action to trading decision
+            action_map = {
+                0: ("HOLD", 1, 50),
+                1: ("BUY", 1, 70),
+                2: ("BUY", 3, 85),
+                3: ("BUY", 5, 95),
+                4: ("SELL", 1, 80)
+            }
+            
+            return action_map.get(action, ("HOLD", 1, 50))
+        except Exception as e:
+            print(f"RL prediction error: {e}")
+            return None
+    
+    def load_cnn_model(self):
+        """
+        Load trained CNN model for Tier 7 ensemble
+        """
+        from services.cnn_service import CNNPatternModel
         
-        # Lower threshold to catch more moves (0.55 = 55% probability)
-        if trend_prob > 0.55:
+        cnn_model_path = "models/cnn_pattern_v1.pth"
+        if os.path.exists(cnn_model_path):
+            try:
+                self.cnn_model = CNNPatternModel(sequence_length=20, input_features=4)
+                self.cnn_model.load_state_dict(torch.load(cnn_model_path))
+                self.cnn_model.eval()
+                self.cnn_enabled = True
+                print(f"✅ CNN Pattern Model Loaded from {cnn_model_path}")
+            except Exception as e:
+                print(f"⚠️ Failed to load CNN model: {e}")
+        else:
+            print(f"⚠️ CNN model not found at {cnn_model_path}. Run train_cnn.py first.")
+    
+    def get_cnn_prediction(self, candles):
+        """
+        Get pattern prediction from CNN model
+        Returns: probability (0-1, where >0.5 = bullish pattern)
+        """
+        if not self.cnn_enabled or self.cnn_model is None:
+            return None
+        
+        try:
+            from services.chart_generator import prepare_cnn_input
+            
+            # Prepare 20-candle window
+            window = prepare_cnn_input(candles, window_size=20)
+            if window is None:
+                return None
+            
+            # Get CNN prediction
+            from services.cnn_service import predict_pattern
+            prob = predict_pattern(self.cnn_model, window)
+            return prob
+            
+        except Exception as e:
+            print(f"CNN prediction error: {e}")
+            return None
+
+    def decide_action(self, trend_prob: float, state_vector=None, candles=None):
+        """
+        Tier 7: CNN-LSTM Ensemble
+        - LSTM provides trend analysis
+        - CNN provides pattern recognition
+        - Ensemble fusion with weighted voting
+        """
+        # Tier 7: CNN-LSTM Ensemble
+        if self.cnn_enabled and candles is not None:
+            cnn_prob = self.get_cnn_prediction(candles)
+            
+            if cnn_prob is not None:
+                # Tier 7: High Confidence Ensemble (Refined)
+                # Weighted ensemble: LSTM (60%) + CNN (40%)
+                ensemble_prob = (trend_prob * 0.6) + (cnn_prob * 0.4)
+                
+                # Calculate confidence
+                confidence = abs(ensemble_prob - 0.5) * 2 * 100
+                
+                # Filter: High confidence (>65%) and trend alignment
+                # trend_prob > 0.55 means LSTM is bullish
+                # trend_prob < 0.45 means LSTM is bearish
+                
+                if confidence > 58: 
+                    if ensemble_prob > 0.58 and trend_prob > 0.51:
+                        return "BUY", round(confidence, 1)
+                    elif ensemble_prob < 0.42 and trend_prob < 0.49:
+                        return "SELL", round(confidence, 1)
+                
+                return "HOLD", round(confidence, 1)
+        
+        # Tier 6: RL + LSTM (if RL enabled)
+        if self.rl_enabled and state_vector is not None:
+            rl_decision = self.get_rl_recommendation(state_vector)
+            if rl_decision:
+                action, leverage, confidence = rl_decision
+                # Filter by LSTM trend
+                if action == "BUY" and trend_prob < 0.45:
+                    return "HOLD", 50  # LSTM says bearish, override RL
+                elif action == "SELL" and trend_prob > 0.55:
+                    return "HOLD", 50  # LSTM says bullish, override RL
+                return f"{action}_{leverage}x", confidence
+        
+        # Fallback to Tier 5 logic (LSTM only)
+        buy_threshold = 0.55
+        sell_threshold = 0.45
+        
+        confidence = abs(trend_prob - 0.5) * 2 * 100
+        
+        if trend_prob > buy_threshold:
             return "BUY", round(confidence, 1)
-        elif trend_prob < 0.45:
+        elif trend_prob < sell_threshold:
             return "SELL", round(confidence, 1)
         else:
             return "HOLD", round(confidence, 1)

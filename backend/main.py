@@ -55,6 +55,7 @@ def market_data(symbol: str, period: str = "1mo", interval: str = "1h"):
 
 # --- Tier 1: AI Prediction ---
 from ai_engine import ai_engine
+from services.trading_service import trading_service
 from pydantic import BaseModel
 
 class PredictionRequest(BaseModel):
@@ -64,13 +65,25 @@ class PredictionRequest(BaseModel):
 @app.post("/api/predict")
 def predict_trend(request: PredictionRequest):
     """
-    Get AI prediction for the next candle trend.
+    Get AI prediction and Execution Recommendation (Tier 7).
     """
+    if not request.candles:
+        raise HTTPException(status_code=400, detail="No candles provided")
+
     # 1. Get LSTM Prediction
     trend_prob = ai_engine.predict_next_move(request.candles)
     
-    # 2. Get Agent Decision (Tier 2 - Rule Based)
-    action, confidence = ai_engine.decide_action(trend_prob)
+    # 2. Get Agent Decision (Tier 7 - Ensemble CNN-LSTM)
+    action, confidence = ai_engine.decide_action(trend_prob, candles=request.candles)
+    
+    # 3. Get Execution/Position Recommendation
+    current_price = request.candles[-1]['close']
+    execution = trading_service.calculate_execution(
+        request.symbol, 
+        action, 
+        confidence, 
+        current_price
+    )
     
     return {
         "symbol": request.symbol,
@@ -81,7 +94,8 @@ def predict_trend(request: PredictionRequest):
         "agent_action": {
             "action": action,
             "confidence": confidence
-        }
+        },
+        "execution": execution
     }
 
 

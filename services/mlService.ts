@@ -450,6 +450,7 @@ export const analyzeMarket = async (
     // --------------------------------------------------
     let backendAction = null;
     let backendConfidence = 0;
+    let backendExecution = null;
     
     // Only call backend if not in rapid training loop (optimization)
     if (!isTraining) {
@@ -458,6 +459,7 @@ export const analyzeMarket = async (
             if (backendRes && backendRes.agent_action) {
                 backendAction = backendRes.agent_action.action; // BUY, SELL, HOLD
                 backendConfidence = backendRes.agent_action.confidence; // 0-100
+                backendExecution = backendRes.execution;
                 console.log(`[Python AI] ${backendAction} with ${backendConfidence}% confidence`);
             }
         } catch (e) {
@@ -513,7 +515,7 @@ export const analyzeMarket = async (
     }
 
     // --- MERGE STRATEGY: LOCAL + BACKEND ---
-    if (backendAction && backendAction !== 'HOLD' && backendConfidence > 50) {
+    if (backendAction && backendAction !== 'HOLD' && backendConfidence > 60) {
         // If Backend is confident, override Local
         decision = backendAction as 'BUY' | 'SELL';
         confidence = backendConfidence;
@@ -638,7 +640,8 @@ export const analyzeMarket = async (
             entryPrice: 0, stopLoss: 0, takeProfit: 0,
             confidence: Math.round(enhancedConfidence),
             reasoning: `AI Strategy (${strategy}): Wait. ${generateReasoning()}`,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            execution: backendExecution
         };
     }
 
@@ -676,7 +679,8 @@ export const analyzeMarket = async (
         patternDetected: `RL-DQN: ${currentPattern}`,
         confluenceFactors: [`Strategy: ${strategy}`, `Enhanced Confidence: ${enhancedConfidence.toFixed(0)}%`, `Trend: ${indicators.trend}`, `RSI: ${indicators.rsi.toFixed(0)}`],
         riskRewardRatio: rr,
-        outcome: 'PENDING'
+        outcome: 'PENDING',
+        execution: backendExecution
     };
 };
 

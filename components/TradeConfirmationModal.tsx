@@ -66,6 +66,34 @@ const TradeConfirmationModal: React.FC<TradeConfirmationModalProps> = ({ signal,
             "{signal.reasoning}"
           </div>
 
+          {/* Tier 7: Execution Plan Display */}
+          {signal.execution && (
+            <div className="pt-2 border-t border-slate-800">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="w-1 h-4 bg-amber-500 rounded-full"></div>
+                <h3 className="text-xs font-bold text-amber-500 uppercase tracking-wider">Tier 7 Execution Plan</h3>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-slate-800/80 p-3 rounded-xl border border-slate-700/50">
+                  <span className="text-[10px] text-slate-500 uppercase block mb-1">Leverage</span>
+                  <span className="text-amber-400 font-bold">{signal.execution.leverage}x</span>
+                </div>
+                <div className="bg-slate-800/80 p-3 rounded-xl border border-slate-700/50">
+                  <span className="text-[10px] text-slate-500 uppercase block mb-1">Margin (IDR)</span>
+                  <span className="text-white font-bold">Rp {signal.execution.margin_idr.toLocaleString()}</span>
+                </div>
+                <div className="bg-slate-800/80 p-3 rounded-xl border border-slate-700/50 col-span-2">
+                  <span className="text-[10px] text-slate-500 uppercase block mb-1">Total Size (IDR)</span>
+                  <span className="text-blue-400 font-bold">Rp {signal.execution.size_idr.toLocaleString()}</span>
+                </div>
+              </div>
+              <div className="mt-3 text-[10px] text-slate-500 flex justify-between px-1">
+                <span>TP: {signal.execution.tp}</span>
+                <span>SL: {signal.execution.sl}</span>
+              </div>
+            </div>
+          )}
+
         </div>
 
         {/* Actions */}

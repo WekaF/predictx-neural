@@ -208,6 +208,7 @@ ALTER TABLE app_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE activity_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ai_performance ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE training_sessions ENABLE ROW LEVEL SECURITY;
 
 -- =====================================================
 -- POLICIES (Public access for demo - restrict in production!)
@@ -235,6 +236,9 @@ CREATE POLICY "Enable read/write for all users" ON ai_performance FOR ALL USING 
 
 -- User Sessions Policies
 CREATE POLICY "Enable read/write for all users" ON user_sessions FOR ALL USING (true);
+
+-- Training Sessions Policies
+CREATE POLICY "Enable read/write for all users" ON training_sessions FOR ALL USING (true);
 
 -- =====================================================
 -- TRIGGERS & FUNCTIONS

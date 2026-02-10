@@ -31,6 +31,16 @@ export interface TradeSignal {
   riskRewardRatio?: number;
   outcome?: 'WIN' | 'LOSS' | 'PENDING';
   newsSentiment?: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+  execution?: {
+    status: string;
+    side: string;
+    leverage: number;
+    margin_idr: number;
+    size_idr: number;
+    tp: number;
+    sl: number;
+    execution_status: string;
+  };
 }
 
 export interface TechnicalIndicators {

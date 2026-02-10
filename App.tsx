@@ -108,6 +108,7 @@ function App() {
   // Mass Training State
   const [isTraining, setIsTraining] = useState(false);
   const [trainingProgress, setTrainingProgress] = useState(0);
+  const [lastAnalysis, setLastAnalysis] = useState<TradeSignal | null>(null);
 
   // Load Persistence
   useEffect(() => {
@@ -619,6 +620,7 @@ function App() {
 
     // Uses the new Combined (Hybrid) ML service
     const signal = await analyzeMarket(candles, indicators, trainingHistory, marketNews.slice(0, 5));
+    if (signal) setLastAnalysis(signal);
 
     setIsAnalyzing(false);
 
@@ -1265,6 +1267,8 @@ function App() {
                 riskPercent={riskPercent}
                 setRiskPercent={setRiskPercent}
                 onManualTrade={() => setShowManualModal(true)}
+                onAnalyze={handleAnalyze}
+                isAnalyzing={isAnalyzing}
               />
             </div>
           )}
@@ -1472,6 +1476,87 @@ function App() {
                           {isTraining ? `${trainingProgress}%` : "Train"}
                         </button>
                       </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Tier 7: AI Engine Status */}
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-lg flex flex-col shrink-0 overflow-hidden relative group">
+                  <div className="absolute top-0 right-0 w-24 h-24 bg-amber-500/5 rounded-full blur-2xl group-hover:bg-amber-500/10 transition-all"></div>
+                  
+                  <div className="flex justify-between items-center mb-4 relative z-10">
+                    <h3 className="text-xs font-bold text-amber-500 flex items-center gap-2 tracking-wider">
+                      <Zap className="w-4 h-4" /> TIER 7 ENGINE
+                    </h3>
+                    {lastAnalysis && (
+                      <span className="text-[10px] text-slate-500 font-mono">
+                        {new Date(lastAnalysis.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    )}
+                  </div>
+
+                  {lastAnalysis ? (
+                    <div className="space-y-4 relative z-10">
+                      {/* Visual Probability Split */}
+                      <div className="space-y-1.5">
+                         <div className="flex justify-between text-[10px] font-bold uppercase tracking-tight">
+                            <span className="text-blue-400">CNN (Visual)</span>
+                            <span className="text-purple-400">LSTM (Trend)</span>
+                         </div>
+                         <div className="h-2 w-full bg-slate-800 rounded-full overflow-hidden flex">
+                            {/* CNN Weight */}
+                            <div 
+                              className={`h-full transition-all duration-700 ${lastAnalysis.type === 'BUY' ? 'bg-blue-500' : lastAnalysis.type === 'SELL' ? 'bg-rose-500' : 'bg-slate-600'}`} 
+                              style={{ width: lastAnalysis.type === 'HOLD' ? '50%' : '40%' }}
+                            ></div>
+                            {/* LSTM Weight */}
+                            <div 
+                              className={`h-full transition-all duration-700 opacity-80 ${lastAnalysis.type === 'BUY' ? 'bg-emerald-500' : lastAnalysis.type === 'SELL' ? 'bg-rose-600' : 'bg-slate-700'}`} 
+                              style={{ width: lastAnalysis.type === 'HOLD' ? '50%' : '60%' }}
+                            ></div>
+                         </div>
+                      </div>
+
+                      <div className="flex items-center justify-between">
+                         <div className="flex flex-col">
+                            <span className="text-[10px] text-slate-500 font-bold uppercase">Decision</span>
+                            <span className={`text-lg font-black ${lastAnalysis.type === 'BUY' ? 'text-emerald-400' : lastAnalysis.type === 'SELL' ? 'text-rose-400' : 'text-slate-400'}`}>
+                              {lastAnalysis.type}
+                            </span>
+                         </div>
+                         <div className="flex flex-col items-end">
+                            <span className="text-[10px] text-slate-500 font-bold uppercase">Confidence</span>
+                            <span className="text-xl font-mono font-black text-white">{lastAnalysis.confidence}%</span>
+                         </div>
+                      </div>
+
+                      {/* Execution Preview (Only if not HOLD) */}
+                      {lastAnalysis.type !== 'HOLD' && lastAnalysis.execution && (
+                        <div className="bg-slate-950/80 rounded-lg p-3 border border-slate-800/50 space-y-2">
+                           <div className="flex justify-between items-center">
+                              <span className="text-[10px] text-slate-500">Margin</span>
+                              <span className="text-xs font-bold text-white">Rp {lastAnalysis.execution.margin_idr.toLocaleString()}</span>
+                           </div>
+                           <div className="flex justify-between items-center">
+                              <span className="text-[10px] text-slate-500">Leverage</span>
+                              <span className="text-xs font-bold text-amber-500">{lastAnalysis.execution.leverage}x</span>
+                           </div>
+                           <div className="h-px bg-slate-800 mt-1"></div>
+                           <div className="flex justify-between items-center text-[10px]">
+                              <span className="text-slate-500 uppercase font-bold">Risk Reward</span>
+                              <span className="text-emerald-400 font-bold">1 : {lastAnalysis.riskRewardRatio}</span>
+                           </div>
+                        </div>
+                      )}
+
+                      <p className="text-[10px] text-slate-400 italic bg-slate-800/30 p-2 rounded leading-relaxed border-l-2 border-emerald-500/30">
+                        {lastAnalysis.reasoning}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="py-8 flex flex-col items-center justify-center text-slate-600 space-y-2 italic">
+                       <Radio className="w-8 h-8 opacity-20 animate-pulse" />
+                       <span className="text-[10px]">Awaiting engine scan...</span>
                     </div>
                   )}
                 </div>

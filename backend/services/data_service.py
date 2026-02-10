@@ -3,7 +3,7 @@ import pandas as pd
 from datetime import datetime
 import time
 
-def get_historical_data(symbol: str, period: str = "1mo", interval: str = "1h") -> dict:
+def get_historical_data(symbol: str, period: str = "1mo", interval: str = "1h", limit: int = 1000) -> dict:
     """
     Fetch historical market data from Binance using CCXT.
     
@@ -11,6 +11,7 @@ def get_historical_data(symbol: str, period: str = "1mo", interval: str = "1h") 
         symbol (str): Ticker symbol (e.g., "BTC-USD", "BTC/USDT")
         period (str): Ignored in CCXT (calculated from limit/since), kept for API compatibility.
         interval (str): Data interval (default: "1h")
+        limit (int): Number of candles to fetch (default: 1000)
         
     Returns:
         dict: Processed data including candles and metadata
@@ -41,12 +42,12 @@ def get_historical_data(symbol: str, period: str = "1mo", interval: str = "1h") 
 
         # Map 'period' to limit/since if needed, but for now we'll fetch a fixed amount suitable for training
         # If period is "1mo", 1h candles = 24 * 30 = 720 candles.
-        # Let's fetch 1000 candles to be safe and robust.
-        limit = 1000
+        # Binance call limit is 1000.
+        fetch_limit = min(limit, 1000)
         
         # Fetch OHLCV
         # timestamp, open, high, low, close, volume
-        ohlcv = exchange.fetch_ohlcv(symbol, timeframe=interval, limit=limit)
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe=interval, limit=fetch_limit)
         
         if not ohlcv:
              return {"error": f"No data found for symbol {symbol}"}

@@ -8,6 +8,8 @@ interface HeaderControlsProps {
     riskPercent: number;
     setRiskPercent: (val: number) => void;
     onManualTrade: () => void;
+    onAnalyze: () => void;
+    isAnalyzing?: boolean;
 }
 
 export const HeaderControls: React.FC<HeaderControlsProps> = ({
@@ -16,12 +18,29 @@ export const HeaderControls: React.FC<HeaderControlsProps> = ({
     balance,
     riskPercent,
     setRiskPercent,
-    onManualTrade
+    onManualTrade,
+    onAnalyze,
+    isAnalyzing = false
 }) => {
     return (
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 bg-slate-900/50 border border-slate-800 p-2 rounded-xl backdrop-blur-sm shadow-sm">
             
-            {/* Auto-Trade Toggle */}
+            {/* AI Analyze Button */}
+            <button 
+                onClick={onAnalyze}
+                disabled={isAnalyzing}
+                className={`flex items-center justify-center gap-2 px-4 py-1.5 rounded-lg border transition-all active:scale-95 ${isAnalyzing ? 'bg-slate-800 border-slate-700 text-slate-500' : 'bg-blue-600/10 border-blue-500/30 text-blue-400 hover:bg-blue-600/20 hover:border-blue-500/50'}`}
+            >
+                {isAnalyzing ? (
+                    <div className="w-3.5 h-3.5 border-2 border-blue-400/30 border-t-blue-400 rounded-full animate-spin"></div>
+                ) : (
+                    <Activity className="w-4 h-4" />
+                )}
+                <span className="text-xs font-bold uppercase tracking-wider">{isAnalyzing ? 'Analyzing...' : 'Analyze Market'}</span>
+            </button>
+
+            <div className="h-8 w-px bg-slate-800 hidden sm:block"></div>
+
             <div className="flex items-center justify-between sm:justify-start px-3 py-1 bg-slate-800/50 rounded-lg border border-slate-700/50">
                 <div className="flex flex-col mr-3">
                     <span className="text-[10px] text-slate-400 font-bold tracking-wider">AUTO-TRADE</span>
