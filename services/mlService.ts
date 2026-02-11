@@ -269,10 +269,10 @@ class DeepQNetwork {
         // Update PNL
         memory.totalPnl += pnl;
         const totalTrades = memory.winCount + memory.lossCount;
-        memory.avgPnl = memory.totalPnl / totalTrades;
+        memory.avgPnl = totalTrades > 0 ? memory.totalPnl / totalTrades : 0;
 
-        // Calculate confidence from win rate
-        memory.confidence = (memory.winCount / totalTrades) * 100;
+        // Calculate confidence from win rate (safeguard against division by zero)
+        memory.confidence = totalTrades > 0 ? (memory.winCount / totalTrades) * 100 : 50;
         memory.lastSeen = Date.now();
 
         this.patternMemory.set(pattern, memory);
@@ -321,6 +321,11 @@ class DeepQNetwork {
 
         let qConfidence = ((qValues[action] - minQ) / (maxQ - minQ + 0.01)) * 100;
 
+        // Safeguard against NaN
+        if (isNaN(qConfidence) || !isFinite(qConfidence)) {
+            qConfidence = 50; // Default to 50% if calculation fails
+        }
+
         // Penalize if Q-values are too close (ambiguous signal)
         if (qSeparation < MIN_Q_SEPARATION) {
             const separationPenalty = (1 - (qSeparation / MIN_Q_SEPARATION)) * 30; // Up to -30% penalty
@@ -336,12 +341,18 @@ class DeepQNetwork {
         const experienceConfidence = Math.min(this.totalTrainingIterations / 100, 1) * 100;
 
         // 4. Weighted average (adjusted to include pattern quality)
-        const confidence = (
+        let confidence = (
             qConfidence * 0.35 +                    // Q-value strength
             patternConfidence * 0.30 +             // Pattern win rate
             patternQuality * 0.20 +                // Pattern quality/consistency
             experienceConfidence * 0.15             // Overall experience
         );
+
+        // Final safeguard: Ensure result is a valid number
+        if (isNaN(confidence) || !isFinite(confidence)) {
+            console.warn('[Enhanced Confidence] ⚠️ Calculation resulted in NaN, defaulting to 50%');
+            confidence = 50;
+        }
 
         return Math.min(Math.max(confidence, 0), 100);
     }

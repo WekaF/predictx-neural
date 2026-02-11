@@ -1474,7 +1474,9 @@ function App() {
                         </span>
                         <div className="flex flex-col items-end">
                           <span className="text-slate-500 text-[10px] font-bold uppercase">Confidence</span>
-                          <span className="text-white font-mono text-lg font-bold">{activeSignal.confidence}%</span>
+                          <span className="text-white font-mono text-lg font-bold">
+                            {isNaN(activeSignal.confidence) || !isFinite(activeSignal.confidence) ? 'N/A' : `${Math.round(activeSignal.confidence)}%`}
+                          </span>
                         </div>
                       </div>
 
@@ -1596,7 +1598,9 @@ function App() {
                          </div>
                          <div className="flex flex-col items-end">
                             <span className="text-[10px] text-slate-500 font-bold uppercase">Confidence</span>
-                            <span className="text-xl font-mono font-black text-white">{lastAnalysis.confidence}%</span>
+                            <span className="text-xl font-mono font-black text-white">
+                              {isNaN(lastAnalysis.confidence) || !isFinite(lastAnalysis.confidence) ? 'N/A' : `${Math.round(lastAnalysis.confidence)}%`}
+                            </span>
                          </div>
                       </div>
 

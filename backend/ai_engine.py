@@ -363,16 +363,16 @@ class AIEngine:
         - CNN: Pattern Recognition (Confirmation)
         - RL: Strategic Decision (Entry/Exit + Leverage)
         """
-        # 1. Base Score (LSTM)
-        ensemble_score = trend_prob
+        # 1. Base Score (LSTM) - Safeguard against None/NaN
+        ensemble_score = float(trend_prob) if trend_prob is not None else 0.5
 
         # 2. Add CNN Influence (if available)
         cnn_prob = None
         if self.cnn_enabled and candles is not None:
             cnn_prob = self.get_cnn_prediction(candles)
-            if cnn_prob is not None:
+            if cnn_prob is not None and not np.isnan(cnn_prob):
                 # Weighted Fusion: LSTM 60%, CNN 40%
-                ensemble_score = (trend_prob * 0.6) + (cnn_prob * 0.4)
+                ensemble_score = (ensemble_score * 0.6) + (float(cnn_prob) * 0.4)
 
         # 3. Get RL Recommendation (if available)
         rl_action = "HOLD"
@@ -386,7 +386,11 @@ class AIEngine:
 
         # --- TRINITY FUSION LOGIC ---
 
-        confidence = abs(ensemble_score - 0.5) * 2 * 100
+        # Safeguard: Ensure ensemble_score is valid before calculating confidence
+        if ensemble_score is None or np.isnan(ensemble_score):
+            ensemble_score = 0.5
+        
+        confidence = abs(float(ensemble_score) - 0.5) * 2 * 100
 
         # CASE A: BUY SIGNAL
         if ensemble_score > 0.52: # Bullish Trend (Lowered from 0.55)
