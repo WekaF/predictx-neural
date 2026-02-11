@@ -487,8 +487,8 @@ export const analyzeMarket = async (
         // EXPLOITATION MODE (95% of the time) - Use learned patterns
 
         // Strategy Adjustment: Lowered to allow more frequent trading
-        // ENHANCED: Reduced from 70% to 55% based on user feedback
-        let ACTION_THRESHOLD = 0.55; // SCALP: Minimum 55% confidence
+        // ENHANCED: Reduced to 35% to allow UNTRAINED models to learn (Q-values start at 0.500)
+        let ACTION_THRESHOLD = 0.35; // SCALP: Minimum 35% confidence
 
         if (strategy === 'SWING') {
             ACTION_THRESHOLD = 0.60; // SWING: Minimum 60% confidence
@@ -504,7 +504,24 @@ export const analyzeMarket = async (
 
         console.log(`[RL Agent] 📊 Strategy: ${strategy} | Required Confidence Threshold: ${(ACTION_THRESHOLD * 100).toFixed(0)}%`);
 
-        if (qBuy > qSell && qBuy > qHold && qBuy > ACTION_THRESHOLD) {
+        // VIRGIN MODEL DETECTION: If all Q-values are identical, model is untrained
+        // Force random exploration to kickstart learning
+        const qValuesIdentical = (qBuy === qSell && qSell === qHold);
+        if (qValuesIdentical) {
+            console.log(`[RL Agent] 🆕 VIRGIN MODEL DETECTED: All Q-values identical (${qBuy.toFixed(3)}). Forcing random exploration to kickstart learning...`);
+            const rand = Math.random();
+            if (rand < 0.4) {
+                decision = 'BUY';
+                confidence = qBuy;
+            } else if (rand < 0.8) {
+                decision = 'SELL';
+                confidence = qSell;
+            } else {
+                decision = 'HOLD';
+                confidence = qHold;
+            }
+            console.log(`[RL Agent] 🎲 Random exploration chose: ${decision}`);
+        } else if (qBuy > qSell && qBuy > qHold && qBuy > ACTION_THRESHOLD) {
             decision = 'BUY';
             confidence = qBuy;
         } else if (qSell > qBuy && qSell > qHold && qSell > ACTION_THRESHOLD) {
@@ -527,37 +544,39 @@ export const analyzeMarket = async (
         confidence = backendConfidence;
     }
 
-    // --- GUARD RAILS (Heuristic Filters) ---
-    // 1. Trend Filter: Trade with the trend (Price vs SMA200)
+    // --- GUARD RAILS (Heuristic Filters) - RELAXED ---
+    // 1. Trend Filter: Warn about counter-trend but don't block
     const price = last.close;
     const isUptrend = price > indicators.sma200;
     const isDowntrend = price < indicators.sma200;
 
-    // 2. RSI Filter: Avoid buying top / selling bottom
-    const isRsiSafeBuy = indicators.rsi < 70; // Don't buy if overbought
-    const isRsiSafeSell = indicators.rsi > 30; // Don't sell if oversold
+    // 2. RSI Filter: Only block extreme overbought/oversold
+    const isRsiExtremeBuy = indicators.rsi > 80; // Only block if extremely overbought
+    const isRsiExtremeSell = indicators.rsi < 20; // Only block if extremely oversold
 
-    // Apply Guard Rails to AI Decision
-    // If AI wants to BUY but we are in Downtrend or RSI is Overbought -> Force HOLD
+    // Apply RELAXED Guard Rails
+    // Only block trades in EXTREME conditions
     if (decision === 'BUY') {
         if (!isUptrend) {
-            decision = 'HOLD';
-            confidence = 0; // Reset confidence
-            console.log(`[Guard Rail] 🛡️ Blocked BUY: Counter-trend (Price < SMA200)`);
-        } else if (!isRsiSafeBuy) {
+            // Just warn, don't block
+            console.log(`[Guard Rail] ⚠️ WARNING: BUY in downtrend (Price < SMA200) - Proceed with caution`);
+        }
+        if (isRsiExtremeBuy) {
+            // Block only if RSI > 80
             decision = 'HOLD';
             confidence = 0;
-            console.log(`[Guard Rail] 🛡️ Blocked BUY: RSI Overbought (${indicators.rsi.toFixed(0)})`);
+            console.log(`[Guard Rail] 🛡️ Blocked BUY: RSI Extremely Overbought (${indicators.rsi.toFixed(0)} > 80)`);
         }
     } else if (decision === 'SELL') {
         if (!isDowntrend) {
+            // Just warn, don't block
+            console.log(`[Guard Rail] ⚠️ WARNING: SELL in uptrend (Price > SMA200) - Proceed with caution`);
+        }
+        if (isRsiExtremeSell) {
+            // Block only if RSI < 20
             decision = 'HOLD';
             confidence = 0;
-            console.log(`[Guard Rail] 🛡️ Blocked SELL: Counter-trend (Price > SMA200)`);
-        } else if (!isRsiSafeSell) {
-            decision = 'HOLD';
-            confidence = 0;
-            console.log(`[Guard Rail] 🛡️ Blocked SELL: RSI Oversold (${indicators.rsi.toFixed(0)})`);
+            console.log(`[Guard Rail] 🛡️ Blocked SELL: RSI Extremely Oversold (${indicators.rsi.toFixed(0)} < 20)`);
         }
     }
 
@@ -567,7 +586,7 @@ export const analyzeMarket = async (
     const actionIndex = decision === 'BUY' ? 0 : decision === 'SELL' ? 1 : 2;
     const enhancedConfidence = brain.getEnhancedConfidence(state, actionIndex);
 
-    const MINIMUM_ENHANCED_CONFIDENCE = 55; // Require 55%+ (User Request)
+    const MINIMUM_ENHANCED_CONFIDENCE = 45; // Require 45%+ (Lowered to allow more entries)
 
     if (decision !== 'HOLD' && enhancedConfidence < MINIMUM_ENHANCED_CONFIDENCE) {
         console.log(`[Enhanced Confidence Filter] ❌ BLOCKED ${decision}: Enhanced confidence ${enhancedConfidence.toFixed(1)}% < ${MINIMUM_ENHANCED_CONFIDENCE}% threshold`);

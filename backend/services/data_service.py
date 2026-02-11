@@ -1,69 +1,92 @@
+
 import ccxt
 import pandas as pd
+import yfinance as yf
 from datetime import datetime
 import time
 
 def get_historical_data(symbol: str, period: str = "1mo", interval: str = "1h", limit: int = 1000) -> dict:
     """
-    Fetch historical market data from Binance using CCXT.
-    
-    Args:
-        symbol (str): Ticker symbol (e.g., "BTC-USD", "BTC/USDT")
-        period (str): Ignored in CCXT (calculated from limit/since), kept for API compatibility.
-        interval (str): Data interval (default: "1h")
-        limit (int): Number of candles to fetch (default: 1000)
-        
-    Returns:
-        dict: Processed data including candles and metadata
+    Fetch historical market data using YFinance (Primary) or CCXT (Fallback).
     """
-    print(f"Fetching data for {symbol} (Interval: {interval}) using CCXT/Binance...")
-
+    # 1. Try YFinance First (Better reliability for historical data)
     try:
-        # Initialize Binance Exchange
+        print(f"Fetching data for {symbol} using YFinance...")
+        
+        # Map symbol: BTC/USDT -> BTC-USD for YFinance
+        ticker = symbol.replace("/", "-").replace("USDT", "USD")
+        if "USD" not in ticker and "-" not in ticker:
+             ticker += "-USD"
+
+        # Fetch
+        data = yf.download(ticker, period=period, interval=interval, progress=False)
+        
+        if not data.empty:
+            # Handle MultiIndex columns (yfinance > 0.2 can return (Price, Ticker))
+            if isinstance(data.columns, pd.MultiIndex):
+                data.columns = data.columns.get_level_values(0)
+
+            # Reset index to get Date/Datetime as column
+            data.reset_index(inplace=True)
+            
+            # Normalize columns to lowercase
+            data.columns = [c.lower() for c in data.columns]
+            
+            # Rename common columns to standard
+            rename_map = {
+                "date": "time", "datetime": "time",
+                "adj close": "adj_close" 
+            }
+            data.rename(columns=rename_map, inplace=True)
+            
+            # Verify required columns exist
+            required = ['time', 'open', 'high', 'low', 'close', 'volume']
+            if all(col in data.columns for col in required):
+                # Select only required
+                df = data[required].copy()
+                df['time'] = df['time'].astype(str)
+                
+                print(f"✅ YFinance: Loaded {len(df)} candles for {ticker}")
+                return {
+                    "symbol": ticker,
+                    "count": len(df),
+                    "data": df.to_dict(orient="records")
+                }
+            else:
+                print(f"⚠️ YFinance missing columns: {data.columns.tolist()}")
+
+    except Exception as e:
+        print(f"⚠️ YFinance failed: {e}")
+
+    # 2. CCXT Fallback
+    print(f"⚠️ Switching to CCXT/Binance fallback for {symbol}...")
+    try:
         exchange = ccxt.binance()
         
-        # Normalize symbol: CCXT expects "BTC/USDT", Frontend might send "BTC-USD" or "BTCUSDT"
-        # 1. Replace first hyphen with slash if exists (BTC-USD -> BTC/USD)
-        if "-" in symbol:
-            symbol = symbol.replace("-", "/")
-        # 2. If no slash, assumes it might be raw (BTCUSDT), let CCXT try or manually fix if needed.
-        # But for "BTC-USD" from frontend, it usually means BTC/USDT in Binance terms.
-        if "USD" in symbol and "USDT" not in symbol:
-             symbol = symbol.replace("USD", "USDT")
+        # Normalize symbol for CCXT
+        ccxt_symbol = symbol
+        if "-" in ccxt_symbol:
+            ccxt_symbol = ccxt_symbol.replace("-", "/")
+        if "USD" in ccxt_symbol and "USDT" not in ccxt_symbol:
+             ccxt_symbol = ccxt_symbol.replace("USD", "USDT")
         
-        # Ensure it has a slash for CCXT
-        if "/" not in symbol and len(symbol) > 6: 
-             # Rough heuristic: insert slash before last 4 chars (USDT) or 3 chars (BTC)
-             # Better: just force standard map if known.
-             if symbol.endswith("USDT"):
-                 symbol = symbol[:-4] + "/USDT"
-        
-        print(f"Normalized symbol for Binance: {symbol}")
-
-        # Map 'period' to limit/since if needed, but for now we'll fetch a fixed amount suitable for training
-        # If period is "1mo", 1h candles = 24 * 30 = 720 candles.
-        # Binance call limit is 1000.
+        # Fetch
         fetch_limit = min(limit, 1000)
-        
-        # Fetch OHLCV
-        # timestamp, open, high, low, close, volume
-        ohlcv = exchange.fetch_ohlcv(symbol, timeframe=interval, limit=fetch_limit)
-        
-        if not ohlcv:
-             return {"error": f"No data found for symbol {symbol}"}
+        ohlcv = exchange.fetch_ohlcv(ccxt_symbol, timeframe=interval, limit=fetch_limit)
 
-        # Convert to DataFrame
+        if not ohlcv:
+             return {"error": f"No data found for {symbol} (CCXT)"}
+
         df = pd.DataFrame(ohlcv, columns=['time', 'open', 'high', 'low', 'close', 'volume'])
-        
-        # Process timestamps (ms to datetime string)
         df['time'] = pd.to_datetime(df['time'], unit='ms').astype(str)
         
+        print(f"✅ CCXT: Loaded {len(df)} candles for {ccxt_symbol}")
         return {
-            "symbol": symbol,
+            "symbol": ccxt_symbol,
             "count": len(df),
             "data": df.to_dict(orient="records")
         }
-        
+
     except Exception as e:
-        print(f"CCXT Error: {e}")
+        print(f"❌ All methods failed. CCXT Error: {e}")
         return {"error": str(e)}

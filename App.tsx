@@ -610,52 +610,116 @@ function App() {
 
   // Trigger Local ML Analysis
   const handleAnalyze = useCallback(async () => {
-    if (!indicators || candles.length === 0) return;
+    console.log('[handleAnalyze] 🔍 Analysis triggered', {
+      autoMode,
+      tradingMode,
+      hasIndicators: !!indicators,
+      candlesCount: candles.length,
+      hasPendingSignal: !!pendingSignal,
+      hasActiveSignal: !!activeSignal,
+      activeSignalOutcome: activeSignal?.outcome
+    });
+
+    if (!indicators || candles.length === 0) {
+      console.log('[handleAnalyze] ⚠️ Early return: No indicators or candles', {
+        hasIndicators: !!indicators,
+        candlesCount: candles.length
+      });
+      return;
+    }
 
     // Don't analyze if we already have an OPEN active position or a PENDING confirmation
-    if (pendingSignal) return;
-    if (activeSignal && activeSignal.outcome === 'PENDING') return;
+    if (pendingSignal) {
+      console.log('[handleAnalyze] ⚠️ Early return: Pending signal exists', pendingSignal);
+      return;
+    }
+    if (activeSignal && activeSignal.outcome === 'PENDING') {
+      console.log('[handleAnalyze] ⚠️ Early return: Active signal is PENDING', activeSignal);
+      return;
+    }
 
+    console.log('[handleAnalyze] ✅ Proceeding with analysis...');
     setIsAnalyzing(true);
 
     // Uses the new Combined (Hybrid) ML service
-    const signal = await analyzeMarket(candles, indicators, trainingHistory, marketNews.slice(0, 5));
+    const signal = await analyzeMarket(candles, indicators, trainingHistory, marketNews.slice(0, 5), selectedAsset.symbol);
+    console.log('[handleAnalyze] 📊 Signal generated:', signal);
+    
     if (signal) setLastAnalysis(signal);
 
     setIsAnalyzing(false);
 
     if (signal && signal.type !== 'HOLD') {
       const fullSignal = { ...signal, symbol: selectedAsset.symbol };
+      console.log('[handleAnalyze] 🎯 Valid signal detected:', {
+        type: signal.type,
+        symbol: selectedAsset.symbol,
+        confidence: signal.confidence,
+        entryPrice: signal.entryPrice,
+        willAutoExecute: autoMode || tradingMode === 'paper'
+      });
 
       if (autoMode || tradingMode === 'paper') {
         // --- AUTOMATIC EXECUTION (AUTO-SEND) ---
+        console.log('[handleAnalyze] 🚀 AUTO-EXECUTING trade');
         confirmTrade(fullSignal);
       } else {
         // --- MANUAL CONFIRMATION (LIVE MODE) ---
+        console.log('[handleAnalyze] ⏸️ Setting pending signal for manual confirmation');
         setPendingSignal(fullSignal);
       }
     } else if (signal && signal.type === 'HOLD') {
+      console.log('[handleAnalyze] 🛑 Signal type is HOLD - no trade');
       // Only show message if triggered manually
       if (!autoMode) {
         showNotification("Market conditions unclear. Neural Net advises HOLD.", "info");
       }
+    } else {
+      console.log('[handleAnalyze] ❌ No signal generated from analyzeMarket');
     }
   }, [candles, indicators, trainingHistory, marketNews, activeSignal, pendingSignal, autoMode, selectedAsset, tradingMode]);
+
+  // Store latest handleAnalyze in ref to prevent interval restart
+  const handleAnalyzeRef = useRef(handleAnalyze);
+  useEffect(() => {
+    handleAnalyzeRef.current = handleAnalyze;
+  }, [handleAnalyze]);
 
   // --- AUTOMATIC TRADING LOOP ---
   useEffect(() => {
     let interval: ReturnType<typeof setInterval>;
 
+    console.log('[Auto-Trading Loop] State check:', {
+      autoMode,
+      isAnalyzing,
+      hasActiveSignal: !!activeSignal,
+      activeSignalOutcome: activeSignal?.outcome,
+      willStartLoop: autoMode && !isAnalyzing && (!activeSignal || activeSignal.outcome !== 'PENDING')
+    });
+
     if (autoMode && !isAnalyzing) {
       if (!activeSignal || activeSignal.outcome !== 'PENDING') {
+        console.log('[Auto-Trading Loop] ✅ Starting auto-trading loop (every 4s)');
         interval = setInterval(() => {
-          handleAnalyze();
+          console.log('[Auto-Trading Loop] ⏰ Triggering handleAnalyze...');
+          handleAnalyzeRef.current(); // Use ref to avoid dependency issues
         }, 4000);
+      } else {
+        console.log('[Auto-Trading Loop] ⏸️ Not starting: Active signal is PENDING');
       }
+    } else {
+      console.log('[Auto-Trading Loop] ⏸️ Not starting:', {
+        reason: !autoMode ? 'Auto mode disabled' : 'Currently analyzing'
+      });
     }
 
-    return () => clearInterval(interval);
-  }, [autoMode, isAnalyzing, activeSignal, handleAnalyze]);
+    return () => {
+      if (interval) {
+        console.log('[Auto-Trading Loop] 🛑 Stopping auto-trading loop');
+        clearInterval(interval);
+      }
+    };
+  }, [autoMode, isAnalyzing, activeSignal]); // Removed handleAnalyze to prevent restart
 
   // --- QUICK TRAIN MODEL (500 Iterations) ---
   const handleQuickTrain = async () => {
@@ -756,7 +820,12 @@ function App() {
   // Execute Trade after Confirmation
   const confirmTrade = (signalOverride?: TradeSignal) => {
     const signal = signalOverride || pendingSignal;
-    if (!signal) return;
+    if (!signal) {
+      console.log('[confirmTrade] ❌ No signal to confirm');
+      return;
+    }
+
+    console.log('[confirmTrade] 🚀 Executing trade:', signal);
 
     // Execute the trade
     setActiveSignal({ ...signal, outcome: 'PENDING' });
@@ -818,6 +887,7 @@ function App() {
     });
 
     showNotification(`Trade executed: ${signal.type} ${signal.symbol} at $${signal.entryPrice.toFixed(2)}`, 'success');
+    console.log('[confirmTrade] ✅ Trade execution complete');
   };
 
   const rejectTrade = () => {

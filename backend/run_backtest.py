@@ -10,12 +10,15 @@ import csv
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from ai_engine import ai_engine
+from ai_engine import ai_engine, add_indicators
 from services.data_service import get_historical_data
 
 def run_backtest(engine, symbol="BTC-USD", period="3mo", interval="1h"):
     print(f"\n--- 🚀 Starting Tier 4 AI Backtest for {symbol} ---")
+    print(f"\n--- 🚀 Starting Tier 5 AI Backtest (Trend Surfer) for {symbol} ---")
     print(f"Period: {period} | Interval: {interval}")
     print(f"Strategy: The Quality Hunter (Strict Filters, High Confidence)")
+    print(f"Strategy: LSTM + EMA 200 Filter + ATR Trailing Stop")
     
     # 1. Fetch Historical Data
     raw_data = get_historical_data(symbol, period=period, interval=interval)
@@ -29,6 +32,10 @@ def run_backtest(engine, symbol="BTC-USD", period="3mo", interval="1h"):
         print("❌ No data received.")
         return
 
+    # --- FEATURE ENGINEERING (Calculate EMA 200 & ATR) ---
+    df = add_indicators(df)
+    # -----------------------------------------------------
+
     print(f"✅ Loaded {len(df)} candles.")
 
     initial_balance = 1000.0  # USD
@@ -40,10 +47,14 @@ def run_backtest(engine, symbol="BTC-USD", period="3mo", interval="1h"):
     fee_rate = 0.001
     
     entry_price = 0.0 # Track entry price
+    entry_price = 0.0
+    trailing_sl_price = 0.0  # Variable untuk Trailing Stop
     
     # 2. Iterate through time (Simulate bar-by-bar)
     # Start after seq_length to ensure enough data for prediction
     start_idx = engine.seq_length + 20 
+    # Start after 200 candles to ensure EMA 200 is valid
+    start_idx = max(engine.seq_length + 20, 205)
     
     print("⏳ Running simulation...")
     
@@ -202,11 +213,14 @@ def run_backtest(engine, symbol="BTC-USD", period="3mo", interval="1h"):
         print(f"Profit Factor    : {pf:.2f} (Est)")
         print(f"Avg. Win         : +6.0% (TP)")
         print(f"Avg. Loss        : -2.5% (SL)")
+        print(f"Avg. Win         : Dynamic (Trailing)")
+        print(f"Avg. Loss        : Dynamic (ATR)")
 
         if profit_pct > 0 and mdd_pct > -15:
             print("\n✅ Status: STRATEGY VALIDATED (Ready for Paper Trading)")
         else:
             print("\n⚠️ Status: NEEDS TUNING (High Drawdown or Negative Return)")
+            print("\n⚠️ Status: NEEDS TUNING (Check Trend Filters)")
     else:
         print("Win Rate         : N/A (No Trades)")
 
@@ -235,7 +249,7 @@ if __name__ == "__main__":
     # But we want to test the pipeline.
     
     # Optional: Trigger training first?
-    print("Auto-Training first to ensure model adapts to Tier 4 Logic...")
-    ai_engine.train(symbol="BTC-USD", epochs=5, interval="1h") 
+    # print("Auto-Training first to ensure model adapts to Tier 4 Logic...")
+    # ai_engine.train(symbol="BTC-USD", epochs=5, interval="1h") 
     
     run_backtest(ai_engine, symbol="BTC-USD", period="3mo", interval="1h")

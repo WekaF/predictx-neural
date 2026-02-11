@@ -1,3 +1,4 @@
+
 import torch
 import numpy as np
 import pandas as pd
@@ -29,22 +30,27 @@ logging.basicConfig(
 
 def add_indicators(df):
     """
-    Feature Engineering: Adds RSI, EMA Trend Difference, and EMA 200
+    Feature Engineering: Adds Log Returns (Stationary), RSI, EMA Trend Difference, and EMA 200
     """
+    # 1. Log Returns (The Target)
+    # Log Change = ln(Pt / Pt-1)
+    # This makes the data stationary, which is crucial for LSTM
+    df['log_return'] = np.log(df['close'] / df['close'].shift(1))
+
     # RSI (Relative Strength Index)
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
-    
+
     # EMA (Exponential Moving Average) - Trend Divergence
     df['ema_20'] = df['close'].ewm(span=20, adjust=False).mean()
     df['ema_diff'] = (df['close'] - df['ema_20']) / df['ema_20'] # Percentage distance to trend
-    
+
     # EMA 200 - Major Trend Filter (Tier 5)
     df['ema_200'] = df['close'].ewm(span=200, adjust=False).mean()
-    
+
     # ATR (Average True Range) - Volatility
     high_low = df['high'] - df['low']
     high_close = np.abs(df['high'] - df['close'].shift())
@@ -54,8 +60,7 @@ def add_indicators(df):
     df['atr'] = true_range.rolling(14).mean()
 
     # Fill NaN from rolling calculations
-    df.bfill(inplace=True)
-    df.fillna(0, inplace=True) # Safety net
+    df.fillna(0, inplace=True) 
     return df
 
 class AIEngine:
@@ -63,25 +68,25 @@ class AIEngine:
         self.models_loaded = False
         print("Initializing AI Engine (Tier 5 - The Trend Surfer)...")
         logging.info("Initializing AI Engine (Tier 5 - The Trend Surfer)...")
-        
+
         # New Feature Set: Close, RSI, EMA_Diff
         self.input_size = 3 
         self.seq_length = 60
         self.hidden_size = 128 
         self.num_layers = 3    
-        
+
         self.scaler = StandardScaler()
         self.scaler_path = 'models/scaler_v2.pkl'
         self.model_path = 'models/predictx_v2.pth'
-        
+
         # RL Agent (Tier 6)
         self.rl_agent = None
         self.rl_enabled = False
-        
+
         # CNN Model (Tier 7)
         self.cnn_model = None
         self.cnn_enabled = False
-        
+
         # Initialize LSTM Model
         try:
             self.lstm_model = LSTMModel(input_size=self.input_size, 
@@ -90,7 +95,7 @@ class AIEngine:
             self.load_model()
             self.load_rl_agent()
             self.load_cnn_model()
-                
+
         except Exception as e:
             print(f"Failed to initialize LSTM: {e}")
             self.models_loaded = False
@@ -100,11 +105,11 @@ class AIEngine:
             try:
                 self.lstm_model.load_state_dict(torch.load(self.model_path))
                 self.lstm_model.eval()
-                
+
                 # Load Scaler if exists
                 if os.path.exists(self.scaler_path):
                     self.scaler = joblib.load(self.scaler_path)
-                    
+
                 self.models_loaded = True
                 print(f"LSTM Model (Tier 5) Loaded from {self.model_path}")
             except Exception as e:
@@ -126,56 +131,57 @@ class AIEngine:
         start_time = time.time()
         print(f"Starting Tier 5 training for {symbol} ({interval})...")
         logging.info(f"Starting Tier 5 training session for {symbol} ({interval}) with {epochs} epochs")
-        
+
         # 1. Fetch Data
         raw_data = get_historical_data(symbol, period="1y", interval=interval)
         if "error" in raw_data:
             return {"status": "error", "message": raw_data["error"]}
-            
+
         df = pd.DataFrame(raw_data["data"])
         if df.empty:
              return {"status": "error", "message": "No data received"}
 
         # 2. Feature Engineering
         df = add_indicators(df)
-        
-        # Select features: Close, RSI, EMA_Diff
-        features = df[['close', 'rsi', 'ema_diff']].values
-        
+
+        # Select features: Log Return, RSI, EMA_Diff
+        # We replace 'close' with 'log_return' to prevent non-stationarity issues
+        features = df[['log_return', 'rsi', 'ema_diff']].values
+
         # 3. Scaling (Fit only on training data)
         # For simplicity in this pipeline, we fit on the whole fetched dataset 
         # (assuming it's a batch update)
         scaled_data = self.scaler.fit_transform(features)
-        
+
         # Save scaler for inference
         if not os.path.exists('models'):
             os.makedirs('models')
         joblib.dump(self.scaler, self.scaler_path)
-        
+
         # 4. Prepare Sequences
         X, y = self.prepare_data(scaled_data, self.seq_length)
-        
+
         # Split train/test
         train_size = int(len(X) * 0.8)
         X_train, X_test = X[:train_size], X[train_size:]
         y_train, y_test = y[:train_size], y[train_size:]
-        
+
         train_dataset = TimeSeriesDataset(X_train, y_train)
         train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
-        
+
         # 5. Train
         self.lstm_model.train()
         history = train_model(self.lstm_model, train_loader, num_epochs=epochs)
-        
+
         # 6. Save Model
         torch.save(self.lstm_model.state_dict(), self.model_path)
         self.models_loaded = True
-        
+
         final_loss = history['loss'][-1] if history['loss'] else 0
         duration = time.time() - start_time
-        
+
         print(f"Training complete. Final Loss: {final_loss:.6f}")
-        
+
         # Log to DB
         db_service.log_training_session({
             "symbol": symbol,
@@ -185,7 +191,7 @@ class AIEngine:
             "duration_seconds": round(duration, 2),
             "metadata": {"algorithm": "LSTM_Tier5_TrendSurfer"}
         })
-        
+
         return {
             "status": "success", 
             "message": "Tier 5 Model trained successfully", 
@@ -200,62 +206,64 @@ class AIEngine:
         # Need enough data for lag features (EMA 200 needs 200 candles)
         if not self.models_loaded or len(candles) < 205:
             return 0.5
-            
+
         try:
             df = pd.DataFrame(candles)
             df = add_indicators(df)
 
             # Take last seq_length features
-            current_features = df[['close', 'rsi', 'ema_diff']].tail(self.seq_length).values
-            
+            current_features = df[['log_return', 'rsi', 'ema_diff']].tail(self.seq_length).values
+
             # Use saved scaler
             scaled_input = self.scaler.transform(current_features)
-            last_close_norm = scaled_input[-1, 0]
-            
+
             # Predict
             self.lstm_model.eval()
             with torch.no_grad():
                 # [1, seq, feat]
                 input_tensor = torch.FloatTensor(scaled_input).unsqueeze(0) 
-                pred_norm = self.lstm_model(input_tensor).item()
-            
-            # LOGIC: Scaled Difference Priority
-            diff = pred_norm - last_close_norm
-            
-            # Sigmoid with Sensitivity 15
-            prob = 1 / (1 + np.exp(-diff * 15)) 
-            
+                pred_scaled_return = self.lstm_model(input_tensor).item()
+
+            # LOGIC: Return-based Probability
+            # pred_scaled_return is the predicted Z-Score of the next log return
+            # A positive value means price increase, negative means decrease
+
+            # Normalize to 0-1 probability
+            # Sigmoid(x) centers at 0. Positive x -> >0.5
+            # We add a gain factor (e.g., 3) to make it more decisive
+            prob = 1 / (1 + np.exp(-pred_scaled_return * 3)) 
+
             # --- TIER 5: TREND SURFER LOGIC ---
             current_close = df['close'].iloc[-1]
             ema_200 = df['ema_200'].iloc[-1]
             current_rsi = df['rsi'].iloc[-1]
-            
+
             # 1. Trend Filter (EMA 200)
             # LONG ONLY if Price > EMA 200
             if current_close > ema_200:
                 # Allow Bullish Prob. Suppress Bearish Prob.
                 if prob < 0.5:
-                    prob = 0.5 # Neutralize Bearish Signal (Don't short uptrend)
+                    prob = 0.5 + (prob - 0.5) * 0.5 # Dampen bearish signal
                 # Boost Bullish Confidence slightly if strong trend
-                prob *= 1.05 
-            
+                prob = min(0.99, prob * 1.05)
+
             # SHORT ONLY if Price < EMA 200
             elif current_close < ema_200:
                 # Allow Bearish Prob. Suppress Bullish Prob.
                 if prob > 0.5:
-                    prob = 0.5 # Neutralize Bullish Signal (Don't buy downtrend)
+                    prob = 0.5 + (prob - 0.5) * 0.5 # Dampen bullish signal
                 # Boost Bearish Confidence slightly
-                prob *= 0.95
-            
+                prob = max(0.01, prob * 0.95)
+
             # 2. RSI Sanity Check (Relaxed)
-            # Prevent longing the absolute top (>80) or shorting absolute bottom (<20)
-            if current_rsi > 80: 
-                prob = min(prob, 0.5) # Kill buy signal
-            if current_rsi < 20: 
-                prob = max(prob, 0.5) # Kill sell signal
-            
+            # Prevent longing the absolute top (>85) or shorting absolute bottom (<15)
+            if current_rsi > 85: 
+                prob = min(prob, 0.45) # Force Sell/Hold
+            if current_rsi < 15: 
+                prob = max(prob, 0.55) # Force Buy/Hold
+
             return float(prob)
-            
+
         except Exception as e:
             print(f"Prediction error: {e}")
             return 0.5
@@ -267,7 +275,7 @@ class AIEngine:
         if not RL_AVAILABLE:
             print("⚠️ RL agent not available (stable-baselines3 not installed)")
             return
-            
+
         rl_model_path = "models/ppo_agent.zip"
         if os.path.exists(rl_model_path):
             try:
@@ -278,7 +286,7 @@ class AIEngine:
                 print(f"⚠️ Failed to load RL agent: {e}")
         else:
             print(f"⚠️ RL model not found at {rl_model_path}. Run train_rl_agent.py first.")
-    
+
     def get_rl_recommendation(self, state_vector):
         """
         Get action recommendation from RL agent
@@ -286,10 +294,10 @@ class AIEngine:
         """
         if not self.rl_enabled or self.rl_agent is None:
             return None
-            
+
         try:
             action, _states = self.rl_agent.predict(state_vector, deterministic=True)
-            
+
             # Map action to trading decision
             action_map = {
                 0: ("HOLD", 1, 50),
@@ -298,18 +306,18 @@ class AIEngine:
                 3: ("BUY", 5, 95),
                 4: ("SELL", 1, 80)
             }
-            
+
             return action_map.get(action, ("HOLD", 1, 50))
         except Exception as e:
             print(f"RL prediction error: {e}")
             return None
-    
+
     def load_cnn_model(self):
         """
         Load trained CNN model for Tier 7 ensemble
         """
         from services.cnn_service import CNNPatternModel
-        
+
         cnn_model_path = "models/cnn_pattern_v1.pth"
         if os.path.exists(cnn_model_path):
             try:
@@ -322,7 +330,7 @@ class AIEngine:
                 print(f"⚠️ Failed to load CNN model: {e}")
         else:
             print(f"⚠️ CNN model not found at {cnn_model_path}. Run train_cnn.py first.")
-    
+
     def get_cnn_prediction(self, candles):
         """
         Get pattern prediction from CNN model
@@ -330,78 +338,86 @@ class AIEngine:
         """
         if not self.cnn_enabled or self.cnn_model is None:
             return None
-        
+
         try:
             from services.chart_generator import prepare_cnn_input
-            
+
             # Prepare 20-candle window
             window = prepare_cnn_input(candles, window_size=20)
             if window is None:
                 return None
-            
+
             # Get CNN prediction
             from services.cnn_service import predict_pattern
             prob = predict_pattern(self.cnn_model, window)
             return prob
-            
+
         except Exception as e:
             print(f"CNN prediction error: {e}")
             return None
 
     def decide_action(self, trend_prob: float, state_vector=None, candles=None):
         """
-        Tier 7: CNN-LSTM Ensemble
-        - LSTM provides trend analysis
-        - CNN provides pattern recognition
-        - Ensemble fusion with weighted voting
+        Tier 7 (Trinity): LSTM + CNN + RL Ensemble
+        - LSTM: Trend Direction (Base)
+        - CNN: Pattern Recognition (Confirmation)
+        - RL: Strategic Decision (Entry/Exit + Leverage)
         """
-        # Tier 7: CNN-LSTM Ensemble
+        # 1. Base Score (LSTM)
+        ensemble_score = trend_prob
+
+        # 2. Add CNN Influence (if available)
+        cnn_prob = None
         if self.cnn_enabled and candles is not None:
             cnn_prob = self.get_cnn_prediction(candles)
-            
             if cnn_prob is not None:
-                # Tier 7: High Confidence Ensemble (Refined)
-                # Weighted ensemble: LSTM (60%) + CNN (40%)
-                ensemble_prob = (trend_prob * 0.6) + (cnn_prob * 0.4)
-                
-                # Calculate confidence
-                confidence = abs(ensemble_prob - 0.5) * 2 * 100
-                
-                # Filter: High confidence (>65%) and trend alignment
-                # trend_prob > 0.55 means LSTM is bullish
-                # trend_prob < 0.45 means LSTM is bearish
-                
-                if confidence > 58: 
-                    if ensemble_prob > 0.58 and trend_prob > 0.51:
-                        return "BUY", round(confidence, 1)
-                    elif ensemble_prob < 0.42 and trend_prob < 0.49:
-                        return "SELL", round(confidence, 1)
-                
-                return "HOLD", round(confidence, 1)
-        
-        # Tier 6: RL + LSTM (if RL enabled)
+                # Weighted Fusion: LSTM 60%, CNN 40%
+                ensemble_score = (trend_prob * 0.6) + (cnn_prob * 0.4)
+
+        # 3. Get RL Recommendation (if available)
+        rl_action = "HOLD"
+        rl_leverage = 1
+        rl_conf = 0
+
         if self.rl_enabled and state_vector is not None:
             rl_decision = self.get_rl_recommendation(state_vector)
             if rl_decision:
-                action, leverage, confidence = rl_decision
-                # Filter by LSTM trend
-                if action == "BUY" and trend_prob < 0.45:
-                    return "HOLD", 50  # LSTM says bearish, override RL
-                elif action == "SELL" and trend_prob > 0.55:
-                    return "HOLD", 50  # LSTM says bullish, override RL
-                return f"{action}_{leverage}x", confidence
-        
-        # Fallback to Tier 5 logic (LSTM only)
-        buy_threshold = 0.55
-        sell_threshold = 0.45
-        
-        confidence = abs(trend_prob - 0.5) * 2 * 100
-        
-        if trend_prob > buy_threshold:
-            return "BUY", round(confidence, 1)
-        elif trend_prob < sell_threshold:
-            return "SELL", round(confidence, 1)
+                rl_action, rl_leverage, rl_conf = rl_decision
+
+        # --- TRINITY FUSION LOGIC ---
+
+        confidence = abs(ensemble_score - 0.5) * 2 * 100
+
+        # CASE A: BUY SIGNAL
+        if ensemble_score > 0.52: # Bullish Trend (Lowered from 0.55)
+            # If RL agrees (BUY), confidence boosted
+            if "BUY" in rl_action:
+                final_leverage = rl_leverage
+                return f"BUY_{final_leverage}x", min(99, confidence + 15)
+            # If RL says HOLD, weak buy (1x)
+            elif rl_action == "HOLD":
+                return "BUY_1x", confidence
+            # If RL says SELL, conflict -> HOLD
+            elif rl_action == "SELL":
+                return "HOLD", confidence
+
+        # CASE B: SELL SIGNAL
+        elif ensemble_score < 0.48: # Bearish Trend (Raised from 0.45)
+            # If RL agrees (SELL), strong exit
+            if rl_action == "SELL":
+                return "SELL", min(99, confidence + 15)
+            # If RL says HOLD/BUY, but Trend is Bearish -> Weak Exit
+            else:
+                return "SELL", confidence
+
+        # CASE C: NEUTRAL CHART (Side-ways)
         else:
-            return "HOLD", round(confidence, 1)
+            # RL is the Tie-Breaker
+            if "BUY" in rl_action and confidence > 40:
+                return f"BUY_{rl_leverage}x", 50 # Speculative Buy
+            elif rl_action == "SELL":
+                return "SELL", 50 # Speculative Exit
+
+        return "HOLD", round(confidence, 1)
 
 ai_engine = AIEngine()

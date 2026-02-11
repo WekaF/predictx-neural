@@ -108,7 +108,7 @@ export const analyticsService = {
     const pending = signals.filter(s => s.outcome === 'PENDING').length;
     const total = signals.length;
     
-    const avgConfidence = signals.reduce((sum, s) => sum + (s.confidence || 0), 0) / total;
+    const avgConfidence = total > 0 ? signals.reduce((sum, s) => sum + (s.confidence || 0), 0) / total : 0;
     
     // Find best and worst trades (by confidence)
     const completedTrades = signals.filter(s => s.outcome === 'WIN' || s.outcome === 'LOSS');
