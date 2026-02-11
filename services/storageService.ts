@@ -392,5 +392,45 @@ export const storageService = {
       } catch (e) {
           console.error("Failed to save trading log", e);
       }
+  },
+
+  updateTradingLogOutcome: async (tradeId: string, outcome: 'WIN' | 'LOSS', exitPrice: number, pnl: number, notes?: string) => {
+      try {
+          const key = 'neurotrade_trading_logs';
+          const logs = storageService.getTradingLogs();
+          const index = logs.findIndex((l: any) => l.tradeId === tradeId);
+          
+          if (index !== -1) {
+              const updatedLog = {
+                  ...logs[index],
+                  outcome,
+                  exitPrice,
+                  pnl,
+                  exitTimestamp: Date.now(),
+                  notes: notes ? (logs[index].notes ? logs[index].notes + '\n' + notes : notes) : logs[index].notes
+              };
+              
+              logs[index] = updatedLog;
+              localStorage.setItem(key, JSON.stringify(logs));
+              console.log(`[Storage] Updated log for trade ${tradeId}: ${outcome} PNL: ${pnl}`);
+              
+              if (supabase) {
+                  const { error } = await supabase
+                      .from('trading_journal')
+                      .update({
+                          outcome,
+                          pnl,
+                          exit_price: exitPrice,
+                          exit_reason: notes,
+                          closed_at: new Date().toISOString()
+                      })
+                      .eq('trade_id', tradeId);
+                  
+                  if (error) console.error('[Supabase] Journal update error:', error);
+              }
+          }
+      } catch (e) {
+          console.error("Failed to update trading log", e);
+      }
   }
 };

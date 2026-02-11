@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { analyticsService, PerformanceMetrics, AssetPerformance, TradeSignalData, RiskMetrics, GrowthData } from '../services/analyticsService';
+
 import { MetricCard } from './MetricCard';
 import { PieChart } from './PieChart';
 import { RiskRadarChart } from './RiskRadarChart';
 import { GrowthChart } from './GrowthChart';
-import { updateLearningRate, updateEpsilon, resetModel, exportWeights, importWeights, getModelStats } from '../services/mlService';
+import { updateLearningRate, updateEpsilon, resetModel, exportWeights, importWeights, getModelStats, getCNNLSTMStats } from '../services/mlService';
 
 export const AnalyticsDashboard: React.FC = () => {
   const [metrics, setMetrics] = useState<PerformanceMetrics | null>(null);
@@ -18,6 +19,7 @@ export const AnalyticsDashboard: React.FC = () => {
   const [learningRate, setLearningRate] = useState(0.01);
   const [epsilon, setEpsilon] = useState(0.2);
   const [modelStats, setModelStats] = useState<any>(null);
+  const [cnnLstmStats, setCnnLstmStats] = useState<any>(null);
 
   // Load data
   const loadData = async () => {
@@ -42,6 +44,10 @@ export const AnalyticsDashboard: React.FC = () => {
       setModelStats(stats);
       setLearningRate(stats.learningRate);
       setEpsilon(stats.epsilon);
+      
+      // Get CNN-LSTM Stats
+      const deepStats = getCNNLSTMStats();
+      setCnnLstmStats(deepStats);
     } catch (e) {
       console.error('[Analytics] Load error:', e);
     } finally {
@@ -189,6 +195,53 @@ export const AnalyticsDashboard: React.FC = () => {
         </div>
       </div>
 
+      {/* Deep Learning Architecture Status */}
+      {cnnLstmStats && (
+        <div className="bg-gradient-to-r from-blue-900/30 to-purple-900/30 border border-blue-500/30 rounded-lg p-6">
+          <div className="flex items-center justify-between mb-4">
+             <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                <span className="text-2xl">🧠</span> 
+                Deep Learning Architecture: CNN-LSTM-RL Hybrid
+             </h2>
+             <span className="px-3 py-1 bg-green-500/20 text-green-400 rounded-full text-xs font-bold border border-green-500/30">
+                ACTIVE
+             </span>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+             <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700/50">
+                <h3 className="text-blue-400 font-bold mb-2">Layer 1: CNN (Visual)</h3>
+                <ul className="text-sm text-gray-300 space-y-1">
+                   <li>• Pattern Recognition</li>
+                   <li>• Conv1D: {cnnLstmStats.architecture.cnn.conv1.filters} Filters (k={cnnLstmStats.architecture.cnn.conv1.kernelSize})</li>
+                   <li>• Conv1D: {cnnLstmStats.architecture.cnn.conv2.filters} Filters (k={cnnLstmStats.architecture.cnn.conv2.kernelSize})</li>
+                   <li>• Feature Detection: Pattern & Shape</li>
+                </ul>
+             </div>
+             
+             <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700/50">
+                <h3 className="text-purple-400 font-bold mb-2">Layer 2: LSTM (Temporal)</h3>
+                <ul className="text-sm text-gray-300 space-y-1">
+                   <li>• Time-Series Analysis</li>
+                   <li>• 2 Stacked LSTM Layers</li>
+                   <li>• Hidden State: 64 Units</li>
+                   <li>• Sequence Length: 50 Candles</li>
+                </ul>
+             </div>
+             
+             <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700/50">
+                <h3 className="text-emerald-400 font-bold mb-2">Layer 3: RL Agent (Decision)</h3>
+                <ul className="text-sm text-gray-300 space-y-1">
+                   <li>• Deep Q-Network (DQN)</li>
+                   <li>• Multi-Source Confidence</li>
+                   <li>• Pattern Memory System</li>
+                   <li>• Adaptive Hyperparameters</li>
+                </ul>
+             </div>
+          </div>
+        </div>
+      )}
+
       {/* Detailed Stats & Pie Chart */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-6">
@@ -229,7 +282,7 @@ export const AnalyticsDashboard: React.FC = () => {
           </div>
       </div>
 
-      {/* AI Tuning & Asset Performance (Existing functionality kept) */}
+      {/* AI Tuning & Asset Performance */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Asset Performance */}
         <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-6">
@@ -261,7 +314,7 @@ export const AnalyticsDashboard: React.FC = () => {
         {/* AI Tuning Controls */}
         <div className="bg-gradient-to-br from-purple-900/20 to-blue-900/20 border border-purple-500/30 rounded-lg p-6">
             <h2 className="text-xl font-bold text-white mb-4">🎛️ AI Model Tuning</h2>
-            {/* ... Only critical controls ... */}
+            
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
               <div>
                 <label className="block text-sm text-gray-400 mb-2">

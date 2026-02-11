@@ -69,6 +69,17 @@ export interface TrainingData {
   outcome: 'WIN' | 'LOSS';
   riskReward: number;
   note: string;
+  // New fields for deep learning training replay
+  input?: {
+      candles: Candle[];
+      indicators: TechnicalIndicators;
+      sentiment: number;
+  };
+  output?: {
+      type: 'BUY' | 'SELL';
+      outcome: 'WIN' | 'LOSS';
+      pnl: number;
+  };
 }
 
 export interface BacktestTrade {
@@ -154,6 +165,15 @@ export interface TradingLog {
     timestamp: number; // Entry Time
     symbol: string;
     type: 'BUY' | 'SELL';
+    
+    // --- Detailed Analysis Fields ---
+    agent: string;          // e.g. "Hybrid CNN-LSTM", "RL-DQN", "Manual"
+    exitPrice?: number;
+    exitTimestamp?: number;
+    pnl?: number;
+    outcome?: 'WIN' | 'LOSS';
+    exitReason?: string;    // e.g. "Take Profit", "Stop Loss", "Manual"
+    
     items: {
         snapshot: MarketSnapshot;
         chartHistory: Candle[]; // Stored candles for visualization
@@ -163,4 +183,42 @@ export interface TradingLog {
     };
     notes?: string;
     tags?: string[]; // e.g. ["Scalp", "News", "Reversal"]
+}
+
+// --- SMC Types ---
+export interface OrderBlock {
+    id: string;
+    type: 'BULLISH' | 'BEARISH';
+    top: number;
+    bottom: number;
+    candleIndex: number;
+    timestamp: number; // Added for mapping
+    mitigated: boolean;
+    strength: number;
+}
+
+export interface FairValueGap {
+    id: string;
+    type: 'BULLISH' | 'BEARISH';
+    top: number;
+    bottom: number;
+    candleIndex: number;
+    timestamp: number; // Added for mapping
+    mitigated: boolean;
+}
+
+export interface SwingPoint {
+    type: 'HIGH' | 'LOW';
+    price: number;
+    index: number;
+}
+
+export interface SMCAnalysis {
+    structure: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+    lastBOS?: { price: number; index: number; type: 'BULLISH'|'BEARISH' };
+    lastCHoCH?: { price: number; index: number; type: 'BULLISH'|'BEARISH' };
+    orderBlocks: OrderBlock[];
+    fairValueGaps: FairValueGap[];
+    swingHighs: SwingPoint[];
+    swingLows: SwingPoint[];
 }

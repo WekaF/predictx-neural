@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Activity, Zap, TrendingUp, TrendingDown, RefreshCw, ShieldCheck, DollarSign, BrainCircuit, Target, BookOpen, FlaskConical, LayoutDashboard, ChevronDown, Layers, Globe, Radio, PenTool, AlertCircle, CheckCircle2, List, Bell, Edit3, Settings as SettingsIcon, Coins, AlertTriangle, CheckCircle, XCircle, BarChart3, Trash2, Settings } from 'lucide-react';
 import { TradingJournal } from './components/TradingJournal';
-import { TradingLog } from './types';
+// Removed duplicate import
 import ModernCandleChart from './components/CandleChart';
 import BacktestPanel from './components/BacktestPanel';
 import TradeConfirmationModal from './components/TradeConfirmationModal';
@@ -12,6 +12,7 @@ import AlertsPanel from './components/AlertsPanel';
 import FeedbackEditorModal from './components/FeedbackEditorModal';
 import SettingsModal from './components/SettingsModal';
 import { AnalyticsDashboard } from './components/AnalyticsDashboard';
+import AITrainingDashboard from './components/AITrainingDashboard';
 import { LeverageDashboard } from './components/LeverageDashboard';
 import { OrderBook } from './components/OrderBook';
 import { HeaderControls } from './components/HeaderControls';
@@ -22,10 +23,13 @@ import { analyzeMarket, trainModel, refreshModel } from './services/mlService';
 import { generateMarketNews, calculateAggregateSentiment } from './services/newsService';
 import { storageService } from './services/storageService';
 import { sendWebhookNotification } from './services/webhookService';
+import { geminiService } from './services/geminiService';
+import { smcService } from './services/smcService'; // SMC Service
+import { mlService } from './services/mlService';
 import { NotificationService } from './services/notificationService';
 import * as binanceService from './services/binanceService';
 import * as forexService from './services/forexService';
-import { Candle, TechnicalIndicators, TradeSignal, TrainingData, NewsItem, Alert, ExecutedTrade, Asset } from './types';
+import { Candle, TechnicalIndicators, TradeSignal, TrainingData, NewsItem, Alert, ExecutedTrade, Asset, SMCAnalysis, TradingLog } from './types';
 import { generateUUID } from './utils/uuid';
 import { Analytics } from "@vercel/analytics/react"
 
@@ -56,13 +60,15 @@ const BINANCE_ASSETS: Asset[] = [
 const SUPPORTED_ASSETS = BINANCE_ASSETS;
 
 function App() {
+
   const [candles, setCandles] = useState<Candle[]>([]);
   const [indicators, setIndicators] = useState<TechnicalIndicators | null>(null);
+  const [smcAnalysis, setSmcAnalysis] = useState<SMCAnalysis | undefined>(undefined); // SMC State
   
   // Asset State
   const [selectedAsset, setSelectedAsset] = useState<Asset>(SUPPORTED_ASSETS[0]);
   const [isAssetMenuOpen, setIsAssetMenuOpen] = useState(false);
-  const [selectedInterval, setSelectedInterval] = useState<string>('5m'); // Candle interval
+  const [selectedInterval, setSelectedInterval] = useState<string>('15m'); // Candle interval
 
   // Trade States
   const [pendingSignal, setPendingSignal] = useState<TradeSignal | null>(null); // Awaiting confirmation
@@ -99,7 +105,7 @@ function App() {
   const [sentimentScore, setSentimentScore] = useState(0); // -1 to 1
 
   // Navigation & Config
-  const [currentView, setCurrentView] = useState<'terminal' | 'backtest' | 'analytics' | 'leverage' | 'journal'>('terminal');
+  const [currentView, setCurrentView] = useState<'terminal' | 'backtest' | 'analytics' | 'leverage' | 'journal' | 'training'>('terminal');
   const [dbConnected, setDbConnected] = useState(false);
   const [aiReady, setAiReady] = useState(false);
 
@@ -193,6 +199,33 @@ function App() {
     };
   }, []);
 
+  // Load Trade History (Journal)
+  useEffect(() => {
+      const logs = storageService.getTradingLogs();
+      if (logs && logs.length > 0) {
+        const history: ExecutedTrade[] = logs.map((log: TradingLog) => ({
+            id: log.id,
+            symbol: log.symbol,
+            type: log.type,
+            entryTime: new Date(log.timestamp).toLocaleTimeString(),
+            exitTime: log.exitTimestamp ? new Date(log.exitTimestamp).toLocaleTimeString() : undefined,
+            entryPrice: log.items?.snapshot?.price || 0,
+            exitPrice: log.exitPrice,
+            pnl: log.pnl || 0,
+            outcome: (log.outcome === 'WIN' || log.outcome === 'LOSS') ? log.outcome : 'OPEN',
+            source: log.agent === 'Manual' ? 'MANUAL' : 'AI',
+            status: (log.outcome === 'WIN' || log.outcome === 'LOSS') ? 'CLOSED' : 'OPEN',
+            quantity: 0,
+            fees: 0,
+            maxDrawdown: 0,
+            stopLoss: 0,
+            takeProfit: 0
+        }));
+        setTradeHistory(history);
+        console.log(`[App] ✅ Loaded ${history.length} trades from storage`);
+      }
+  }, []);
+
   // Initialize Data whenever Asset changes - REAL-TIME API INTEGRATION
   useEffect(() => {
     let ws: WebSocket | null = null;
@@ -221,7 +254,7 @@ function App() {
           // 1. Fetch historical data (1000 candles for chart + indicators)
           const historicalCandles = await binanceService.getHistoricalKlines(selectedAsset.symbol, selectedInterval, 1000);
           
-          if (!isActive) return; // Component unmounted
+          if (!isActive) return;
           
           setCandles(historicalCandles);
           console.log(`[App] ✅ Loaded ${historicalCandles.length} historical candles for ${selectedAsset.symbol}`);
@@ -233,7 +266,13 @@ function App() {
             setCandles(prev => {
               // If candle is closed, add new candle
               if (isClosed) {
-                return [...prev.slice(-999), candle]; // Keep last 1000 candles
+                const newData = [...prev.slice(-999), candle]; // Keep last 1000 candles
+                // Run SMC Analysis
+                if (newData.length > 50) {
+                    const smc = smcService.analyze(newData);
+                    setSmcAnalysis(smc);
+                }
+                return newData;
               }
               // If candle is updating, replace last candle
               const updated = [...prev];
@@ -261,15 +300,22 @@ function App() {
             setCandles(prev => {
               // Check if this is a new candle or update to existing
               const lastCandle = prev[prev.length - 1];
+              let newData;
               if (lastCandle && Math.abs(Number(lastCandle.time) - Number(candle.time)) < 60000) {
                 // Update existing candle
                 const updated = [...prev];
                 updated[updated.length - 1] = candle;
-                return updated;
+                newData = updated;
               } else {
                 // New candle
-                return [...prev.slice(-999), candle];
+                newData = [...prev.slice(-999), candle];
               }
+              // Run SMC Analysis
+              if (newData.length > 50) {
+                  const smc = smcService.analyze(newData);
+                  setSmcAnalysis(smc);
+              }
+              return newData;
             });
           });
 
@@ -335,6 +381,12 @@ function App() {
             stochastic,
             momentum
           });
+
+          // Run SMC Analysis
+          if (binanceCandles.length > 50) {
+              const smc = smcService.analyze(binanceCandles);
+              setSmcAnalysis(smc);
+          }
           
           showNotification(`✅ Loaded ${binanceCandles.length} candles from Binance`, 'success');
         }
@@ -475,7 +527,13 @@ function App() {
         };
 
         setIndicators(newIndicators);
-
+      
+        // Run SMC Analysis
+        if (newData.length > 50) {
+            const smc = smcService.analyze(newData);
+            setSmcAnalysis(smc);
+        }
+      
         // --- REAL-TIME TP/SL MONITORING ---
         setActiveSignal(currentSignal => {
             // Only monitor if the active signal belongs to the currently selected asset
@@ -601,34 +659,54 @@ function App() {
 
   // Trigger Local ML Analysis
   const handleAnalyze = useCallback(async () => {
-    if (!indicators || candles.length === 0) return;
+    if (!indicators || candles.length === 0) {
+        showNotification("Insufficient data for analysis.", "warning");
+        return;
+    }
     
     // Don't analyze if we already have an OPEN active position or a PENDING confirmation
-    if (pendingSignal) return;
-    if (activeSignal && activeSignal.outcome === 'PENDING') return;
+    if (pendingSignal) {
+        showNotification("You have a pending signal waiting for confirmation.", "info");
+        return;
+    }
+    if (activeSignal && activeSignal.outcome === 'PENDING') {
+        showNotification("You already have an active trade.", "info");
+        return;
+    }
 
     setIsAnalyzing(true);
     
-    // Uses the new Combined (Hybrid) ML service
-    const signal = await analyzeMarket(candles, indicators, trainingHistory, marketNews.slice(0, 5));
-    
-    setIsAnalyzing(false);
+    try {
+        // Uses the new Combined (Hybrid) ML service
+        const signal = await analyzeMarket(candles, indicators, trainingHistory, marketNews.slice(0, 5));
+        
+        if (signal && signal.type !== 'HOLD') {
+          const fullSignal = { ...signal, symbol: selectedAsset.symbol };
 
-    if (signal && signal.type !== 'HOLD') {
-      const fullSignal = { ...signal, symbol: selectedAsset.symbol };
-
-      if (autoMode || tradingMode === 'paper') {
-          // --- AUTOMATIC EXECUTION (AUTO-SEND) ---
-          confirmTrade(fullSignal);
-      } else {
-          // --- MANUAL CONFIRMATION (LIVE MODE) ---
-          setPendingSignal(fullSignal);
-      }
-    } else if (signal && signal.type === 'HOLD') {
-        // Only show message if triggered manually
-        if (!autoMode) {
-            showNotification("Market conditions unclear. Neural Net advises HOLD.", "info");
+          if (autoMode || tradingMode === 'paper') {
+              // --- AUTOMATIC EXECUTION (AUTO-SEND) ---
+              confirmTrade(fullSignal);
+              showNotification(`AI Found Opportunity: ${signal.type} (Conf: ${signal.confidence}%)`, "success");
+          } else {
+              // --- MANUAL CONFIRMATION (LIVE MODE) ---
+              setPendingSignal(fullSignal);
+              showNotification(`Signal Detected: ${signal.type}. Please Confirm.`, "success");
+          }
+        } else if (signal && signal.type === 'HOLD') {
+            // Only show detailed message if triggered manually
+            if (!autoMode) {
+                // Formatting the reasoning for better readability in toast/alert
+                const explanation = `Confidence: ${signal.confidence}%. ${signal.reasoning}`;
+                showNotification(`AI Analysis Complete: HOLD. ${explanation}`, "info");
+                // Optional: Console log for debugging
+                console.log("[Manual Predict] Result:", signal);
+            }
         }
+    } catch (error) {
+        console.error("Analysis failed:", error);
+        showNotification("AI Analysis Failed. Check console.", "error");
+    } finally {
+        setIsAnalyzing(false);
     }
   }, [candles, indicators, trainingHistory, marketNews, activeSignal, pendingSignal, autoMode, selectedAsset, tradingMode]);
 
@@ -678,6 +756,7 @@ function App() {
             timestamp: Date.now(),
             symbol: signal.symbol,
             type: signal.type as 'BUY' | 'SELL',
+            agent: signal.patternDetected || 'Unknown',
             items: {
                 snapshot: {
                     price: signal.entryPrice,
@@ -721,16 +800,17 @@ function App() {
   };
 
   // Handle Manual Trade
-  const handleManualTrade = (trade: { type: 'BUY' | 'SELL', entryPrice: number, stopLoss: number, takeProfit: number }) => {
+  const handleManualTrade = (type: 'BUY' | 'SELL', entryPrice: number, stopLoss: number, takeProfit: number) => {
+    console.log("🛠️ Manual Trade Initiated:", { type, entryPrice, stopLoss, takeProfit });
     const newSignal: TradeSignal = {
       id: generateUUID(),
       symbol: selectedAsset.symbol,
-      type: trade.type,
-      entryPrice: trade.entryPrice,
-      stopLoss: trade.stopLoss,
-      takeProfit: trade.takeProfit,
+      type: type,
+      entryPrice: entryPrice,
+      stopLoss: stopLoss,
+      takeProfit: takeProfit,
       reasoning: 'Manual trade entry',
-      confidence: 50,
+      confidence: 100, // Manual trades are 100% confidence by definition
       timestamp: Date.now(),
       outcome: 'PENDING'
     };
@@ -759,6 +839,7 @@ function App() {
             timestamp: Date.now(),
             symbol: newSignal.symbol,
             type: newSignal.type as 'BUY' | 'SELL',
+            agent: "Manual",
             items: {
                 snapshot: {
                     price: newSignal.entryPrice,
@@ -841,7 +922,18 @@ function App() {
       outcome: outcome,
       confluence: activeSignal.confluenceFactors?.join(', ') || 'Unknown',
       riskReward: activeSignal.riskRewardRatio || 0,
-      note: outcome === 'WIN' ? 'Good entry, verified pattern.' : 'False signal, volatility stopped out.'
+      note: outcome === 'WIN' ? 'Good entry, verified pattern.' : 'False signal, volatility stopped out.',
+      // Save replay data
+      input: indicators ? {
+          candles: candles.slice(-60),
+          indicators: indicators,
+          sentiment: sentimentScore
+      } : undefined,
+      output: {
+          type: activeSignal.type as 'BUY'|'SELL',
+          outcome: outcome,
+          pnl: pnl
+      }
     };
 
     setTrainingHistory(prev => {
@@ -849,6 +941,17 @@ function App() {
         storageService.saveTrainingData(newData);
         return newData;
     });
+
+    // Update Trading Log Outcome
+    const exitPrice = candles.length > 0 ? candles[candles.length - 1].close : activeSignal.entryPrice;
+    storageService.updateTradingLogOutcome(
+        activeSignal.id, 
+        outcome, 
+        exitPrice, 
+        pnl, 
+        "Manual Close by User"
+    );
+
 
     const completedTrade: ExecutedTrade = {
         id: activeSignal.id,
@@ -953,6 +1056,14 @@ function App() {
             title="AI Analytics"
           >
             <Activity className="w-5 h-5" />
+          </button>
+
+          <button 
+            onClick={() => setCurrentView('training')}
+            className={`p-3 rounded-lg transition-colors flex justify-center ${currentView === 'training' ? 'bg-slate-800 text-indigo-400' : 'text-slate-400 hover:bg-slate-800 hover:text-indigo-400'}`}
+            title="AI Training Center"
+          >
+            <BrainCircuit className="w-5 h-5" />
           </button>
           
           <button 
@@ -1158,6 +1269,8 @@ function App() {
              <AnalyticsDashboard />
         ) : currentView === 'leverage' ? (
              <LeverageDashboard />
+        ) : currentView === 'training' ? (
+             <AITrainingDashboard />
         ) : currentView === 'journal' ? (
              <div className="h-full overflow-hidden">
                  <TradingJournal />
@@ -1213,6 +1326,7 @@ function App() {
                                 pendingSignal={pendingSignal}
                                 activeTrade={activeSignal?.outcome === 'PENDING' ? activeSignal : null} 
                                 fibLevels={indicators?.fibLevels} 
+                                smcAnalysis={smcAnalysis}
                             />
                         </div>
                     </div>

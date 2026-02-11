@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Candle, TradeSignal, BacktestTrade, TechnicalIndicators } from '../types';
+import { Candle, TradeSignal, BacktestTrade, TechnicalIndicators, SMCAnalysis } from '../types';
 
 interface CandleChartProps {
   data: Candle[];
@@ -7,19 +7,26 @@ interface CandleChartProps {
   activeTrade?: TradeSignal | null;
   trades?: BacktestTrade[];
   fibLevels?: TechnicalIndicators['fibLevels'];
+  smcAnalysis?: SMCAnalysis;
 }
 
-const ModernCandleChart: React.FC<CandleChartProps> = ({ data, pendingSignal, activeTrade, trades = [], fibLevels }) => {
+const ModernCandleChart: React.FC<CandleChartProps> = ({ data, pendingSignal, activeTrade, trades = [], fibLevels, smcAnalysis }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [hoveredCandle, setHoveredCandle] = useState<Candle | null>(null);
   const [cursorPos, setCursorPos] = useState<{x: number, y: number} | null>(null);
 
   if (data.length === 0) return <div className="h-64 flex items-center justify-center text-slate-500">Loading Market Data...</div>;
 
-  const maxPrice = Math.max(...data.map(c => c.high));
-  const minPrice = Math.min(...data.map(c => c.low));
-  const maxVolume = Math.max(...data.map(c => c.volume));
-  const priceRange = maxPrice - minPrice;
+  const validData = data.filter(c => !isNaN(c.high) && !isNaN(c.low) && !isNaN(c.open) && !isNaN(c.close));
+
+  if (validData.length === 0) return <div className="h-64 flex items-center justify-center text-slate-500">Invalid Data</div>;
+
+  const maxPrice = Math.max(...validData.map(c => c.high));
+  const minPrice = Math.min(...validData.map(c => c.low));
+  const maxVolume = Math.max(...validData.map(c => c.volume));
+  
+  // Prevent division by zero if price range is huge or zero
+  const priceRange = maxPrice === minPrice ? maxPrice * 0.1 : maxPrice - minPrice;
   const padding = priceRange * 0.1;
 
   // Chart dimensions in percentage (SVG viewbox 0-100)
@@ -27,7 +34,9 @@ const ModernCandleChart: React.FC<CandleChartProps> = ({ data, pendingSignal, ac
   const VOLUME_HEIGHT = 20;
 
   const getY = (price: number) => {
-    return CHART_HEIGHT - ((price - (minPrice - padding)) / (priceRange + padding * 2)) * CHART_HEIGHT;
+    if (isNaN(price) || price === undefined || price === null || priceRange === 0) return 0;
+    const y = CHART_HEIGHT - ((price - (minPrice - padding)) / (priceRange + padding * 2)) * CHART_HEIGHT;
+    return isNaN(y) ? 0 : y;
   };
 
   const getXForTime = (time: string) => {
@@ -136,6 +145,68 @@ const ModernCandleChart: React.FC<CandleChartProps> = ({ data, pendingSignal, ac
               <rect x={x + 2} y={Math.min(yOpen, yClose)} width={w} height={Math.abs(yClose - yOpen) || 0.5} fill={color} />
             </g>
           );
+        })}
+
+        {/* SMC: Order Blocks */}
+        {smcAnalysis && smcAnalysis.orderBlocks.map((ob, i) => {
+             let startIndex = data.findIndex(c => new Date(c.time).getTime() === ob.timestamp);
+             
+             if (startIndex === -1) {
+                 if (data.length > 0 && ob.timestamp < new Date(data[0].time).getTime()) startIndex = 0;
+                 else return null;
+             }
+
+             const x = startIndex * 10;
+             const width = (data.length * 10) - x;
+             const yTop = getY(ob.top);
+             const yBottom = getY(ob.bottom);
+             const height = Math.abs(yBottom - yTop);
+             
+             return (
+                 <g key={`ob-${i}`}>
+                    <rect 
+                        x={x} 
+                        y={Math.min(yTop, yBottom)} 
+                        width={width} 
+                        height={height} 
+                        fill={ob.type === 'BULLISH' ? '#10b981' : '#ef4444'} 
+                        opacity={ob.type === 'BULLISH' ? "0.15" : "0.1"} 
+                    />
+                    {startIndex >= 0 && startIndex < data.length - 10 && (
+                        <text x={x + 2} y={Math.min(yTop, yBottom) - 2} fontSize="2" fill={ob.type === 'BULLISH' ? '#10b981' : '#ef4444'} opacity="0.7">
+                            {ob.type === 'BULLISH' ? 'Bullish OB' : 'Bearish OB'}
+                        </text>
+                    )}
+                 </g>
+             );
+        })}
+
+        {/* SMC: Fair Value Gaps */}
+        {smcAnalysis && smcAnalysis.fairValueGaps.map((fvg, i) => {
+             let startIndex = data.findIndex(c => new Date(c.time).getTime() === fvg.timestamp);
+             
+             if (startIndex === -1) {
+                 if (data.length > 0 && fvg.timestamp < new Date(data[0].time).getTime()) startIndex = 0;
+                 else return null;
+             }
+
+             const x = startIndex * 10;
+             const width = (data.length * 10) - x;
+             const yTop = getY(fvg.top);
+             const yBottom = getY(fvg.bottom);
+             const height = Math.abs(yBottom - yTop);
+             
+             return (
+                 <rect 
+                    key={`fvg-${i}`} 
+                    x={x} 
+                    y={Math.min(yTop, yBottom)} 
+                    width={width} 
+                    height={height} 
+                    fill={fvg.type === 'BULLISH' ? '#fbbf24' : '#fbbf24'} 
+                    opacity="0.08" 
+                 />
+             );
         })}
 
         {/* Pending Signal */}
