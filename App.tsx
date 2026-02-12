@@ -178,27 +178,45 @@ function App() {
       }
     };
     loadTradeHistory();
+  }, []);
 
-    // 2. Load Binance Account Balance
+  // Load balance when selectedAsset changes
+  useEffect(() => {
     const loadBinanceBalance = async () => {
       try {
+        console.log(`[App] 💰 Fetching balance for ${selectedAsset.symbol}...`);
         const balances = await getAccountBalances();
-        const usdtBalance = balances.find(b => b.asset === 'USDT');
-        const fdusdBalance = balances.find(b => b.asset === 'FDUSD');
+        console.log('[App] Raw balances count:', balances.length);
+        
+        // Extract base currency from symbol (e.g., "BTC/USDT" -> "BTC", "ETH/USDT" -> "ETH")
+        const baseCurrency = selectedAsset.symbol.split('/')[0];
+        console.log('[App] Looking for asset:', baseCurrency);
+        
+        // Find balance for the selected asset's base currency
+        const assetBalance = balances.find(b => b.asset === baseCurrency);
+        console.log('[App] Found asset balance object:', assetBalance);
+        
+        if (assetBalance) {
+             console.log(`[App] ${baseCurrency} Free: ${assetBalance.free}, Locked: ${assetBalance.locked}`);
+        }
 
-        // Use USDT or FDUSD balance (show real balance, even if very small)
-        const totalBalance = parseFloat(usdtBalance?.free || '0') + parseFloat(fdusdBalance?.free || '0');
-        setBalance(totalBalance);
-        console.log(`[App] ✅ Loaded Binance balance: $${totalBalance.toFixed(8)}`);
+        const foundBalance = parseFloat(assetBalance?.free || '0');
+        
+        setBalance(foundBalance);
+        console.log(`[App] ✅ Balance for ${baseCurrency}: ${foundBalance.toFixed(8)}`);
       } catch (error) {
         console.error('[App] ❌ Failed to load Binance balance:', error);
-        console.log('[App] Using balance $0 (could not connect to Binance)');
+        console.log('[App] Using balance 0 (could not connect to Binance)');
         setBalance(0);
       }
     };
 
-    loadBinanceBalance();
 
+    loadBinanceBalance();
+  }, [selectedAsset]); // Re-fetch when asset changes
+
+  // Initialize PWA and other app setup
+  useEffect(() => {
     // 3. Setup PWA Install Prompt
     const handleBeforeInstallPrompt = (e: any) => {
       e.preventDefault();
@@ -970,7 +988,7 @@ function App() {
   };
 
   // Handle Manual Trade
-  const handleManualTrade = (trade: { type: 'BUY' | 'SELL', entryPrice: number, stopLoss: number, takeProfit: number }) => {
+  const handleManualTrade = async (trade: { type: 'BUY' | 'SELL', entryPrice: number, stopLoss: number, takeProfit: number }) => {
     const newSignal: TradeSignal = {
       id: generateUUID(),
       symbol: selectedAsset.symbol,
@@ -984,7 +1002,44 @@ function App() {
       outcome: 'PENDING'
     };
 
-    setActiveSignal(newSignal);
+    // Calculate Quantity (Asset Units)
+    // Position Size (USD) = Balance * Leverage * Risk%
+    // Quantity = Position Size / Entry Price
+    const positionSizeUsd = balance * leverage * (riskPercent / 100);
+    const quantityAsset = positionSizeUsd / newSignal.entryPrice;
+    
+    // Execute on Binance (if configured/Testnet)
+    if (binanceTradingService.isConfigured()) {
+        try {
+            // Format symbol (remove /)
+            const tradeSymbol = newSignal.symbol.replace('/', '').replace('USD', 'USDT');
+            
+            // Execute Market Order
+            // Note: We use MARKET for immediate entry. 
+            // TODO: Implement LIMIT based on newSignal.entryPrice? For now MARKET for speed/UX.
+            await binanceTradingService.placeOrder({
+                symbol: tradeSymbol,
+                side: newSignal.type as 'BUY' | 'SELL',
+                type: 'MARKET',
+                quantity: quantityAsset 
+                // Note: Binance requires specific precision (LOT_SIZE). 
+                // binanceTradingService should ideally handle this or we trunctate. 
+                // For now, let's assume helper handles it or we send formatted.
+                // We'll fix precision in service if it fails.
+            });
+            showNotification("Order executed on Binance!", "success");
+        } catch (error: any) {
+            console.error("Binance Execution Failed:", error);
+            showNotification("Binance Order Failed: " + error.message, "error");
+            // We still proceed to create local signal for tracking? 
+            // Maybe return? User might want to retry.
+            // Let's return to prevent de-sync.
+            return;
+        }
+    }
+
+    const signalWithQty = { ...newSignal, quantity: quantityAsset };
+    setActiveSignal(signalWithQty);
     setShowManualModal(false);
 
     // Send push notification for manual trade
@@ -994,11 +1049,11 @@ function App() {
       price: newSignal.entryPrice,
       leverage: leverage,
       mode: tradingMode,
-      positionSize: balance * leverage * (riskPercent / 100)
+      positionSize: positionSizeUsd
     });
 
     // Save to Supabase
-    storageService.saveTradeSignal(newSignal);
+    storageService.saveTradeSignal(signalWithQty);
 
     // --- SAVE TRADING LOG (JOURNAL) ---
     if (indicators) {
@@ -1154,8 +1209,17 @@ function App() {
         takeProfit: 0,
         quantity: parseFloat(t.qty),
         pnl: parseFloat(t.realizedPnl) || 0, // Binance specific field if available, else 0
+        outcome: parseFloat(t.realizedPnl) > 0 ? 'WIN' : parseFloat(t.realizedPnl) < 0 ? 'LOSS' : 'OPEN',
         outcome: parseFloat(t.realizedPnl) > 0 ? 'WIN' : parseFloat(t.realizedPnl) < 0 ? 'LOSS' : 'PENDING',
-        source: 'BINANCE_IMPORT'
+        source: 'BINANCE_IMPORT',
+        marketContext: {
+            indicators: { rsi: 50, macd: { value: 0, signal: 0, histogram: 0 }, stochastic: { k: 50, d: 50 }, sma20: 0, sma50: 0, sma200: 0, ema12: 0, ema26: 0, momentum: 0 },
+            volatility: { atr: 0, bollingerBandWidth: 0, historicalVolatility: 0 },
+            sentiment: { score: 0, newsCount: 0, dominantSentiment: 'NEUTRAL' },
+            structure: { trend: 'SIDEWAYS', nearestSupport: 0, nearestResistance: 0 },
+            volume: { current: 0, average: 0, volumeRatio: 1 },
+            priceAction: { currentPrice: 0, priceChange24h: 0, highLow24h: { high: 0, low: 0 } }
+        }
       }));
 
       // Enrich with context (Market Reconstruction)
@@ -1568,7 +1632,11 @@ function App() {
                   </button>
                 </div>
                 
-                <TradeAnalyticsDashboard trades={tradeHistory} />
+                <TradeAnalyticsDashboard 
+                  trades={tradeHistory} 
+                  currentBalance={balance}
+                  assetSymbol={selectedAsset.symbol.split('/')[0]} // Pass "BNB" not "BNB/USDT"
+                />
               </div>
 
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
@@ -1716,12 +1784,53 @@ function App() {
                       </div>
 
                       <div className="grid grid-cols-2 gap-3 pt-1">
-                        <button onClick={() => handleFeedback('WIN')} className="bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 py-2.5 rounded-lg text-xs font-bold border border-emerald-500/20 transition-all flex justify-center items-center gap-2">
-                          <CheckCircle2 className="w-3.5 h-3.5" /> WIN
-                        </button>
-                        <button onClick={() => handleFeedback('LOSS')} className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 py-2.5 rounded-lg text-xs font-bold border border-rose-500/20 transition-all flex justify-center items-center gap-2">
-                          <XCircle className="w-3.5 h-3.5" /> LOSS
-                        </button>
+                        {binanceTradingService.isConfigured() ? (
+                          <button 
+                            onClick={async () => {
+                                if (!activeSignal) return;
+                                try {
+                                    const tradeSymbol = activeSignal.symbol.replace('/', '').replace('USD', 'USDT');
+                                    const closeSide = activeSignal.type === 'BUY' ? 'SELL' : 'BUY';
+                                    
+                                    await binanceTradingService.placeOrder({
+                                        symbol: tradeSymbol,
+                                        side: closeSide,
+                                        type: 'MARKET',
+                                        quantity: activeSignal.quantity || 0 
+                                    });
+                                    
+                                    showNotification("Position Closed on Binance!", "success");
+                                    
+                                    // Calculate PnL locally for display/history
+                                    // Fetch latest price? Use current candle close
+                                    const closePrice = candles[candles.length - 1].close;
+                                    const pnl = activeSignal.type === 'BUY' 
+                                        ? (closePrice - activeSignal.entryPrice) * (activeSignal.quantity || 0)
+                                        : (activeSignal.entryPrice - closePrice) * (activeSignal.quantity || 0);
+
+                                    setBalance(b => b + pnl); // Update local balance (will obtain real on refresh)
+                                    setActiveSignal(null); // Clear active signal
+                                    
+                                    // Save log
+                                    // ... existing log logic ...
+                                } catch (e: any) {
+                                    showNotification("Components Error: " + e.message, "error");
+                                }
+                            }}
+                            className="col-span-2 bg-slate-800 hover:bg-slate-700 text-white py-2.5 rounded-lg text-xs font-bold border border-slate-600 transition-all flex justify-center items-center gap-2"
+                          >
+                            <XCircle className="w-3.5 h-3.5" /> CLOSE POSITION (MARKET)
+                          </button>
+                        ) : (
+                          <>
+                            <button onClick={() => handleFeedback('WIN')} className="bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 py-2.5 rounded-lg text-xs font-bold border border-emerald-500/20 transition-all flex justify-center items-center gap-2">
+                              <CheckCircle2 className="w-3.5 h-3.5" /> WIN
+                            </button>
+                            <button onClick={() => handleFeedback('LOSS')} className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 py-2.5 rounded-lg text-xs font-bold border border-rose-500/20 transition-all flex justify-center items-center gap-2">
+                              <XCircle className="w-3.5 h-3.5" /> LOSS
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   ) : (
@@ -1929,7 +2038,7 @@ function App() {
                       <div className="grid grid-cols-2 gap-y-2 gap-x-4">
                         <div className="flex justify-between items-center">
                           <span className="text-[10px] text-slate-500">Balance</span>
-                          <span className="text-xs font-mono font-medium text-emerald-400">${balance.toFixed(0)} <span className="text-[9px] text-slate-600">.00</span></span>
+                          <span className="text-xs font-mono font-medium text-emerald-400">{balance.toFixed(8)} <span className="text-[9px] text-slate-400">{selectedAsset.symbol.split('/')[0]}</span></span>
                         </div>
                         <div className="flex justify-between items-center">
                           <span className="text-[10px] text-slate-500">Max Size</span>

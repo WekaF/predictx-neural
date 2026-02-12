@@ -8,7 +8,38 @@ const CORS_PROXIES = [
     { name: 'cors.sh', url: 'https://proxy.cors.sh/', needsEncoding: false }
 ];
 
-const BINANCE_API_BASE = 'https://api.binance.com/api/v3';
+// API Configuration with Testnet Support
+const BINANCE_PRODUCTION_API = 'https://api.binance.com/api/v3';
+const BINANCE_TESTNET_API = 'https://testnet.binance.vision/api/v3';
+const BINANCE_TESTNET_WS = 'wss://testnet.binance.vision/ws';
+const BINANCE_PRODUCTION_WS = 'wss://stream.binance.com:9443/ws';
+
+/**
+ * Get API configuration based on testnet setting
+ */
+function getApiConfig(): { apiBase: string; wsBase: string } {
+    try {
+        const settings = localStorage.getItem('neurotrade_settings');
+        const useTestnet = settings ? JSON.parse(settings).useTestnet : false;
+        
+        if (useTestnet) {
+            console.log('[Binance] 🧪 Using TESTNET mode');
+            return {
+                apiBase: BINANCE_TESTNET_API,
+                wsBase: BINANCE_TESTNET_WS
+            };
+        }
+    } catch (e) {
+        console.warn('[Binance] Failed to read testnet setting, using production');
+    }
+    
+    return {
+        apiBase: BINANCE_PRODUCTION_API,
+        wsBase: BINANCE_PRODUCTION_WS
+    };
+}
+
+const BINANCE_API_BASE = BINANCE_PRODUCTION_API; // Fallback default
 
 /**
  * Helper to fetch with timeout
@@ -118,7 +149,8 @@ function setCachedData(symbol: string, interval: string, data: Candle[]): void {
     });
 }
 
-const BINANCE_WS_API = 'wss://stream.binance.com:9443/ws';
+// WebSocket API - dynamically selected based on testnet mode
+const getBinanceWsApi = () => getApiConfig().wsBase;
 
 // Symbol mapping: App format → Binance format
 const SYMBOL_MAP: Record<string, string> = {
@@ -389,7 +421,7 @@ export function connectKlineStream(
 ): WebSocket {
     const binanceSymbol = toBinanceSymbol(symbol).toLowerCase();
     const stream = `${binanceSymbol}@kline_${interval}`;
-    const url = `${BINANCE_WS_API}/${stream}`;
+    const url = `${getBinanceWsApi()}/${stream}`;
 
     console.log(`[Binance WS] Connecting to ${stream}...`);
     const ws = new WebSocket(url);
@@ -478,7 +510,7 @@ export const connectOrderBookStream = (
 ): WebSocket => {
     const binanceSymbol = toBinanceSymbol(symbol).toLowerCase();
     const stream = `${binanceSymbol}@depth10@100ms`; // 10 levels, 100ms update
-    const url = `${BINANCE_WS_API}/${stream}`;
+    const url = `${getBinanceWsApi()}/${stream}`;
 
     const ws = new WebSocket(url);
 

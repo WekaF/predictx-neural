@@ -18,6 +18,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
     const [usingProxy, setUsingProxy] = useState(false);
     const [isBlindMode, setIsBlindMode] = useState(false);
     const [testEventType, setTestEventType] = useState<'SIGNAL_ENTRY' | 'TAKE_PROFIT' | 'STOP_LOSS'>('SIGNAL_ENTRY');
+    const [useTestnet, setUseTestnet] = useState(false);
 
     // AI Training State
     const [isTrainingHistory, setIsTrainingHistory] = useState(false);
@@ -33,13 +34,15 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
         setWebhookUrl(settings.webhookUrl);
         setWebhookMethod(settings.webhookMethod);
         setEnabled(settings.enableNotifications);
+        setUseTestnet(settings.useTestnet || false);
     }, []);
 
     const handleSave = () => {
         storageService.saveSettings({
             webhookUrl,
             webhookMethod,
-            enableNotifications: enabled
+            enableNotifications: enabled,
+            useTestnet
         });
         onClose();
     };
@@ -173,6 +176,28 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                                     </div>
                                 )}
                             </div>
+                        </div>
+
+                        <div className="bg-slate-800/30 p-4 rounded-lg border border-slate-800">
+                            <div className="flex items-center justify-between mb-4">
+                                <div className="flex items-center gap-2">
+                                    <Database className="w-4 h-4 text-amber-400" />
+                                    <label className="text-sm font-bold text-white">Paper Trading (Testnet)</label>
+                                </div>
+                                <button
+                                    onClick={() => setUseTestnet(!useTestnet)}
+                                    className={`w-10 h-5 rounded-full transition-colors relative ${useTestnet ? 'bg-amber-500' : 'bg-slate-700'}`}
+                                >
+                                    <div className={`absolute top-1 left-1 w-3 h-3 bg-white rounded-full transition-transform ${useTestnet ? 'translate-x-5' : ''}`}></div>
+                                </button>
+                            </div>
+                            <p className="text-xs text-slate-400 leading-relaxed">
+                                {useTestnet ? (
+                                    <>🧪 <strong className="text-amber-400">PAPER TRADING ACTIVE:</strong> Using Binance Testnet for <strong>demo trading</strong> with fake funds. Risk-free practice environment.</>
+                                ) : (
+                                    <>💎 <strong className="text-emerald-400">LIVE TRADING:</strong> Using Binance Production API for <strong>real trading</strong> with actual funds. <span className="text-red-400">Use with caution.</span></>
+                                )}
+                            </p>
                         </div>
 
                         <div className="bg-slate-800/30 p-4 rounded-lg border border-slate-800">

@@ -5,23 +5,141 @@
 
 import crypto from 'crypto-js';
 
-// Binance API Configuration
-const BINANCE_API_BASE = '';
+// CORS Proxies for browser requests
+const CORS_PROXIES = [
+    { name: 'corsproxy', url: 'https://corsproxy.io/?', needsEncoding: true },
+    { name: 'allorigins', url: 'https://api.allorigins.win/raw?url=', needsEncoding: true },
+    { name: 'thingproxy', url: 'https://thingproxy.freeboard.io/fetch/', needsEncoding: false }
+];
+
+// Binance API Configuration with Testnet Support
+const BINANCE_PRODUCTION_API = 'https://api.binance.com';
+const BINANCE_TESTNET_API = 'https://testnet.binance.vision';
+
+/**
+ * Get API base URL based on testnet setting
+ * Uses local proxy in development to avoid CORS
+ */
+function getApiBase(): string {
+    const isDev = import.meta.env.DEV;
+    
+    try {
+        const settings = localStorage.getItem('neurotrade_settings');
+        const useTestnet = settings ? JSON.parse(settings).useTestnet : false;
+        
+        if (useTestnet) {
+            console.log('[Binance Trading] 🧪 Using TESTNET mode');
+            // In dev, use local proxy to avoid CORS
+            return isDev ? '/api/testnet' : BINANCE_TESTNET_API;
+        }
+    } catch (e) {
+        console.warn('[Binance Trading] Failed to read testnet setting, using production');
+    }
+    
+    // In dev, use local proxy
+    return isDev ? '/api/binance' : BINANCE_PRODUCTION_API;
+}
 
 // Load API credentials from environment (works in both browser and Node.js)
-const BINANCE_API_KEY = typeof import.meta !== 'undefined' && import.meta.env 
-    ? import.meta.env.VITE_BINANCE_API_KEY 
-    : process.env.VITE_BINANCE_API_KEY;
+// Support separate keys for production and testnet
+function getApiCredentials(): { apiKey: string; secretKey: string } {
+    const isTestnet = (() => {
+        try {
+            const settings = localStorage.getItem('neurotrade_settings');
+            return settings ? JSON.parse(settings).useTestnet : false;
+        } catch {
+            return false;
+        }
+    })();
 
-const BINANCE_SECRET_KEY = typeof import.meta !== 'undefined' && import.meta.env
-    ? import.meta.env.VITE_BINANCE_SECRET_KEY
-    : process.env.VITE_BINANCE_SECRET_KEY;
+    if (isTestnet) {
+        const testnetKey = typeof import.meta !== 'undefined' && import.meta.env 
+            ? import.meta.env.VITE_BINANCE_API_KEY_TESTNET 
+            : process.env.VITE_BINANCE_API_KEY_TESTNET;
+        const testnetSecret = typeof import.meta !== 'undefined' && import.meta.env
+            ? import.meta.env.VITE_BINANCE_API_SECRET_TESTNET
+            : process.env.VITE_BINANCE_API_SECRET_TESTNET;
+        
+        if (testnetKey && testnetSecret) {
+            return { apiKey: testnetKey, secretKey: testnetSecret };
+        }
+    }
+
+    // Fallback to production keys
+    const prodKey = typeof import.meta !== 'undefined' && import.meta.env 
+        ? import.meta.env.VITE_BINANCE_API_KEY 
+        : process.env.VITE_BINANCE_API_KEY;
+    const prodSecret = typeof import.meta !== 'undefined' && import.meta.env
+        ? import.meta.env.VITE_BINANCE_SECRET_KEY
+        : process.env.VITE_BINANCE_SECRET_KEY;
+
+    return { apiKey: prodKey || '', secretKey: prodSecret || '' };
+}
 
 /**
  * Generate HMAC SHA256 signature for Binance API
  */
 function generateSignature(queryString: string): string {
-    return crypto.HmacSHA256(queryString, BINANCE_SECRET_KEY).toString();
+    const { secretKey } = getApiCredentials();
+    return crypto.HmacSHA256(queryString, secretKey).toString();
+}
+
+/**
+ * Helper to fetch with CORS proxy fallback
+ */
+async function fetchWithProxy(url: string, options: RequestInit = {}): Promise<Response> {
+    // 0. If using local proxy (Vite), just fetch directly
+    if (url.startsWith('/')) {
+        console.log(`[Binance] Fetching via local proxy: ${url}`);
+        const response = await fetch(url, options);
+        if (!response.ok) {
+            const text = await response.text();
+            throw new Error(`Local Proxy Error: ${response.status} - ${text}`);
+        }
+        return response;
+    }
+
+    // 1. Try direct request first (for production or non-proxy envs)
+    try {
+        const response = await fetch(url, options);
+        if (response.ok) return response;
+        // If not ok, throw to trigger fallback (unless it's a 4xx error from API that we should handle)
+        if (response.status === 0 || response.status === 403 || response.type === 'opaque' || response.type === 'error') {
+            throw new Error('CORS or Network Error');
+        }
+        return response;
+    } catch (error) {
+        console.warn(`[Binance] Direct fetch failed for ${url}, trying proxies...`);
+    }
+
+    // 2. Try proxies (Only for full URLs)
+    console.log(`[Binance] Available proxies: ${CORS_PROXIES.length}`);
+    for (const proxy of CORS_PROXIES) {
+        try {
+            const proxyUrl = proxy.needsEncoding 
+                ? `${proxy.url}${encodeURIComponent(url)}`
+                : `${proxy.url}${url}`;
+            
+            console.log(`[Binance] Trying ${proxy.name} proxy... URL: ${proxyUrl.substring(0, 50)}...`);
+            
+            // Proxies usually only support GET well, but for Binance we mostly use GET
+            // For POST/DELETE we might need specific proxy config or passthrough
+            // const proxyOptions = { ...options, method: 'GET' }; 
+            
+            const response = await fetch(proxyUrl, options);
+            
+            if (response.ok) {
+                console.log(`[Binance] ✅ Success via ${proxy.name} proxy`);
+                return response;
+            } else {
+                console.warn(`[Binance] ⚠️ ${proxy.name} proxy responded with status: ${response.status}`);
+            }
+        } catch (e) {
+            console.warn(`[Binance] ❌ ${proxy.name} proxy failed:`, e);
+        }
+    }
+
+    throw new Error('All connection attempts failed (Direct + Proxies)');
 }
 
 /**
@@ -30,15 +148,16 @@ function generateSignature(queryString: string): string {
 let serverTimeOffset = 0;
 async function syncServerTime(): Promise<void> {
     try {
-        const response = await fetch(`${BINANCE_API_BASE}/api/v3/time`);
+        const url = `${getApiBase()}/api/v3/time`;
+        const response = await fetchWithProxy(url);
         const data = await response.json();
         const serverTime = data.serverTime;
         const localTime = Date.now();
         serverTimeOffset = serverTime - localTime;
         console.log(`[Binance Auth] ⏰ Time synced. Offset: ${serverTimeOffset}ms`);
     } catch (error) {
-        console.warn('[Binance Auth] ⚠️ Could not sync server time, using local time');
-        serverTimeOffset = 0;
+        console.error('[Binance Auth] ❌ Could not sync server time:', error);
+        // Don't swallow error, let it propagate or keep previous offset
     }
 }
 
@@ -50,14 +169,14 @@ async function authenticatedRequest(
     method: 'GET' | 'POST' | 'DELETE' = 'GET',
     params: Record<string, any> = {}
 ): Promise<any> {
-    if (!BINANCE_API_KEY || !BINANCE_SECRET_KEY) {
+    const { apiKey, secretKey } = getApiCredentials();
+    
+    if (!apiKey || !secretKey) {
         throw new Error('Binance API credentials not configured. Please set VITE_BINANCE_API_KEY and VITE_BINANCE_SECRET_KEY in .env.local');
     }
 
-    // Sync server time on first request
-    if (serverTimeOffset === 0) {
-        await syncServerTime();
-    }
+    // CRITICAL: Always sync server time before authenticated requests
+    await syncServerTime();
 
     // Add timestamp with server offset
     const timestamp = Date.now() + serverTimeOffset;
@@ -76,20 +195,20 @@ async function authenticatedRequest(
     const signature = generateSignature(queryString);
     const signedQueryString = `${queryString}&signature=${signature}`;
 
-    // Make request
-    const url = `${BINANCE_API_BASE}${endpoint}?${signedQueryString}`;
+    // Make request - use dynamic API base with CORS proxy fallback
+    const baseUrl = `${getApiBase()}${endpoint}?${signedQueryString}`;
     
     try {
-        const response = await fetch(url, {
+        const response = await fetchWithProxy(baseUrl, {
             method,
             headers: {
-                'X-MBX-APIKEY': BINANCE_API_KEY
+                'X-MBX-APIKEY': apiKey
             }
         });
 
         if (!response.ok) {
-            const error = await response.json();
-            throw new Error(`Binance API Error: ${error.msg || response.statusText}`);
+            const errorText = await response.text();
+            throw new Error(`Binance API Error: ${response.status} - ${errorText}`);
         }
 
         return await response.json();
@@ -189,9 +308,14 @@ export async function cancelOrder(symbol: string, orderId: number): Promise<any>
  * Get trade history
  */
 export async function getTradeHistory(symbol: string, limit: number = 500): Promise<any[]> {
-    console.log(`[Binance Auth] Fetching trade history for ${symbol}...`);
-    const data = await authenticatedRequest('/api/v3/myTrades', 'GET', { symbol, limit });
-    console.log(`[Binance Auth] ✅ Found ${data.length} trades`);
+    // Sanitize symbol: 
+    // 1. Replace /USD with USDT (e.g. BTC/USD -> BTCUSDT)
+    // 2. Remove / (e.g. BTC/USDT -> BTCUSDT)
+    const formattedSymbol = symbol.replace('/USD', 'USDT').replace('/', '');
+    
+    console.log(`[Binance Auth] Fetching trade history for ${formattedSymbol}...`);
+    const data = await authenticatedRequest('/api/v3/myTrades', 'GET', { symbol: formattedSymbol, limit });
+    console.log(`[Binance Auth] ✅ Found ${data ? data.length : 0} trades`);
     return data;
 }
 
@@ -214,7 +338,8 @@ export async function testConnection(): Promise<boolean> {
  * Check if API credentials are configured
  */
 export function isConfigured(): boolean {
-    return !!(BINANCE_API_KEY && BINANCE_SECRET_KEY);
+    const { apiKey, secretKey } = getApiCredentials();
+    return !!(apiKey && secretKey);
 }
 
 export default {

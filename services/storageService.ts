@@ -339,12 +339,13 @@ export const storageService = {
         return {
           webhookUrl: urlToUse,
           webhookMethod: parsed.webhookMethod || 'POST',
-          enableNotifications: parsed.enableNotifications ?? false
+          enableNotifications: parsed.enableNotifications ?? false,
+          useTestnet: parsed.useTestnet ?? false
         };
       }
-      return { webhookUrl: defaultUrl, webhookMethod: 'POST', enableNotifications: false };
+      return { webhookUrl: defaultUrl, webhookMethod: 'POST', enableNotifications: false, useTestnet: false };
     } catch (e) {
-      return { webhookUrl: defaultUrl, webhookMethod: 'POST', enableNotifications: false };
+      return { webhookUrl: defaultUrl, webhookMethod: 'POST', enableNotifications: false, useTestnet: false };
     }
   },
 

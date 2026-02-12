@@ -10,10 +10,19 @@ export default defineConfig(({ mode }) => {
       port: 3000,
       host: '0.0.0.0',
       proxy: {
-        '/api': {
-          target: 'https://api.binance.com', // Standard endpoint
-          changeOrigin: true
+        // Binance Production Proxy
+        '/api/binance': {
+          target: 'https://api.binance.com',
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/api\/binance/, '')
         },
+        // Binance Testnet Proxy
+        '/api/testnet': {
+          target: 'https://testnet.binance.vision',
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/api\/testnet/, '')
+        },
+        // AI Backend Proxy
         '/ai-api': {
           target: 'http://127.0.0.1:8000',
           changeOrigin: true,

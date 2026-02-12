@@ -43,6 +43,7 @@ export interface TradeSignal {
     execution_status: string;
   };
   marketContext?: MarketContext;
+  quantity?: number; // Added for real execution tracking
 }
 
 export interface TechnicalIndicators {
@@ -155,6 +156,7 @@ export interface AppSettings {
   webhookUrl: string;
   webhookMethod: 'POST' | 'GET';
   enableNotifications: boolean;
+  useTestnet: boolean;
 }
 
 export interface Asset {
