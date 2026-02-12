@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Activity, Zap, TrendingUp, TrendingDown, RefreshCw, ShieldCheck, DollarSign, BrainCircuit, Target, BookOpen, FlaskConical, LayoutDashboard, ChevronDown, Layers, Globe, Radio, PenTool, AlertCircle, CheckCircle2, List, Bell, Edit3, Settings as SettingsIcon, Coins, AlertTriangle, CheckCircle, XCircle, BarChart3, Trash2, Settings } from 'lucide-react';
+import { Activity, Zap, TrendingUp, TrendingDown, RefreshCw, ShieldCheck, DollarSign, BrainCircuit, Target, BookOpen, FlaskConical, LayoutDashboard, ChevronDown, Layers, Globe, Radio, PenTool, AlertCircle, CheckCircle2, List, Bell, Edit3, Settings as SettingsIcon, Coins, AlertTriangle, CheckCircle, XCircle, BarChart3, Trash2, Settings, Brain, UploadCloud } from 'lucide-react';
 import { TradingJournal } from './components/TradingJournal';
 import { TradingLog } from './types';
 import ModernCandleChart from './components/CandleChart';
@@ -20,7 +20,15 @@ import { HeaderControls } from './components/HeaderControls';
 import { calculateRSI, calculateFibonacci, analyzeTrend, calculateSMA, calculateEMA, findSupportResistance, calculateMACD, calculateStochastic, calculateMomentum } from './utils/technical';
 import { getHistoricalKlines, getCurrentPrice } from './services/binanceService';
 import { getAccountBalances } from './services/binanceTradingService';
-import { analyzeMarket, trainModel, refreshModel } from './services/mlService';
+import { analyzeMarket, trainModel, refreshModel, batchTrainModel, optimizeHyperparameters } from './services/mlService';
+import { marketContextService } from './services/marketContextService';
+import { batchTrainingService, enrichTradeWithContext } from './services/batchTrainingService';
+import binanceTradingService from './services/binanceTradingService';
+import { hyperparameterOptimizer } from './services/hyperparameterOptimizer';
+import { TradeAnalyticsDashboard } from './components/TradeAnalyticsDashboard';
+import { BatchTrainingPanel } from './components/BatchTrainingPanel';
+import { HyperparameterOptimizer } from './components/HyperparameterOptimizer';
+import { EnhancedExecutedTrade } from './types/enhanced';
 import { generateMarketNews, calculateAggregateSentiment } from './services/newsService';
 import { storageService } from './services/storageService';
 import { sendWebhookNotification } from './services/webhookService';
@@ -57,22 +65,54 @@ const BINANCE_ASSETS: Asset[] = [
 
 const SUPPORTED_ASSETS = BINANCE_ASSETS;
 
-function App() {
+function App() {  
   const [candles, setCandles] = useState<Candle[]>([]);
   const [indicators, setIndicators] = useState<TechnicalIndicators | null>(null);
 
   // Asset State
   const [selectedAsset, setSelectedAsset] = useState<Asset>(SUPPORTED_ASSETS[0]);
   const [isAssetMenuOpen, setIsAssetMenuOpen] = useState(false);
-  const [selectedInterval, setSelectedInterval] = useState<string>('5m'); // Candle interval
+  const [selectedInterval, setSelectedInterval] = useState<string>('15m'); // Candle interval
 
   // Trade States
   const [pendingSignal, setPendingSignal] = useState<TradeSignal | null>(null); // Awaiting confirmation
   const [activeSignal, setActiveSignal] = useState<TradeSignal | null>(null); // Confirmed & Active
-  const [tradeHistory, setTradeHistory] = useState<ExecutedTrade[]>([]);
+
+  // Helper to map raw logs to EnhancedExecutedTrade
+  const mapToEnhancedTrades = (logs: any[]): EnhancedExecutedTrade[] => {
+    return logs.map((log: any) => ({
+      id: log.id,
+      symbol: log.symbol,
+      entryTime: log.entryTime || log.created_at || new Date().toISOString(),
+      exitTime: log.exitTime || log.updated_at || new Date().toISOString(),
+      type: log.type,
+      entryPrice: log.entryPrice || log.entry_price || 0,
+      exitPrice: log.exitPrice || log.exit_price || 0,
+      stopLoss: log.stopLoss || log.stop_loss || 0,
+      takeProfit: log.takeProfit || log.take_profit || 0,
+      quantity: log.quantity || 0,
+      pnl: log.pnl || 0,
+      outcome: log.outcome || 'PENDING',
+      source: log.source || 'AI',
+      marketContext: log.marketContext || log.market_context,
+      patternDetected: log.patternDetected || log.pattern_detected,
+      confluenceFactors: log.confluenceFactors || log.confluence_factors,
+      aiConfidence: log.aiConfidence || log.ai_confidence,
+      aiReasoning: log.aiReasoning || log.ai_reasoning,
+      holdDuration: log.holdDuration || log.hold_duration,
+      riskRewardRatio: log.riskRewardRatio || log.risk_reward_ratio,
+      actualRR: log.actualRR || log.actual_rr,
+      tags: log.tags
+    }));
+  };
+ // Confirmed & Active
+  const [tradeHistory, setTradeHistory] = useState<EnhancedExecutedTrade[]>([]);
 
   // UI States
   const [showManualModal, setShowManualModal] = useState(false);
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [isSyncingHistory, setIsSyncingHistory] = useState(false);
   const [showStrategyGuide, setShowStrategyGuide] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [editingFeedback, setEditingFeedback] = useState<TrainingData | null>(null);
@@ -101,7 +141,7 @@ function App() {
   const [sentimentScore, setSentimentScore] = useState(0); // -1 to 1
 
   // Navigation & Config
-  const [currentView, setCurrentView] = useState<'terminal' | 'backtest' | 'analytics' | 'leverage' | 'journal' | 'training'>('terminal');
+  const [currentView, setCurrentView] = useState<'terminal' | 'backtest' | 'analytics' | 'leverage' | 'journal' | 'training' | 'ai-intelligence'>('terminal');
   const [dbConnected, setDbConnected] = useState(false);
   const [aiReady, setAiReady] = useState(false);
 
@@ -118,6 +158,26 @@ function App() {
       setTrainingHistory(savedData);
       console.log(`[App] ✅ Loaded ${savedData.length} training records from local storage`);
     }
+
+    // 1b. Load Trade History (Local + Cloud Sync)
+    const loadTradeHistory = async () => {
+      // First load local
+      const savedTradeLogs = storageService.getTradingLogs();
+      if (savedTradeLogs.length > 0) {
+        setTradeHistory(mapToEnhancedTrades(savedTradeLogs));
+      }
+
+      // Then sync from cloud
+      const cloudLogs = await storageService.fetchTradingLogsFromSupabase();
+      if (cloudLogs.length > 0) {
+        // Merge with local (cloud takes precedence or just replace if simple)
+        // For simplicity, we'll verify if cloud has more/newer data
+        const merged = [...cloudLogs]; 
+        setTradeHistory(mapToEnhancedTrades(merged));
+        console.log(`[App] ✅ Synced ${merged.length} trade history records from Supabase`);
+      }
+    };
+    loadTradeHistory();
 
     // 2. Load Binance Account Balance
     const loadBinanceBalance = async () => {
@@ -534,7 +594,7 @@ function App() {
             setBalance(b => b + pnl);
 
             // Add to Trade History
-            const completedTrade: ExecutedTrade = {
+            const completedTrade: EnhancedExecutedTrade = {
               id: currentSignal.id,
               symbol: currentSignal.symbol,
               entryTime: new Date(currentSignal.timestamp).toLocaleTimeString(),
@@ -547,9 +607,17 @@ function App() {
               quantity: quantity,
               pnl: pnl,
               outcome: closedOutcome,
-              source: currentSignal.patternDetected === "Manual Entry" ? "MANUAL" : "AI"
+              source: currentSignal.patternDetected === "Manual Entry" ? "MANUAL" : "AI",
+              marketContext: currentSignal.marketContext,
+              aiConfidence: currentSignal.confidence,
+              aiReasoning: currentSignal.reasoning,
+              patternDetected: currentSignal.patternDetected,
+              confluenceFactors: currentSignal.confluenceFactors
             };
             setTradeHistory(prev => [completedTrade, ...prev]);
+
+            // Persist to localStorage and Supabase
+            storageService.saveTradingLog(completedTrade);
 
             // --- TRIGGER AUTOMATION ---
             sendWebhookNotification(webhookEvent, currentSignal, closePrice).then(res => {
@@ -645,7 +713,13 @@ function App() {
     const signal = await analyzeMarket(candles, indicators, trainingHistory, marketNews.slice(0, 5), selectedAsset.symbol);
     console.log('[handleAnalyze] 📊 Signal generated:', signal);
     
-    if (signal) setLastAnalysis(signal);
+    // Capture enhanced market context at the moment of analysis
+    const context = marketContextService.captureMarketContext(candles, indicators, sentimentScore, marketNews);
+    
+    if (signal) {
+      signal.marketContext = context;
+      setLastAnalysis(signal);
+    }
 
     setIsAnalyzing(false);
 
@@ -1048,6 +1122,80 @@ function App() {
 
   const riskAmount = balance * (riskPercent / 100);
 
+  const handleSyncHistory = async () => {
+    if (!binanceTradingService.isConfigured()) {
+      showNotification("Binance API credentials missing. Configure in settings.", "error");
+      return;
+    }
+
+    setIsSyncingHistory(true);
+    try {
+      showNotification(`Fetching trade history for ${selectedAsset.symbol}...`, "info");
+      const binanceTrades = await binanceTradingService.getTradeHistory(selectedAsset.symbol);
+      
+      if (binanceTrades.length === 0) {
+        showNotification("No account history found for this symbol.", "warning");
+        setIsSyncingHistory(false);
+        return;
+      }
+
+      showNotification(`Found ${binanceTrades.length} trades. Enriching with market data...`, "info");
+
+      // Convert to EnhancedExecutedTrade
+      const mappedTrades: EnhancedExecutedTrade[] = binanceTrades.map(t => ({
+        id: String(t.id),
+        symbol: t.symbol,
+        entryTime: new Date(t.time).toISOString(),
+        exitTime: new Date(t.time).toISOString(), // Approximate
+        type: t.isBuyer ? 'BUY' : 'SELL',
+        entryPrice: parseFloat(t.price),
+        exitPrice: parseFloat(t.price), // It's a single execution
+        stopLoss: 0,
+        takeProfit: 0,
+        quantity: parseFloat(t.qty),
+        pnl: parseFloat(t.realizedPnl) || 0, // Binance specific field if available, else 0
+        outcome: parseFloat(t.realizedPnl) > 0 ? 'WIN' : parseFloat(t.realizedPnl) < 0 ? 'LOSS' : 'PENDING',
+        source: 'BINANCE_IMPORT'
+      }));
+
+      // Enrich with context (Market Reconstruction)
+      const enrichedTrades: EnhancedExecutedTrade[] = [];
+      for (const trade of mappedTrades) {
+         // Check if already exists to avoid re-enriching cost
+         const exists = tradeHistory.find(h => h.id === trade.id);
+         if (exists && exists.marketContext) {
+           enrichedTrades.push(exists);
+         } else {
+           const enriched = await enrichTradeWithContext(trade);
+           enrichedTrades.push(enriched);
+         }
+      }
+
+      // Merge with existing
+      const merged = [...enrichedTrades];
+      // Add existing non-Binance logs if any? 
+      // Actually we should merge by ID.
+      const existingMap = new Map(tradeHistory.map(t => [t.id, t]));
+      enrichedTrades.forEach(t => existingMap.set(t.id, t));
+      
+      const uniqueSorted = Array.from(existingMap.values()).sort((a, b) => 
+        new Date(b.entryTime).getTime() - new Date(a.entryTime).getTime()
+      );
+
+      setTradeHistory(uniqueSorted);
+      
+      // Save
+      merged.forEach(t => storageService.saveTradingLog(t));
+      
+      showNotification(`Successfully synced ${enrichedTrades.length} trades!`, "success");
+    } catch (error: any) {
+      console.error("Sync error:", error);
+      showNotification(`Failed to sync history: ${error.message}`, "error");
+    } finally {
+      setIsSyncingHistory(false);
+    }
+  };
+
   return (
     <div className="h-screen flex flex-col md:flex-row text-slate-200 overflow-hidden relative">
 
@@ -1130,12 +1278,22 @@ function App() {
           </button>
 
           <button
-            onClick={() => setCurrentView('training')}
-            className={`p-3 rounded-lg transition-colors flex justify-center ${currentView === 'training' ? 'bg-slate-800 text-pink-400' : 'text-slate-400 hover:bg-slate-800 hover:text-pink-400'}`}
-            title="AI Training Dashboard"
-          >
-            <BrainCircuit className="w-5 h-5" />
-          </button>
+              onClick={() => setCurrentView('training')}
+              className={`p-3 rounded-xl transition-all duration-300 group relative ${currentView === 'training' ? 'bg-pink-500/10 text-pink-400' : 'text-slate-400 hover:bg-white/5'}`}
+              title="AI Training"
+            >
+              <BrainCircuit className="w-5 h-5 group-hover:scale-110 transition-transform" />
+              {currentView === 'training' && <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 bg-pink-500 rounded-r-full shadow-[0_0_10px_rgba(236,72,153,0.5)]"></div>}
+            </button>
+
+            <button
+              onClick={() => setCurrentView('ai-intelligence')}
+              className={`p-3 rounded-xl transition-all duration-300 group relative ${currentView === 'ai-intelligence' ? 'bg-blue-500/10 text-blue-400' : 'text-slate-400 hover:bg-white/5'}`}
+              title="AI Intelligence"
+            >
+              <Brain className="w-5 h-5 group-hover:scale-110 transition-transform" />
+              {currentView === 'ai-intelligence' && <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 bg-blue-500 rounded-r-full shadow-[0_0_10px_rgba(59,130,246,0.5)]"></div>}
+            </button>
 
           <button
             onClick={() => setCurrentView('leverage')}
@@ -1203,6 +1361,13 @@ function App() {
           >
             <BrainCircuit className="w-6 h-6" />
             <span className="text-[10px] font-medium">Training</span>
+          </button>
+          <button
+            onClick={() => setCurrentView('ai-intelligence')}
+            className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-colors min-w-[60px] ${currentView === 'ai-intelligence' ? 'text-blue-400' : 'text-slate-400'}`}
+          >
+            <Brain className="w-6 h-6" />
+            <span className="text-[10px] font-medium">Intelligence</span>
           </button>
           <button
             onClick={() => setCurrentView('leverage')}
@@ -1371,6 +1536,49 @@ function App() {
               </div>
               <div className="space-y-6">
                 <TrainingHistory />
+              </div>
+            </div>
+          </div>
+        ) : currentView === 'ai-intelligence' ? (
+          <div className="h-full overflow-y-auto space-y-6">
+            <div className="flex flex-col gap-6">
+              <div className="bg-[#0a0a0f] border border-white/5 rounded-2xl p-6 shadow-2xl">
+                <div className="flex items-center justify-between mb-8">
+                  <div className="flex items-center gap-4">
+                    <div className="p-3 bg-blue-500/10 rounded-2xl">
+                      <Brain className="w-8 h-8 text-blue-400" />
+                    </div>
+                    <div>
+                      <h2 className="text-2xl font-black text-white tracking-tight">AI Intelligence Hub</h2>
+                      <p className="text-gray-500 text-sm">Advanced performance analytics and model optimization</p>
+                    </div>
+                  </div>
+                  
+                  <button 
+                    onClick={handleSyncHistory}
+                    disabled={isSyncingHistory}
+                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-white font-bold text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isSyncingHistory ? (
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <UploadCloud className="w-4 h-4" />
+                    )}
+                    {isSyncingHistory ? 'Processing...' : 'Sync Binance History'}
+                  </button>
+                </div>
+                
+                <TradeAnalyticsDashboard trades={tradeHistory} />
+              </div>
+
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                <BatchTrainingPanel 
+                  trades={tradeHistory} 
+                  onComplete={() => {
+                    console.log("[App] Batch training completed");
+                  }} 
+                />
+                <HyperparameterOptimizer trades={tradeHistory} />
               </div>
             </div>
           </div>

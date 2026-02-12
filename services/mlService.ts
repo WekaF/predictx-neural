@@ -4,6 +4,9 @@ import { calculateBollingerBands } from "../utils/technical";
 import { generateUUID } from "../utils/uuid";
 import { confidenceCalibrator, adaptiveHyperparameters, patternDiscovery } from "./metaLearning";
 import { aiBackendService } from "./apiService";
+import { batchTrainingService, BatchTrainingProgress, BatchTrainingResult } from "./batchTrainingService";
+import { hyperparameterOptimizer, OptimizationResult } from "./hyperparameterOptimizer";
+import { EnhancedExecutedTrade } from "../types/enhanced";
 
 // Gemini API removed - using pure self-learning RL agent
 // import { analyzeMarketWithAI } from "./geminiService";
@@ -795,6 +798,25 @@ export const updateLearningRate = (rate: number) => {
 export const updateEpsilon = (epsilon: number) => {
     brain.epsilon = epsilon;
     console.log(`[ML] Epsilon updated to ${epsilon}`);
+};
+
+/**
+ * Retrain model from historical trades (Experienced Replay)
+ */
+export const batchTrainModel = async (
+    trades: EnhancedExecutedTrade[],
+    onProgress?: (progress: BatchTrainingProgress) => void
+): Promise<BatchTrainingResult> => {
+    return await batchTrainingService.retrainFromHistory(trades, onProgress);
+};
+
+/**
+ * Optimize AI hyperparameters based on trade history
+ */
+export const optimizeHyperparameters = (
+    trades: EnhancedExecutedTrade[]
+): OptimizationResult[] => {
+    return hyperparameterOptimizer.runOptimizationSuite(trades);
 };
 
 export const resetModel = () => {

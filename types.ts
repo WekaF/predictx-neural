@@ -1,3 +1,4 @@
+import { MarketContext } from './types/enhanced';
 
 export interface Candle {
   time: string;
@@ -41,6 +42,7 @@ export interface TradeSignal {
     sl: number;
     execution_status: string;
   };
+  marketContext?: MarketContext;
 }
 
 export interface TechnicalIndicators {

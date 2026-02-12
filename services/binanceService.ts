@@ -204,7 +204,9 @@ function normalizeKlineWS(kline: BinanceKline): Candle {
 export async function getHistoricalKlines(
     symbol: string,
     interval: string = '1m',
-    limit: number = 100
+    limit: number = 100,
+    startTime?: number,
+    endTime?: number
 ): Promise<Candle[]> {
     // Check cache first
     const cached = getCachedData(symbol, interval);
@@ -217,7 +219,11 @@ export async function getHistoricalKlines(
         const binanceSymbol = toBinanceSymbol(symbol);
         console.log(`[Binance] Fetching ${limit} ${interval} candles for ${binanceSymbol}...`);
         
-        const data = await fetchWithFallback('/klines', `symbol=${binanceSymbol}&interval=${interval}&limit=${limit}`);
+        let query = `symbol=${binanceSymbol}&interval=${interval}&limit=${limit}`;
+        if (startTime) query += `&startTime=${startTime}`;
+        if (endTime) query += `&endTime=${endTime}`;
+
+        const data = await fetchWithFallback('/klines', query);
         
         // Normalize data
         const candles = data.map((k: any[]) => normalizeKlineArray(k));

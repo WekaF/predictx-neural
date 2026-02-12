@@ -423,18 +423,84 @@ export const storageService = {
           .from('trading_journal')
           .insert({
             id: log.id,
-            trade_id: log.tradeId,
+            trade_id: log.id,
             symbol: log.symbol,
             type: log.type,
-            ai_reasoning: log.items.aiReasoning,
-            ai_confidence: log.items.aiConfidence,
-            market_snapshot: log.items.snapshot
+            entry_price: log.entryPrice,
+            exit_price: log.exitPrice,
+            stop_loss: log.stopLoss,
+            take_profit: log.takeProfit,
+            quantity: log.quantity,
+            pnl: log.pnl,
+            outcome: log.outcome,
+            source: log.source,
+            market_context: log.marketContext,
+            pattern_detected: log.patternDetected,
+            confluence_factors: log.confluenceFactors,
+            ai_confidence: log.aiConfidence,
+            ai_reasoning: log.aiReasoning,
+            hold_duration: log.holdDuration,
+            actual_rr: log.actualRR
           });
 
         if (error) console.error('[Supabase] Journal save error:', error);
+        else console.log('[Supabase] ✅ Trade saved to journal:', log.symbol, log.type);
       }
     } catch (e) {
       console.error("Failed to save trading log", e);
+    }
+  },
+
+  // Fetch from Supabase (New)
+  fetchTradingLogsFromSupabase: async (): Promise<any[]> => {
+    if (!supabase) return [];
+
+    try {
+      const { data, error } = await supabase
+        .from('trading_journal')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(100);
+
+      if (error) {
+        console.error('[Supabase] Trading logs fetch error:', error);
+        return [];
+      }
+
+      // Map Supabase snake_case to camelCase
+      const mappedData = data?.map(d => ({
+        id: d.id,
+        symbol: d.symbol,
+        type: d.type,
+        entryPrice: d.entry_price,
+        exitPrice: d.exit_price,
+        stopLoss: d.stop_loss,
+        takeProfit: d.take_profit,
+        quantity: d.quantity,
+        pnl: d.pnl,
+        outcome: d.outcome,
+        source: d.source,
+        marketContext: d.market_context,
+        patternDetected: d.pattern_detected,
+        confluenceFactors: d.confluence_factors,
+        aiConfidence: d.ai_confidence,
+        aiReasoning: d.ai_reasoning,
+        holdDuration: d.hold_duration,
+        actualRR: d.actual_rr,
+        entryTime: d.created_at, // Use created_at as entryTime if needed
+        exitTime: d.updated_at // Approximate
+      })) || [];
+
+      // Update local storage
+      if (mappedData.length > 0) {
+        localStorage.setItem('neurotrade_trading_logs', JSON.stringify(mappedData));
+      }
+
+      console.log(`[Supabase] ✅ Fetched ${mappedData.length} trading logs`);
+      return mappedData;
+    } catch (e) {
+      console.error('[Supabase] Trading logs fetch failed:', e);
+      return [];
     }
   },
 
