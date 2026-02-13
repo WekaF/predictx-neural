@@ -12,12 +12,13 @@ class TradingEnv(gym.Env):
     """
     metadata = {'render_modes': ['human']}
 
-    def __init__(self, df, initial_balance=250000, fee_rate=0.001):
+    def __init__(self, df, initial_balance=250000, fee_rate=0.001, ai_engine=None):
         super(TradingEnv, self).__init__()
 
         self.df = df
         self.initial_balance = initial_balance
         self.fee_rate = fee_rate
+        self.ai_engine = ai_engine  # Store ai_engine for LSTM predictions
 
         # State: [Close_norm, RSI, EMA_Diff, LSTM_Prob, Position, Balance_norm, Leverage]
         self.observation_space = spaces.Box(
@@ -61,8 +62,16 @@ class TradingEnv(gym.Env):
         # EMA Diff (already percentage)
         ema_diff = row['ema_diff']
 
-        # LSTM Probability (placeholder - will be filled by ai_engine)
-        lstm_prob = 0.5  # Neutral default
+        # LSTM Probability - Use ai_engine if available, otherwise default to 0.5
+        lstm_prob = 0.5  # Default neutral
+        if self.ai_engine is not None and self.current_step >= 205:
+            # Get historical candles up to current step
+            current_candles = self.df.iloc[:self.current_step+1].to_dict('records')
+            try:
+                lstm_prob = self.ai_engine.predict_next_move(current_candles)
+            except Exception as e:
+                print(f"Warning: LSTM prediction failed: {e}")
+                lstm_prob = 0.5
 
         # Position (-1=short, 0=flat, 1=long)
         position_state = 1 if self.position > 0 else 0

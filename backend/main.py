@@ -29,6 +29,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Import training router
+from api import training
+
+# Register routers
+app.include_router(training.router, prefix="/api", tags=["training"])
+
+
 @app.get("/")
 def read_root():
     return {"status": "online", "message": "PredictX AI Engine is running 🚀"}

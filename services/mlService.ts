@@ -600,14 +600,15 @@ export const analyzeMarket = async (
     const actionIndex = decision === 'BUY' ? 0 : decision === 'SELL' ? 1 : 2;
     const enhancedConfidence = brain.getEnhancedConfidence(state, actionIndex);
 
-    const MINIMUM_ENHANCED_CONFIDENCE = 45; // Require 45%+ (Lowered to allow more entries)
+    const MINIMUM_ENHANCED_CONFIDENCE = 40; // Relaxed from 45% to allow more entries
 
     if (decision !== 'HOLD' && enhancedConfidence < MINIMUM_ENHANCED_CONFIDENCE) {
-        console.log(`[Enhanced Confidence Filter] ❌ BLOCKED ${decision}: Enhanced confidence ${enhancedConfidence.toFixed(1)}% < ${MINIMUM_ENHANCED_CONFIDENCE}% threshold`);
-        console.log(`[Enhanced Confidence Filter] 🔍 Analysis: Q-value passed, but pattern/experience confidence too low. Need more data.`);
-
-        decision = 'HOLD';
-        confidence = 0;
+        const reason = `Enhanced confidence ${enhancedConfidence.toFixed(1)}% < ${MINIMUM_ENHANCED_CONFIDENCE}% threshold`;
+        console.log(`[Enhanced Confidence Filter] ❌ BLOCKED ${decision}: ${reason}`);
+        
+        // Pass the reason to the signal object for UI visibility
+        (decision as any) = 'HOLD';
+        (confidence as any) = 0;
     } else if (decision !== 'HOLD') {
         console.log(`[Enhanced Confidence Filter] ✅ PASSED: ${decision} with ${enhancedConfidence.toFixed(1)}% enhanced confidence (threshold: ${MINIMUM_ENHANCED_CONFIDENCE}%)`);
     }

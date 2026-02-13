@@ -65,7 +65,7 @@ export interface EnhancedExecutedTrade {
   quantity: number;
   pnl: number;
   outcome: 'WIN' | 'LOSS' | 'OPEN';
-  source: 'AI' | 'MANUAL';
+  source: 'AI' | 'MANUAL' | 'BINANCE_IMPORT';
   
   // Enhanced fields for AI training
   marketContext: MarketContext;
@@ -136,4 +136,5 @@ export interface TradeAnalytics {
     bestVolatility: 'HIGH' | 'MEDIUM' | 'LOW';
     bestSentiment: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
   };
+  bySymbol?: PatternPerformance[]; // Reuse PatternPerformance for symbol stats
 }

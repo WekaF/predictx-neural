@@ -66,7 +66,15 @@ def calculate_detailed_metrics(item_equity, trades, df, initial_balance):
         if 'BUY' in t['type']:
             current_buy = t
         elif 'SELL' in t['type'] and current_buy:
-            pnl = t['balance'] - current_buy['balance']
+            # Fix: PnL = Proceeds - Cost
+            # We look for 'net_value' which we will add to trade records
+            # Fallback for old logs: use balance logic but it's flawed
+            
+            sell_value = t.get('net_value', t['balance'])
+            buy_cost = current_buy.get('net_value', 0)
+            
+            pnl = sell_value - buy_cost
+            pnl_pct = (pnl / buy_cost) * 100 if buy_cost > 0 else 0
 
             # Duration
             t_time = pd.to_datetime(t['time'])
@@ -243,35 +251,37 @@ def run_backtest_v2(engine, symbol="BTC-USD", period="3mo", interval="1h"):
             pnl_pct = (current_price - entry_price) / entry_price
 
             # Dynamic TP/SL or Signal Exit?
+            # Dynamic TP/SL or Signal Exit?
             # Basic Safety TP/SL
-            tp_hit = current_high >= entry_price * 1.06
-            sl_hit = current_low <= entry_price * 0.95 # Looser SL for Swing
-
-            # Ask AI for Exit Signal (Trinity)
-            # We need to construct State Vector for RL
-            prob = engine.predict_next_move(current_candles)
-
-            # Construct State Vector [close_norm, rsi, ema, lstm_prob, pos, bal, lev]
-            recent_prices = df['close'].iloc[max(0, i-100):i+1]
-            if recent_prices.max() == recent_prices.min():
-                 close_norm = 0.5
-            else:
-                 close_norm = (current_price - recent_prices.min()) / (recent_prices.max() - recent_prices.min())
-
-            rsi_norm = df.iloc[i]['rsi'] / 100.0
-            ema_diff = df.iloc[i]['ema_diff']
-            pos_state = 1
-            bal_norm = balance / initial_balance # Approximation
-
-            # RL State
-            state_vector = np.array([
-               close_norm, rsi_norm, ema_diff, prob, pos_state, bal_norm, 0.2
-            ], dtype=np.float32)
-
-            # Fix State Vector shape issues if any
-            if state_vector.shape != (7,):
-                 state_vector = np.zeros(7, dtype=np.float32)
-
+            tp_hit = current_high >= entry_price * 1.04  # Tighten TP to 4%
+            sl_hit = current_low <= entry_price * 0.98  # Tighten SL to 2%
+            
+            # Trailing Stop Logic
+            # If price moves up > 1.5%, set SL to Breakeven + 0.5%
+            # If price moves up > 3%, set SL to Entry + 2%
+            trailing_sl_price = entry_price * 0.98
+            pnl_high_pct = (current_high - entry_price) / entry_price
+            
+            if pnl_high_pct > 0.03:
+                trailing_sl_price = entry_price * 1.02
+                if current_low <= trailing_sl_price:
+                    sl_hit = True
+                    exit_reason = "Trailing Stop (+2%)"
+            elif pnl_high_pct > 0.015:
+                trailing_sl_price = entry_price * 1.005
+                if current_low <= trailing_sl_price:
+                    sl_hit = True
+                    exit_reason = "Trailing Stop (+0.5%)"
+            # Use centralized state vector method
+            state_vector = engine.get_state_vector(
+                current_candles, 
+                position=1, 
+                balance=balance, 
+                initial_balance=initial_balance
+            )
+            
+            # Get action decision from Trinity ensemble
+            prob = state_vector[3]  # lstm_prob is at index 3
             action_code, confidence = engine.decide_action(prob, state_vector, current_candles)
 
             exit_reason = ""
@@ -295,7 +305,8 @@ def run_backtest_v2(engine, symbol="BTC-USD", period="3mo", interval="1h"):
                 balance = sell_val - fee
                 trades.append({
                     "time": timestamp, "type": "SELL", "price": exit_price,
-                    "balance": balance, "reason": exit_reason
+                    "balance": balance, "reason": exit_reason,
+                    "net_value": balance # Proceeds
                 })
                 position = 0
                 entry_price = 0
@@ -303,27 +314,17 @@ def run_backtest_v2(engine, symbol="BTC-USD", period="3mo", interval="1h"):
 
         # 2. Check Entry
         if not executed_trade and position == 0:
-            prob = engine.predict_next_move(current_candles)
-
-            # Construct State Vector
-            recent_prices = df['close'].iloc[max(0, i-100):i+1]
-            if recent_prices.max() == recent_prices.min():
-                 close_norm = 0.5
-            else:
-                 close_norm = (current_price - recent_prices.min()) / (recent_prices.max() - recent_prices.min())
-
-            rsi_norm = df.iloc[i]['rsi'] / 100.0
-            ema_diff = df.iloc[i]['ema_diff']
-            pos_state = 0
-            bal_norm = balance / initial_balance
-
-            state_vector = np.array([
-               close_norm, rsi_norm, ema_diff, prob, pos_state, bal_norm, 0
-            ], dtype=np.float32)
-
-            if state_vector.shape != (7,):
-                 state_vector = np.zeros(7, dtype=np.float32)
-
+            # Use centralized state vector method
+            state_vector = engine.get_state_vector(
+                current_candles,
+                position=0,
+                balance=balance,
+                initial_balance=initial_balance
+            )
+            
+            # Get LSTM probability from state vector
+            prob = state_vector[3]  # lstm_prob is at index 3
+            
             # Trinity Decision
             action_code, confidence = engine.decide_action(prob, state_vector, current_candles)
 
@@ -349,15 +350,33 @@ def run_backtest_v2(engine, symbol="BTC-USD", period="3mo", interval="1h"):
                     trades.append({
                         "time": timestamp, "type": f"BUY ({leverage}x Signal)",
                         "price": current_price, "confidence": confidence,
-                        "balance": balance, "reason": f"Trinity {action_code} ({confidence}%)"
+                        "balance": balance, "reason": f"Trinity {action_code} ({confidence}%)",
+                        "net_value": net_buy  # Cost basis
                     })
 
         # TRACK EQUITY
         current_val = balance + (position * current_price) if position > 0 else balance
         equity_history.append(current_val)
 
-    # Final Value
-    final_equity = balance + (position * df.iloc[-1]['close'])
+    # Final Value & Force Close Position
+    if position > 0:
+        # Force close at last price to realize PnL
+        last_price = df.iloc[-1]['close']
+        sell_val = position * last_price
+        fee = sell_val * fee_rate
+        balance = sell_val - fee
+        
+        trades.append({
+            "time": df.iloc[-1]['time'], 
+            "type": "SELL (End)", 
+            "price": last_price,
+            "balance": balance, 
+            "reason": "Force Close (End of Backtest)",
+            "net_value": balance # Proceeds
+        })
+        position = 0
+
+    final_equity = balance
     if equity_history:
         equity_history[-1] = final_equity
 

@@ -22,18 +22,21 @@ export const TradingJournal: React.FC = () => {
     };
 
     // Reconstruct a TradeSignal-like object for the chart to show entry line
-    const getLogAsSignal = (log: TradingLog): TradeSignal => {
+    const getLogAsSignal = (log: any): TradeSignal => {
+        const items = log.items || {};
+        const snapshot = items.snapshot || {};
+        
         return {
-            id: log.tradeId,
+            id: log.tradeId || log.id,
             symbol: log.symbol,
             type: log.type === 'BUY' ? 'BUY' : 'SELL',
-            entryPrice: log.items.snapshot.price,
-            stopLoss: 0, // Not stored in log currently, can be added later
-            takeProfit: 0,
-            confidence: log.items.aiConfidence,
-            reasoning: log.items.aiReasoning,
-            timestamp: log.timestamp,
-            outcome: 'PENDING' // Journal view assumes entry state mostly
+            entryPrice: snapshot.price || log.entryPrice || 0,
+            stopLoss: log.stopLoss || 0,
+            takeProfit: log.takeProfit || 0,
+            confidence: items.aiConfidence || log.aiConfidence || 0,
+            reasoning: items.aiReasoning || log.aiReasoning || '',
+            timestamp: log.timestamp || (log.entryTime ? new Date(log.entryTime).getTime() : Date.now()),
+            outcome: log.outcome || 'PENDING'
         };
     };
 
@@ -70,11 +73,11 @@ export const TradingJournal: React.FC = () => {
                                         {log.type}
                                     </span>
                                     <span className="text-xs text-gray-400 ml-auto">
-                                        Conf: {Math.round(log.items.aiConfidence || 0)}%
+                                        Conf: {Math.round((log.items?.aiConfidence || log.aiConfidence || 0))}%
                                     </span>
                                 </div>
                                 <div className="text-xs text-gray-500 truncate">
-                                    {log.items.aiPrediction || log.notes || "No notes"}
+                                    {log.items?.aiPrediction || log.aiPrediction || log.notes || "No notes"}
                                 </div>
                             </div>
                         ))
@@ -102,7 +105,7 @@ export const TradingJournal: React.FC = () => {
                             </div>
                             <div className="text-right">
                                 <div className="text-xs text-gray-400 uppercase tracking-wider">Entry Price</div>
-                                <div className="text-2xl font-mono text-white">${selectedLog.items.snapshot.price}</div>
+                                <div className="text-2xl font-mono text-white">${selectedLog.items?.snapshot?.price || selectedLog.entryPrice || 0}</div>
                             </div>
                         </div>
 
@@ -132,26 +135,26 @@ export const TradingJournal: React.FC = () => {
                                 <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700 space-y-3">
                                     <div className="flex justify-between items-center border-b border-gray-700/50 pb-2">
                                         <span className="text-gray-400 text-sm">Market Trend</span>
-                                        <span className={`font-bold ${selectedLog.items.snapshot.trend === 'UP' ? 'text-green-400' : selectedLog.items.snapshot.trend === 'DOWN' ? 'text-red-400' : 'text-yellow-400'}`}>
-                                            {selectedLog.items.snapshot.trend}
+                                        <span className={`font-bold ${(selectedLog.items?.snapshot?.trend || selectedLog.marketContext?.trend) === 'UP' ? 'text-green-400' : (selectedLog.items?.snapshot?.trend || selectedLog.marketContext?.trend) === 'DOWN' ? 'text-red-400' : 'text-yellow-400'}`}>
+                                            {selectedLog.items?.snapshot?.trend || selectedLog.marketContext?.trend || 'N/A'}
                                         </span>
                                     </div>
                                     <div className="flex justify-between items-center border-b border-gray-700/50 pb-2">
                                         <span className="text-gray-400 text-sm">RSI Indicator</span>
                                         <div className="text-right">
-                                            <div className="font-bold text-white">{selectedLog.items.snapshot.rsi.toFixed(1)}</div>
-                                            <div className="text-[10px] text-gray-500">{selectedLog.items.snapshot.condition}</div>
+                                            <div className="font-bold text-white">{(selectedLog.items?.snapshot?.rsi || selectedLog.marketContext?.rsi || 0).toFixed(1)}</div>
+                                            <div className="text-[10px] text-gray-500">{selectedLog.items?.snapshot?.condition || ''}</div>
                                         </div>
                                     </div>
                                     <div className="flex justify-between items-center border-b border-gray-700/50 pb-2">
                                         <span className="text-gray-400 text-sm">News Sentiment</span>
-                                        <span className={`font-bold ${selectedLog.items.snapshot.newsSentiment > 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                            {selectedLog.items.snapshot.newsSentiment > 0 ? 'Bullish' : 'Bearish'}
+                                        <span className={`font-bold ${(selectedLog.items?.snapshot?.newsSentiment || 0) > 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                            {(selectedLog.items?.snapshot?.newsSentiment || 0) > 0 ? 'Bullish' : 'Bearish'}
                                         </span>
                                     </div>
                                     <div className="flex justify-between items-center">
                                         <span className="text-gray-400 text-sm">AI Confidence</span>
-                                        <span className="font-bold text-purple-400">{Math.round(selectedLog.items.aiConfidence)}%</span>
+                                        <span className="font-bold text-purple-400">{Math.round(selectedLog.items?.aiConfidence || selectedLog.aiConfidence || 0)}%</span>
                                     </div>
                                 </div>
                             </div>
@@ -164,7 +167,7 @@ export const TradingJournal: React.FC = () => {
                                 </h3>
                                 <div className="bg-gradient-to-br from-indigo-900/20 to-purple-900/20 p-4 rounded-lg border border-indigo-500/30 h-full">
                                     <div className="text-sm text-gray-300 leading-relaxed mb-4 italic">
-                                        "{selectedLog.items.aiReasoning}"
+                                        "{selectedLog.items?.aiReasoning || selectedLog.aiReasoning || 'No reasoning captured'}"
                                     </div>
                                     
                                     <div className="mt-4 pt-4 border-t border-indigo-500/20">

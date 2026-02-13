@@ -1,119 +1,64 @@
-
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import MinMaxScaler
 
 def generate_chart_windows(df, window_size=20):
-    \"\"\"
-    Generate sliding windows of OHLC data for CNN training
-
-    Args:
-        df: DataFrame with columns ['open', 'high', 'low', 'close']
-        window_size: Number of candles per window
-
-    Returns:
-        windows: numpy array (n_windows, window_size, 4)
-        labels: numpy array (n_windows, 1) - 1 if next candle is bullish, 0 if bearish
-    \"\"\"
+    """
+    Generates windows of candlestick data and labels for CNN training.
+    Label 1 if price goes up in the next 3 candles, 0 otherwise.
+    """
     windows = []
     labels = []
+    
+    # Kita butuh OHLC yang sudah dinormalisasi
+    # Menggunakan persentase perubahan agar stationary
+    df['open_n'] = (df['open'] - df['close'].shift(1)) / df['close'].shift(1)
+    df['high_n'] = (df['high'] - df['close'].shift(1)) / df['close'].shift(1)
+    df['low_n'] = (df['low'] - df['close'].shift(1)) / df['close'].shift(1)
+    df['close_n'] = (df['close'] - df['close'].shift(1)) / df['close'].shift(1)
+    
+    df.dropna(inplace=True)
+    
+    features = ['open_n', 'high_n', 'low_n', 'close_n']
+    data = df[features].values
+    close_prices = df['close'].values
 
-    # Normalize OHLC data
-    scaler = MinMaxScaler()
-    ohlc_data = df[['open', 'high', 'low', 'close']].values
-
-    for i in range(len(df) - window_size - 1):
-        # Extract window
-        window = ohlc_data[i:i+window_size]
-
-        # Normalize window (0-1 range)
-        window_normalized = scaler.fit_transform(window)
-
-        # Label: Is next candle bullish?
-        next_close = df.iloc[i + window_size]['close']
-        current_close = df.iloc[i + window_size - 1]['close']
-        label = 1.0 if next_close > current_close else 0.0
-
-        windows.append(window_normalized)
+    for i in range(len(data) - window_size - 3):
+        # Ambil window data (misal 20 candle)
+        window = data[i : i + window_size]
+        
+        # Labeling: Jika harga close 3 candle ke depan lebih tinggi dari close sekarang
+        future_price = close_prices[i + window_size + 2]
+        current_price = close_prices[i + window_size - 1]
+        
+        label = 1 if future_price > current_price else 0
+        
+        windows.append(window)
         labels.append(label)
-
-    return np.array(windows), np.array(labels).reshape(-1, 1)
-
-def detect_candlestick_patterns(window):
-    \"\"\"
-    Detect common candlestick patterns in a window
-
-    Args:
-        window: numpy array (n, 4) - OHLC data
-
-    Returns:
-        patterns: dict with pattern names and confidence scores
-    \"\"\"
-    patterns = {}
-
-    # Get last candle
-    if len(window) < 1:
-        return patterns
-
-    last = window[-1]
-    o, h, l, c = last[0], last[1], last[2], last[3]
-
-    body = abs(c - o)
-    range_hl = h - l
-
-    if range_hl == 0:
-        return patterns
-
-    # Doji: Small body relative to range
-    if body / range_hl < 0.1:
-        patterns['doji'] = 0.8
-
-    # Hammer: Long lower shadow, small body at top
-    lower_shadow = min(o, c) - l
-    upper_shadow = h - max(o, c)
-    if lower_shadow > 2 * body and upper_shadow < body:
-        patterns['hammer'] = 0.7
-
-    # Engulfing (need 2 candles)
-    if len(window) >= 2:
-        prev = window[-2]
-        prev_o, prev_c = prev[0], prev[3]
-
-        # Bullish engulfing
-        if prev_c < prev_o and c > o and c > prev_o and o < prev_c:
-            patterns['bullish_engulfing'] = 0.9
-
-        # Bearish engulfing
-        if prev_c > prev_o and c < o and c < prev_o and o > prev_c:
-            patterns['bearish_engulfing'] = 0.9
-
-    return patterns
+        
+    return np.array(windows), np.array(labels)
 
 def prepare_cnn_input(candles, window_size=20):
-    \"\"\"
-    Prepare candle data for CNN input
-
-    Args:
-        candles: list of dicts with OHLC data
-        window_size: Number of candles to use
-
-    Returns:
-        numpy array (window_size, 4) ready for CNN
-    \"\"\"
-    if len(candles) < window_size:
+    """
+    Helper untuk ai_engine dalam memproses input real-time/backtest
+    """
+    if len(candles) < window_size + 1:
         return None
-
-    # Extract last window_size candles
-    recent_candles = candles[-window_size:]
-
-    # Convert to OHLC array
-    ohlc = np.array([
-        [c['open'], c['high'], c['low'], c['close']]
-        for c in recent_candles
-    ])
-
-    # Normalize
-    scaler = MinMaxScaler()
-    ohlc_normalized = scaler.fit_transform(ohlc)
-
-    return ohlc_normalized
+        
+    df = pd.DataFrame(candles).tail(window_size + 1).copy()
+    
+    # Normalisasi yang sama dengan saat training
+    df['open_n'] = (df['open'] - df['close'].shift(1)) / df['close'].shift(1)
+    df['high_n'] = (df['high'] - df['close'].shift(1)) / df['close'].shift(1)
+    df['low_n'] = (df['low'] - df['close'].shift(1)) / df['close'].shift(1)
+    df['close_n'] = (df['close'] - df['close'].shift(1)) / df['close'].shift(1)
+    
+    df.dropna(inplace=True)
+    
+    if len(df) < window_size:
+        return None
+        
+    features = ['open_n', 'high_n', 'low_n', 'close_n']
+    # Output: (1, features, sequence) untuk PyTorch
+    window = df[features].values
+    window = torch.FloatTensor(window).permute(1, 0).unsqueeze(0)
+    return window

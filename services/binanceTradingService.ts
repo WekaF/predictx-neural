@@ -29,15 +29,17 @@ function getApiBase(): string {
         
         if (useTestnet) {
             console.log('[Binance Trading] 🧪 Using TESTNET mode');
-            // In dev, use local proxy to avoid CORS
-            return isDev ? '/api/testnet' : BINANCE_TESTNET_API;
+            // Use relative path if likely in a Vercel-like environment with rewrites
+            // In dev (Vite), /api/testnet is handled by vite.config.ts
+            // In prod, it should be handled by vercel.json or similar
+            return '/api/testnet';
         }
     } catch (e) {
         console.warn('[Binance Trading] Failed to read testnet setting, using production');
     }
     
-    // In dev, use local proxy
-    return isDev ? '/api/binance' : BINANCE_PRODUCTION_API;
+    // Always use relative path to leverage proxies/rewrites and avoid CORS
+    return '/api/binance';
 }
 
 // Load API credentials from environment (works in both browser and Node.js)
@@ -141,6 +143,27 @@ async function fetchWithProxy(url: string, options: RequestInit = {}): Promise<R
 
     throw new Error('All connection attempts failed (Direct + Proxies)');
 }
+/**
+ * Format parameter value to string, specifically avoiding scientific notation for numbers
+ */
+function formatParameter(val: any): string {
+    if (typeof val === 'number') {
+        // Handle zero and non-finite numbers explicitly 
+        if (!Number.isFinite(val)) return "0";
+        if (val === 0) return "0";
+        
+        // Use toFixed(8) for crypto precision
+        let s = val.toFixed(8);
+        
+        // Only strip trailing zeros if there's a decimal point
+        if (s.includes('.')) {
+            s = s.replace(/0+$/, ''); // Strip trailing zeros
+            s = s.replace(/\.$/, '');  // Strip trailing dot if no decimals left
+        }
+        return s;
+    }
+    return String(val);
+}
 
 /**
  * Get Binance server time to sync timestamps
@@ -186,9 +209,9 @@ async function authenticatedRequest(
         recvWindow: 60000 // 60 second window to account for network delays
     };
 
-    // Create query string
+    // Create query string using formatParameter helper
     const queryString = Object.entries(queryParams)
-        .map(([key, value]) => `${key}=${value}`)
+        .map(([key, value]) => `${key}=${formatParameter(value)}`)
         .join('&');
 
     // Generate signature
@@ -198,6 +221,9 @@ async function authenticatedRequest(
     // Make request - use dynamic API base with CORS proxy fallback
     const baseUrl = `${getApiBase()}${endpoint}?${signedQueryString}`;
     
+    console.log(`[Binance Auth] ${method} ${endpoint}`);
+    if (method === 'POST') console.log('[Binance Auth] Body Params:', queryParams);
+
     try {
         const response = await fetchWithProxy(baseUrl, {
             method,

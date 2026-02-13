@@ -72,7 +72,8 @@ def train_cnn_pattern_model(epochs=40):
 
     # Convert to tensors (batch, features, sequence)
     train_x = torch.FloatTensor(train_windows).permute(0, 2, 1)  # (N, 4, 20)
-    train_y = torch.FloatTensor(train_labels)
+    train_y = torch.FloatTensor(train_labels).view(-1, 1)  # Menambahkan dimensi kolom
+    test_y = torch.FloatTensor(test_labels).view(-1, 1)    # Menambahkan dimensi kolom
     test_x = torch.FloatTensor(test_windows).permute(0, 2, 1)
     test_y = torch.FloatTensor(test_labels)
 

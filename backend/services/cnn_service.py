@@ -74,7 +74,7 @@ def train_cnn_model(model, train_loader, num_epochs=30, learning_rate=0.001):
 
             # Forward pass
             outputs = model(batch_x)
-            loss = criterion(outputs, batch_y)
+            loss = criterion(outputs, batch_y.view(-1, 1))
 
             # Backward pass
             loss.backward()

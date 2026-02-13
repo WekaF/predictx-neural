@@ -7,10 +7,13 @@ import {
 import { 
   TrendingUp, TrendingDown, Target, Clock, 
   Brain, Zap, BarChart3, PieChart as PieIcon,
-  Calendar, Info, AlertCircle, CheckCircle2
+  Calendar, Info, AlertCircle, CheckCircle2, Calculator // Added Calculator
 } from 'lucide-react';
 import { EnhancedExecutedTrade, TradeAnalytics } from '../types/enhanced';
 import { tradeAnalyticsService } from '../services/tradeAnalyticsService';
+
+import { MonteCarloPanel } from './MonteCarloPanel';
+import { div } from '@tensorflow/tfjs';
 
 interface Props {
   trades: EnhancedExecutedTrade[];
@@ -26,11 +29,13 @@ export const TradeAnalyticsDashboard: React.FC<Props> = ({
   assetSymbol = 'USDT',
   aiWinRate = 65 // Default conservative win rate
 }) => {
+  const [activeTab, setActiveTab] = React.useState<'ANALYTICS' | 'SIMULATION'>('ANALYTICS');
   const analytics = useMemo(() => tradeAnalyticsService.calculateTradeAnalytics(trades), [trades]);
   const overview = analytics.overview;
 
   // Render Portfolio Projection if no trades but balance exists
   if (overview.totalTrades === 0 && currentBalance > 0) {
+    // ... (Existing Projection Logic) ...
     // Projection Logic (Conservative)
     const riskPerTrade = 0.01; // 1% risk
     const rewardRatio = 2; // 1:2 Risk/Reward
@@ -54,16 +59,38 @@ export const TradeAnalyticsDashboard: React.FC<Props> = ({
     return (
       <div className="space-y-6 animate-in fade-in duration-700">
         <div className="flex items-center justify-between">
-          <h2 className="text-xl font-bold text-white flex items-center gap-2">
-            <Brain className="w-6 h-6 text-blue-400" />
-            AI Capital Deployment Projection
-          </h2>
+          <div className="flex items-center gap-4">
+             <button
+               onClick={() => setActiveTab('ANALYTICS')}
+               className={`text-xl font-bold flex items-center gap-2 transition-colors ${
+                 activeTab === 'ANALYTICS' ? 'text-white' : 'text-gray-500 hover:text-gray-300'
+               }`}
+             >
+               <Brain className={`w-6 h-6 ${activeTab === 'ANALYTICS' ? 'text-blue-400' : 'text-gray-600'}`} />
+               AI Analytics
+             </button>
+             <div className="h-6 w-px bg-white/10"></div>
+             <button
+               onClick={() => setActiveTab('SIMULATION')}
+               className={`text-xl font-bold flex items-center gap-2 transition-colors ${
+                 activeTab === 'SIMULATION' ? 'text-white' : 'text-gray-500 hover:text-gray-300'
+               }`}
+             >
+               <BarChart3 className={`w-6 h-6 ${activeTab === 'SIMULATION' ? 'text-purple-400' : 'text-gray-600'}`} />
+               Monte Carlo
+             </button>
+          </div>
           <span className="px-3 py-1 bg-blue-500/10 border border-blue-500/20 rounded-full text-xs font-bold text-blue-400 uppercase tracking-wider">
             Live Simulation Mode
           </span>
         </div>
+        
+        {activeTab === 'SIMULATION' ? (
+             <MonteCarloPanel trades={trades} currentBalance={currentBalance} />
+        ) : (
+          <>
+            {/* Portfolio Stats Cards */}
 
-        {/* Portfolio Stats Cards */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {/* Current Capital */}
           <div className="bg-[#0a0a0f] p-5 rounded-xl border border-white/5 relative overflow-hidden group hover:border-blue-500/30 transition-all">
@@ -156,7 +183,9 @@ export const TradeAnalyticsDashboard: React.FC<Props> = ({
                </div>
              </div>
           </div>
-        </div>
+      </div>
+    </>
+    )}
       </div>
     );
   }
@@ -204,14 +233,44 @@ export const TradeAnalyticsDashboard: React.FC<Props> = ({
     return current; // Assume break-even if unknown
   };
 
+
+
+  // --- Main Dashboard (Trades > 0) ---
   const initialBalance = getEstimatedInitialBalance(assetSymbol, currentBalance);
   const realPnl = currentBalance - initialBalance;
   const pnlPercent = (realPnl / initialBalance) * 100;
 
   return (
     <div className="space-y-6">
-      {/* Overview Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+       {/* Tab Navigation (Main View) */}
+        <div className="flex items-center gap-4 border-b border-white/5 pb-4 mb-4">
+             <button
+               onClick={() => setActiveTab('ANALYTICS')}
+               className={`text-sm font-bold flex items-center gap-2 transition-colors pb-2 border-b-2 ${
+                 activeTab === 'ANALYTICS' ? 'text-white border-blue-500' : 'text-gray-500 border-transparent hover:text-gray-300'
+               }`}
+             >
+               <Brain className="w-4 h-4" />
+               Performance Analytics
+             </button>
+             <button
+               onClick={() => setActiveTab('SIMULATION')}
+               className={`text-sm font-bold flex items-center gap-2 transition-colors pb-2 border-b-2 ${
+                 activeTab === 'SIMULATION' ? 'text-white border-purple-500' : 'text-gray-500 border-transparent hover:text-gray-300'
+               }`}
+             >
+               <Calculator className="w-4 h-4" />
+               Monte Carlo Simulation
+             </button>
+        </div>
+
+       {activeTab === 'SIMULATION' ? (
+          <MonteCarloPanel trades={trades} currentBalance={currentBalance} />
+       ) : (
+          <>
+            {/* Overview Stats */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+
         <div className="bg-[#0a0a0f] p-5 rounded-xl border border-white/5 hover:border-blue-500/30 transition-all group">
           <div className="flex justify-between items-start mb-2">
             <p className="text-gray-400 text-sm font-medium">Real Net Profit</p>
@@ -272,6 +331,85 @@ export const TradeAnalyticsDashboard: React.FC<Props> = ({
           </p>
           <p className="text-xs text-gray-500 mt-2">Per trade average</p>
         </div>
+      </div>
+
+      {/* NEW: Performance Leaderboards (NXVest Style) */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          
+          {/* Performance by Model (Pattern) */}
+          <div className="bg-[#0a0a0f] border border-white/5 rounded-xl p-5">
+              <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                  <Brain className="w-4 h-4 text-purple-400" /> Performance by Model
+              </h3>
+              <div className="space-y-3">
+                  {analytics.byPattern.slice(0, 5).map((model, idx) => (
+                      <div key={idx} className="group">
+                          <div className="flex justify-between items-center text-sm mb-1">
+                              <span className="font-bold text-gray-300 group-hover:text-white transition-colors">
+                                  {model.patternName.replace(/_/g, ' ')}
+                              </span>
+                              <div className="text-right">
+                                  <span className={`font-mono font-bold ${model.totalPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                      {model.totalPnl >= 0 ? '+' : ''}{model.totalPnl.toFixed(2)}
+                                  </span>
+                              </div>
+                          </div>
+                          {/* Win Rate Bar */}
+                          <div className="h-1.5 w-full bg-gray-800 rounded-full overflow-hidden">
+                              <div 
+                                  className={`h-full rounded-full ${model.totalPnl >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`} 
+                                  style={{ width: `${Math.min(Math.abs(model.totalPnl) / 10, 100)}%` }} 
+                              ></div>
+                          </div>
+                          <div className="flex justify-between text-[10px] text-gray-500 mt-1">
+                              <span>{model.totalTrades} reports</span>
+                              <span>WR: {model.winRate.toFixed(1)}%</span>
+                          </div>
+                      </div>
+                  ))}
+                  {analytics.byPattern.length === 0 && (
+                      <div className="text-center py-8 text-gray-600 text-xs italic">No model data available yet</div>
+                  )}
+              </div>
+          </div>
+
+          {/* Performance by Pair (Symbol) */}
+          <div className="bg-[#0a0a0f] border border-white/5 rounded-xl p-5">
+              <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                  <Zap className="w-4 h-4 text-amber-400" /> Performance by Pair
+              </h3>
+              <div className="space-y-3">
+                  {analytics.bySymbol?.slice(0, 5).map((pair, idx) => (
+                      <div key={idx} className="group">
+                            <div className="flex justify-between items-center text-sm mb-1">
+                              <span className="font-bold text-gray-300 group-hover:text-white transition-colors">
+                                  {pair.patternName}
+                              </span>
+                              <div className="text-right">
+                                  <span className={`font-mono font-bold ${pair.totalPnl >= 0 ? 'text-blue-400' : 'text-rose-400'}`}>
+                                      {pair.totalPnl >= 0 ? '+' : ''}{pair.totalPnl.toFixed(1)}%
+                                  </span>
+                              </div>
+                          </div>
+                          {/* Win Rate Bar */}
+                          <div className="h-1.5 w-full bg-gray-800 rounded-full overflow-hidden">
+                              <div 
+                                  className={`h-full rounded-full ${pair.totalPnl >= 0 ? 'bg-blue-500' : 'bg-rose-500'}`} 
+                                  style={{ width: `${Math.min(Math.abs(pair.totalPnl) / 10, 100)}%` }} 
+                              ></div>
+                          </div>
+                            <div className="flex justify-between text-[10px] text-gray-500 mt-1">
+                              <span>{pair.totalTrades} reports</span>
+                              <span>WR: {pair.winRate.toFixed(1)}%</span>
+                          </div>
+                      </div>
+                  ))}
+                    {(!analytics.bySymbol || analytics.bySymbol.length === 0) && (
+                      <div className="text-center py-8 text-gray-600 text-xs italic">No pair data available yet</div>
+                  )}
+              </div>
+          </div>
+
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -448,6 +586,8 @@ export const TradeAnalyticsDashboard: React.FC<Props> = ({
           </div>
         </div>
       </div>
+    </>
+       )}
     </div>
   );
 };

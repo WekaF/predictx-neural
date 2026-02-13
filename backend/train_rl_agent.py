@@ -11,7 +11,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from rl_trading_env import TradingEnv
 from services.data_service import get_historical_data
-from ai_engine import add_indicators
+from ai_engine import add_indicators, ai_engine
 
 class TensorboardCallback(BaseCallback):
     """
@@ -61,9 +61,9 @@ def train_rl_agent(symbol="BTC-USD", interval="1h", total_timesteps=100000):
     df = add_indicators(df)
     print(f"✅ Prepared {len(df)} candles with indicators")
 
-    # 3. Create Environment
-    print("[3/4] Creating trading environment...")
-    env = TradingEnv(df, initial_balance=250000)
+    # 3. Create Environment with ai_engine for LSTM predictions
+    print("[3/4] Creating trading environment with AI engine...")
+    env = TradingEnv(df, initial_balance=250000, ai_engine=ai_engine)
     env = DummyVecEnv([lambda: env])  # Vectorize for SB3
 
     # 4. Initialize PPO Agent

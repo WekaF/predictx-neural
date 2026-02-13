@@ -182,8 +182,13 @@ export const sendWebhookNotification = async (
 ): Promise<{ success: boolean; skipped?: boolean; error?: string; warning?: string }> => {
     const settings = getSettings();
     
-    if (!settings.enableNotifications || !settings.webhookUrl) {
-        console.warn("Webhook attempt skipped: Notifications disabled or URL missing.");
+    // Global Kill-Switch via Env
+    const isGloballyDisabled = 
+        import.meta.env?.VITE_DISABLE_WEBHOOKS === 'true' || 
+        (window as any).DISABLE_WEBHOOKS === true;
+
+    if (isGloballyDisabled || !settings.enableNotifications || !settings.webhookUrl) {
+        console.warn("Webhook attempt skipped: Notifications disabled, URL missing, or global kill-switch active.");
         return { success: false, skipped: true };
     }
     

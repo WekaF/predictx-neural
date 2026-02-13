@@ -26,6 +26,7 @@ import { batchTrainingService, enrichTradeWithContext } from './services/batchTr
 import binanceTradingService from './services/binanceTradingService';
 import { hyperparameterOptimizer } from './services/hyperparameterOptimizer';
 import { TradeAnalyticsDashboard } from './components/TradeAnalyticsDashboard';
+import TrainingDashboard from './components/TrainingDashboard';
 import { BatchTrainingPanel } from './components/BatchTrainingPanel';
 import { HyperparameterOptimizer } from './components/HyperparameterOptimizer';
 import { EnhancedExecutedTrade } from './types/enhanced';
@@ -161,20 +162,37 @@ function App() {
 
     // 1b. Load Trade History (Local + Cloud Sync)
     const loadTradeHistory = async () => {
-      // First load local
-      const savedTradeLogs = storageService.getTradingLogs();
-      if (savedTradeLogs.length > 0) {
-        setTradeHistory(mapToEnhancedTrades(savedTradeLogs));
+      // 1. Load local logs first for immediate UI update
+      const localLogs = storageService.getTradingLogs();
+      const localTrades = mapToEnhancedTrades(localLogs);
+      
+      if (localTrades.length > 0) {
+        setTradeHistory(localTrades);
       }
 
-      // Then sync from cloud
-      const cloudLogs = await storageService.fetchTradingLogsFromSupabase();
-      if (cloudLogs.length > 0) {
-        // Merge with local (cloud takes precedence or just replace if simple)
-        // For simplicity, we'll verify if cloud has more/newer data
-        const merged = [...cloudLogs]; 
-        setTradeHistory(mapToEnhancedTrades(merged));
-        console.log(`[App] ✅ Synced ${merged.length} trade history records from Supabase`);
+      // 2. Fetch from cloud and merge
+      try {
+        const cloudLogs = await storageService.fetchTradingLogsFromSupabase();
+        if (cloudLogs.length > 0) {
+          const cloudTrades = mapToEnhancedTrades(cloudLogs);
+          
+          // Use Map for deduplication - Cloud data takes precedence for same IDs
+          const tradeMap = new Map<string, EnhancedExecutedTrade>();
+          
+          // Add local trades first
+          localTrades.forEach(t => tradeMap.set(t.id, t));
+          // Add/Overwrite with cloud trades
+          cloudTrades.forEach(t => tradeMap.set(t.id, t));
+          
+          const merged = Array.from(tradeMap.values()).sort((a, b) => 
+            new Date(b.entryTime).getTime() - new Date(a.entryTime).getTime()
+          );
+          
+          setTradeHistory(merged);
+          console.log(`[App] ✅ Trade history merged. Total: ${merged.length} (Synced from Supabase)`);
+        }
+      } catch (error) {
+        console.error('[App] Failed to sync trade history from Supabase:', error);
       }
     };
     loadTradeHistory();
@@ -213,6 +231,13 @@ function App() {
 
 
     loadBinanceBalance();
+    
+    // Restore Active Signal if any
+    const savedSignal = storageService.getActiveSignal();
+    if (savedSignal) {
+      console.log('[App] ♻️ Restored active signal:', savedSignal.symbol);
+      setActiveSignal(savedSignal);
+    }
   }, [selectedAsset]); // Re-fetch when asset changes
 
   // Initialize PWA and other app setup
@@ -988,14 +1013,21 @@ function App() {
   };
 
   // Handle Manual Trade
-  const handleManualTrade = async (trade: { type: 'BUY' | 'SELL', entryPrice: number, stopLoss: number, takeProfit: number }) => {
+  const handleManualTrade = async (type: 'BUY' | 'SELL', entryPrice: number, stopLoss: number, takeProfit: number) => {
+    // Explicitly validate type for Binance
+    const validatedType = type === 'BUY' ? 'BUY' : type === 'SELL' ? 'SELL' : null;
+    if (!validatedType) {
+        showNotification("Invalid side: " + type, "error");
+        return;
+    }
+
     const newSignal: TradeSignal = {
       id: generateUUID(),
       symbol: selectedAsset.symbol,
-      type: trade.type,
-      entryPrice: trade.entryPrice,
-      stopLoss: trade.stopLoss,
-      takeProfit: trade.takeProfit,
+      type: validatedType,
+      entryPrice: entryPrice,
+      stopLoss: stopLoss,
+      takeProfit: takeProfit,
       reasoning: 'Manual trade entry',
       confidence: 50,
       timestamp: Date.now(),
@@ -1003,10 +1035,16 @@ function App() {
     };
 
     // Calculate Quantity (Asset Units)
-    // Position Size (USD) = Balance * Leverage * Risk%
-    // Quantity = Position Size / Entry Price
+    const entry = entryPrice || 1; // Prevent div by zero
     const positionSizeUsd = balance * leverage * (riskPercent / 100);
-    const quantityAsset = positionSizeUsd / newSignal.entryPrice;
+    // Round quantity to 6 decimal places for Binance LOT_SIZE compliance
+    const quantityAsset = Math.floor((positionSizeUsd / entry) * 1000000) / 1000000;
+    
+    // Safety check: Don't allow 0 or extremely small quantity
+    if (quantityAsset <= 0) {
+        showNotification(`Insufficient balance ($${balance.toFixed(2)}) or risk to open position.`, "error");
+        return;
+    }
     
     // Execute on Binance (if configured/Testnet)
     if (binanceTradingService.isConfigured()) {
@@ -1040,6 +1078,7 @@ function App() {
 
     const signalWithQty = { ...newSignal, quantity: quantityAsset };
     setActiveSignal(signalWithQty);
+    storageService.saveActiveSignal(signalWithQty); // Persist state
     setShowManualModal(false);
 
     // Send push notification for manual trade
@@ -1210,7 +1249,6 @@ function App() {
         quantity: parseFloat(t.qty),
         pnl: parseFloat(t.realizedPnl) || 0, // Binance specific field if available, else 0
         outcome: parseFloat(t.realizedPnl) > 0 ? 'WIN' : parseFloat(t.realizedPnl) < 0 ? 'LOSS' : 'OPEN',
-        outcome: parseFloat(t.realizedPnl) > 0 ? 'WIN' : parseFloat(t.realizedPnl) < 0 ? 'LOSS' : 'PENDING',
         source: 'BINANCE_IMPORT',
         marketContext: {
             indicators: { rsi: 50, macd: { value: 0, signal: 0, histogram: 0 }, stochastic: { k: 50, d: 50 }, sma20: 0, sma50: 0, sma200: 0, ema12: 0, ema26: 0, momentum: 0 },
@@ -1235,21 +1273,18 @@ function App() {
          }
       }
 
-      // Merge with existing
-      const merged = [...enrichedTrades];
-      // Add existing non-Binance logs if any? 
-      // Actually we should merge by ID.
-      const existingMap = new Map(tradeHistory.map(t => [t.id, t]));
+      // Deduplicate and merge by ID
+      const existingMap = new Map<string, EnhancedExecutedTrade>(tradeHistory.map(t => [t.id, t]));
       enrichedTrades.forEach(t => existingMap.set(t.id, t));
       
-      const uniqueSorted = Array.from(existingMap.values()).sort((a, b) => 
+      const uniqueSorted = (Array.from(existingMap.values()) as EnhancedExecutedTrade[]).sort((a, b) => 
         new Date(b.entryTime).getTime() - new Date(a.entryTime).getTime()
       );
 
       setTradeHistory(uniqueSorted);
       
-      // Save
-      merged.forEach(t => storageService.saveTradingLog(t));
+      // Save new trades to storage
+      enrichedTrades.forEach(t => storageService.saveTradingLog(t));
       
       showNotification(`Successfully synced ${enrichedTrades.length} trades!`, "success");
     } catch (error: any) {
@@ -1583,26 +1618,7 @@ function App() {
             <TradingJournal />
           </div>
         ) : currentView === 'training' ? (
-          <div className="h-full overflow-y-auto space-y-6">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className="space-y-6">
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl">
-                  <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
-                    <BrainCircuit className="w-6 h-6 text-pink-400" />
-                    Active Training Control
-                  </h2>
-                  <p className="text-slate-400 mb-6 text-sm">
-                    Trigger the Python LSTM Backend to learn from the latest market data.
-                    Ensure your backend is running and connected to Supabase.
-                  </p>
-                  <TrainingPanel selectedSymbol={selectedAsset.symbol} />
-                </div>
-              </div>
-              <div className="space-y-6">
-                <TrainingHistory />
-              </div>
-            </div>
-          </div>
+          <TrainingDashboard />
         ) : currentView === 'ai-intelligence' ? (
           <div className="h-full overflow-y-auto space-y-6">
             <div className="flex flex-col gap-6">
@@ -1796,7 +1812,8 @@ function App() {
                                         symbol: tradeSymbol,
                                         side: closeSide,
                                         type: 'MARKET',
-                                        quantity: activeSignal.quantity || 0 
+                                        // Ensure quantity is rounded (6 decimal places is safe for most assets)
+                                        quantity: Math.floor((activeSignal.quantity || 0) * 1000000) / 1000000
                                     });
                                     
                                     showNotification("Position Closed on Binance!", "success");
@@ -1810,6 +1827,7 @@ function App() {
 
                                     setBalance(b => b + pnl); // Update local balance (will obtain real on refresh)
                                     setActiveSignal(null); // Clear active signal
+                                    storageService.saveActiveSignal(null); // Clear persistence
                                     
                                     // Save log
                                     // ... existing log logic ...
@@ -1926,16 +1944,18 @@ function App() {
                         <div className="bg-slate-950/80 rounded-lg p-3 border border-slate-800/50 space-y-2">
                            <div className="flex justify-between items-center">
                               <span className="text-[10px] text-slate-500">Margin</span>
-                              <span className="text-xs font-bold text-white">Rp {lastAnalysis.execution.margin_idr.toLocaleString()}</span>
+                              <span className="text-xs font-bold text-white">
+                                Rp {lastAnalysis.execution?.margin_idr?.toLocaleString() || '0'}
+                              </span>
                            </div>
                            <div className="flex justify-between items-center">
                               <span className="text-[10px] text-slate-500">Leverage</span>
-                              <span className="text-xs font-bold text-amber-500">{lastAnalysis.execution.leverage}x</span>
+                              <span className="text-xs font-bold text-amber-500">{lastAnalysis.execution?.leverage || '1'}x</span>
                            </div>
                            <div className="h-px bg-slate-800 mt-1"></div>
                            <div className="flex justify-between items-center text-[10px]">
                               <span className="text-slate-500 uppercase font-bold">Risk Reward</span>
-                              <span className="text-emerald-400 font-bold">1 : {lastAnalysis.riskRewardRatio}</span>
+                              <span className="text-emerald-400 font-bold">1 : {lastAnalysis.riskRewardRatio || '0.00'}</span>
                            </div>
                         </div>
                       )}

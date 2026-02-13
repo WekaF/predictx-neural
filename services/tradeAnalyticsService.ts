@@ -271,41 +271,74 @@ export const identifyBestMarketConditions = (trades: EnhancedExecutedTrade[]) =>
   };
 };
 
+// ... existing imports
+
 /**
- * Main function: Calculate comprehensive trade analytics
+ * Analyze performance by asset symbol
  */
+export const analyzePerformanceBySymbol = (trades: EnhancedExecutedTrade[]): PatternPerformance[] => {
+  // Group trades by symbol
+  const symbolGroups = new Map<string, EnhancedExecutedTrade[]>();
+  
+  trades.forEach(trade => {
+    const symbol = trade.symbol || 'Unknown';
+    if (!symbolGroups.has(symbol)) {
+      symbolGroups.set(symbol, []);
+    }
+    symbolGroups.get(symbol)!.push(trade);
+  });
+
+  const performances: PatternPerformance[] = [];
+
+  symbolGroups.forEach((symbolTrades, symbol) => {
+    const wins = symbolTrades.filter(t => t.outcome === 'WIN').length;
+    const losses = symbolTrades.filter(t => t.outcome === 'LOSS').length;
+    const totalTrades = wins + losses;
+
+    if (totalTrades === 0) return;
+
+    const winRate = (wins / totalTrades) * 100;
+    
+    const pnls = symbolTrades.map(t => t.pnl);
+    const totalPnl = pnls.reduce((sum, pnl) => sum + pnl, 0);
+    const avgPnl = totalPnl / totalTrades;
+    
+    const bestTrade = Math.max(...pnls);
+    const worstTrade = Math.min(...pnls);
+
+    performances.push({
+      patternName: symbol, // Reusing PatternPerformance interface where patternName = symbol
+      totalTrades,
+      wins,
+      losses,
+      winRate,
+      avgPnl,
+      totalPnl,
+      avgConfidence: 0,
+      avgRR: 0,
+      bestTrade,
+      worstTrade
+    });
+  });
+
+  // Sort by total PNL descending
+  return performances.sort((a, b) => b.totalPnl - a.totalPnl);
+};
+
+// ... existing code ...
+
 export const calculateTradeAnalytics = (trades: EnhancedExecutedTrade[]): TradeAnalytics => {
+  // ... existing overview logic ...
   const completedTrades = trades.filter(t => t.outcome !== 'OPEN');
-
-  if (completedTrades.length === 0) {
-    return {
-      overview: {
-        totalTrades: 0,
-        totalWins: 0,
-        totalLosses: 0,
-        overallWinRate: 0,
-        totalPnl: 0,
-        avgPnl: 0,
-        profitFactor: 0
-      },
-      byPattern: [],
-      byConfidence: [],
-      byTimeOfDay: [],
-      marketConditions: {
-        bestTrend: 'SIDEWAYS',
-        bestVolatility: 'MEDIUM',
-        bestSentiment: 'NEUTRAL'
-      }
-    };
-  }
-
+  
+  // ... (Recalculate overview metrics if needed or leave as is) ...
   // Overview metrics
   const totalWins = completedTrades.filter(t => t.outcome === 'WIN').length;
   const totalLosses = completedTrades.filter(t => t.outcome === 'LOSS').length;
-  const overallWinRate = (totalWins / completedTrades.length) * 100;
+  const overallWinRate = completedTrades.length > 0 ? (totalWins / completedTrades.length) * 100 : 0;
   
   const totalPnl = completedTrades.reduce((sum, t) => sum + t.pnl, 0);
-  const avgPnl = totalPnl / completedTrades.length;
+  const avgPnl = completedTrades.length > 0 ? totalPnl / completedTrades.length : 0;
   
   const grossProfit = completedTrades
     .filter(t => t.pnl > 0)
@@ -317,38 +350,35 @@ export const calculateTradeAnalytics = (trades: EnhancedExecutedTrade[]): TradeA
   );
   const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : 0;
 
-  // Pattern analysis
+
   const byPattern = analyzePatternPerformance(completedTrades);
-
-  // Confidence calibration
   const byConfidence = calibrateConfidence(completedTrades);
-
-  // Time-based analysis
   const byTimeOfDay = analyzeTimeBasedPerformance(completedTrades);
-
-  // Market conditions
   const marketConditions = identifyBestMarketConditions(completedTrades);
+  const bySymbol = analyzePerformanceBySymbol(completedTrades); // NEW
 
   return {
     overview: {
-      totalTrades: completedTrades.length,
-      totalWins,
-      totalLosses,
-      overallWinRate,
-      totalPnl,
-      avgPnl,
-      profitFactor
+        totalTrades: completedTrades.length,
+        totalWins,
+        totalLosses,
+        overallWinRate,
+        totalPnl,
+        avgPnl,
+        profitFactor
     },
     byPattern,
     byConfidence,
     byTimeOfDay,
-    marketConditions
+    marketConditions,
+    bySymbol // NEW
   };
 };
 
 export const tradeAnalyticsService = {
   calculateTradeAnalytics,
   analyzePatternPerformance,
+  analyzePerformanceBySymbol, // Exported
   calibrateConfidence,
   analyzeTimeBasedPerformance,
   identifyBestMarketConditions

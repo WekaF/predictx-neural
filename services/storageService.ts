@@ -47,7 +47,8 @@ export const storageService = {
       .from('training_data')
       .select('*')
       .order('created_at', { ascending: false })
-      .limit(50);
+      .order('created_at', { ascending: false })
+      .limit(1000);
 
     if (error) {
       console.error("Supabase fetch error:", error);
@@ -393,10 +394,28 @@ export const storageService = {
             auto_trade_enabled: enabled
           });
 
-        if (error) console.error('[Supabase] Auto-trade state save error:', error);
+    if (error) console.error('[Supabase] Auto-trade state save error:', error);
       } catch (e) {
         console.error('[Supabase] Auto-trade state save failed:', e);
       }
+    }
+  },
+
+  // --- Active Signal Persistence (State Restore) ---
+  getActiveSignal: (): any | null => {
+    try {
+      const data = localStorage.getItem('neurotrade_active_signal');
+      return data ? JSON.parse(data) : null;
+    } catch {
+      return null;
+    }
+  },
+
+  saveActiveSignal: (signal: any | null) => {
+    if (signal) {
+      localStorage.setItem('neurotrade_active_signal', JSON.stringify(signal));
+    } else {
+      localStorage.removeItem('neurotrade_active_signal');
     }
   },
 
@@ -405,7 +424,20 @@ export const storageService = {
     try {
       const key = 'neurotrade_trading_logs';
       const data = localStorage.getItem(key);
-      return data ? JSON.parse(data) : [];
+      if (!data) return [];
+      
+      const parsed = JSON.parse(data);
+      if (!Array.isArray(parsed)) return [];
+
+      // Deduplicate on load to clean up existing bad data
+      const uniqueMap = new Map();
+      parsed.forEach((item: any) => {
+        if (item && item.id) {
+          uniqueMap.set(item.id, item);
+        }
+      });
+      
+      return Array.from(uniqueMap.values());
     } catch (e) {
       console.error("Failed to load trading logs", e);
       return [];
@@ -416,36 +448,33 @@ export const storageService = {
     try {
       const key = 'neurotrade_trading_logs';
       const existing = storageService.getTradingLogs();
-      const updated = [log, ...existing];
+      
+      // Filter out existing log with same ID to prevent duplicates
+      const filtered = existing.filter(l => l.id !== log.id);
+      const updated = [log, ...filtered];
+      
       localStorage.setItem(key, JSON.stringify(updated));
 
       if (supabase) {
         const { error } = await supabase
-          .from('trading_journal')
+          .from('trade_signals')
           .insert({
             id: log.id,
-            trade_id: log.id,
             symbol: log.symbol,
             type: log.type,
-            entry_price: log.entryPrice,
+            entry_price: log.entryPrice || log.items?.snapshot?.price,
             exit_price: log.exitPrice,
             stop_loss: log.stopLoss,
             take_profit: log.takeProfit,
-            quantity: log.quantity,
             pnl: log.pnl,
             outcome: log.outcome,
-            source: log.source,
-            market_context: log.marketContext,
-            pattern_detected: log.patternDetected,
-            confluence_factors: log.confluenceFactors,
-            ai_confidence: log.aiConfidence,
-            ai_reasoning: log.aiReasoning,
-            hold_duration: log.holdDuration,
-            actual_rr: log.actualRR
+            source: log.source || (log.tags?.includes('AI') ? 'AI' : 'MANUAL'),
+            confidence: log.aiConfidence || log.items?.aiConfidence,
+            reasoning: log.aiReasoning || log.items?.aiReasoning
           });
 
-        if (error) console.error('[Supabase] Journal save error:', error);
-        else console.log('[Supabase] ✅ Trade saved to journal:', log.symbol, log.type);
+        if (error) console.error('[Supabase] Signal/Log save error:', error);
+        else console.log('[Supabase] ✅ Trade saved to trade_signals:', log.symbol, log.type);
       }
     } catch (e) {
       console.error("Failed to save trading log", e);
@@ -458,7 +487,7 @@ export const storageService = {
 
     try {
       const { data, error } = await supabase
-        .from('trading_journal')
+        .from('trade_signals')
         .select('*')
         .order('created_at', { ascending: false })
         .limit(100);
@@ -468,12 +497,14 @@ export const storageService = {
         return [];
       }
 
-      // Map Supabase snake_case to camelCase
+      // Map Supabase snake_case to camelCase and NEST items for TradingLog compliance
       const mappedData = data?.map(d => ({
         id: d.id,
+        tradeId: d.trade_id || d.id,
         symbol: d.symbol,
         type: d.type,
-        entryPrice: d.entry_price,
+        timestamp: new Date(d.created_at).getTime(),
+        entryPrice: d.entry_price, // Keep flat for some components
         exitPrice: d.exit_price,
         stopLoss: d.stop_loss,
         takeProfit: d.take_profit,
@@ -481,20 +512,33 @@ export const storageService = {
         pnl: d.pnl,
         outcome: d.outcome,
         source: d.source,
-        marketContext: d.market_context,
-        patternDetected: d.pattern_detected,
-        confluenceFactors: d.confluence_factors,
-        aiConfidence: d.ai_confidence,
-        aiReasoning: d.ai_reasoning,
-        holdDuration: d.hold_duration,
-        actualRR: d.actual_rr,
-        entryTime: d.created_at, // Use created_at as entryTime if needed
-        exitTime: d.updated_at // Approximate
+        notes: d.notes,
+        items: {
+          snapshot: d.market_context || {
+            price: d.entry_price,
+            rsi: 50,
+            trend: 'SIDEWAYS',
+            newsSentiment: 0,
+            condition: 'Neutral'
+          },
+          chartHistory: [], // Not stored in DB to save space, fetching live if needed
+          aiReasoning: d.ai_reasoning || 'No reasoning available',
+          aiConfidence: d.ai_confidence || 0,
+          aiPrediction: d.pattern_detected
+        }
       })) || [];
 
-      // Update local storage
+      // Update local storage - Merge with existing to avoid losing local-only trades
       if (mappedData.length > 0) {
-        localStorage.setItem('neurotrade_trading_logs', JSON.stringify(mappedData));
+        const localLogs = storageService.getTradingLogs();
+        const logMap = new Map();
+        
+        // Add existing local logs
+        localLogs.forEach(l => { if (l.id) logMap.set(l.id, l); });
+        // Add/Overwrite with cloud logs
+        mappedData.forEach(l => { if (l.id) logMap.set(l.id, l); });
+        
+        localStorage.setItem('neurotrade_trading_logs', JSON.stringify(Array.from(logMap.values())));
       }
 
       console.log(`[Supabase] ✅ Fetched ${mappedData.length} trading logs`);

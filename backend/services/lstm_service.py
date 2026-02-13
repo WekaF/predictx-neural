@@ -36,7 +36,7 @@ class LSTMModel(nn.Module):
         out = self.fc(out[:, -1, :])
         return out
 
-def train_model(model, train_loader, num_epochs=10, learning_rate=0.001):
+def train_model(model, train_loader, num_epochs=10, learning_rate=0.001, progress_callback=None):
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
@@ -57,6 +57,10 @@ def train_model(model, train_loader, num_epochs=10, learning_rate=0.001):
 
         avg_loss = epoch_loss / len(train_loader)
         history['loss'].append(avg_loss)
+        
+        if progress_callback:
+            progress_callback(epoch + 1, num_epochs, avg_loss)
+            
         if (epoch+1) % 5 == 0:
             print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.6f}')
 
