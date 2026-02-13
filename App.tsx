@@ -121,8 +121,8 @@ function App() {
   const [isMobileDataExpanded, setIsMobileDataExpanded] = useState(false); // Mobile collapsible state
 
   // Trading Configuration
-  const [tradingMode, setTradingMode] = useState<'paper' | 'live'>('paper');
-  const [leverage, setLeverage] = useState(10); // 1-20x
+  const [tradingMode, setTradingMode] = useState<'paper' | 'live'>(() => storageService.getTradingMode() ?? 'paper');
+  const [leverage, setLeverage] = useState(() => storageService.getLeverage() ?? 10); // 1-20x
 
   // PWA Install Prompt
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
@@ -132,10 +132,20 @@ function App() {
   const [notification, setNotification] = useState<{ message: string, type: 'success' | 'error' | 'info' | 'warning' } | null>(null);
 
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [balance, setBalance] = useState(0); // Will be loaded from Binance
+  const [balance, setBalance] = useState(() => storageService.getBalance() ?? 1000); // 1000 default virtual balance
+  
+  // Helper to update and persist balance
+  const updateBalance = useCallback((updater: number | ((prev: number) => number)) => {
+    setBalance(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      storageService.saveBalance(next);
+      return next;
+    });
+  }, []);
+
   const [riskPercent, setRiskPercent] = useState(1);
   const [trainingHistory, setTrainingHistory] = useState<TrainingData[]>([]);
-  const [autoMode, setAutoMode] = useState(false);
+  const [autoMode, setAutoMode] = useState(() => storageService.getAutoTradeState());
 
   // News & Sentiment
   const [marketNews, setMarketNews] = useState<NewsItem[]>([]);
@@ -206,37 +216,60 @@ function App() {
         const balances = await getAccountBalances();
         console.log('[App] Raw balances count:', balances.length);
         
-        // Extract base currency from symbol (e.g., "BTC/USDT" -> "BTC", "ETH/USDT" -> "ETH")
-        const baseCurrency = selectedAsset.symbol.split('/')[0];
-        console.log('[App] Looking for asset:', baseCurrency);
+        // For Futures trading, we typically want the USDT (or USDC) balance as margin/wallet balance
+        // Let's check for USDT first, then USDC, then fallback to base asset if needed
+        const quoteCurrency = 'USDT';
+        const marginBalance = balances.find(b => b.asset === quoteCurrency) || 
+                            balances.find(b => b.asset === 'USDC');
         
-        // Find balance for the selected asset's base currency
-        const assetBalance = balances.find(b => b.asset === baseCurrency);
-        console.log('[App] Found asset balance object:', assetBalance);
+        console.log('[App] Found margin balance object:', marginBalance);
         
-        if (assetBalance) {
-             console.log(`[App] ${baseCurrency} Free: ${assetBalance.free}, Locked: ${assetBalance.locked}`);
+        if (marginBalance) {
+             console.log(`[App] ${marginBalance.asset} Free: ${marginBalance.free}, Locked: ${marginBalance.locked}`);
         }
 
-        const foundBalance = parseFloat(assetBalance?.free || '0');
+        const foundBalance = parseFloat(marginBalance?.free || '0');
         
-        setBalance(foundBalance);
-        console.log(`[App] ✅ Balance for ${baseCurrency}: ${foundBalance.toFixed(8)}`);
+        if (foundBalance > 0) {
+            updateBalance(foundBalance);
+            console.log(`[App] ✅ Wallet Balance (${marginBalance?.asset}): ${foundBalance.toFixed(2)}`);
+        } else {
+            console.log(`[App] ⚠️ No ${quoteCurrency} balance found, using local/virtual balance.`);
+        }
       } catch (error) {
         console.error('[App] ❌ Failed to load Binance balance:', error);
         console.log('[App] Using balance 0 (could not connect to Binance)');
-        setBalance(0);
+        // updateBalance(0); // Don't clear local balance just because fetch failed
       }
     };
 
 
     loadBinanceBalance();
     
-    // Restore Active Signal if any
-    const savedSignal = storageService.getActiveSignal();
-    if (savedSignal) {
-      console.log('[App] ♻️ Restored active signal:', savedSignal.symbol);
+    // Restore Active Signal if any for the CURRENTLY selected asset
+    const savedSignal = storageService.getActiveSignal(selectedAsset.symbol);
+    if (savedSignal && savedSignal.symbol === selectedAsset.symbol) {
+      console.log('[App] ♻️ Restored active signal for:', selectedAsset.symbol);
       setActiveSignal(savedSignal);
+      
+      // Override UI settings to match the open entry as requested by user
+      if (savedSignal.execution?.leverage) {
+        setLeverage(savedSignal.execution.leverage);
+      }
+      if (savedSignal.execution?.mode) {
+        setTradingMode(savedSignal.execution.mode);
+      }
+    } else {
+      setActiveSignal(null); // Clear state if no active signal for this asset
+    }
+
+    // Restore Last Analysis (Engine Scan) if any for this asset
+    const savedAnalysis = storageService.getLastAnalysis(selectedAsset.symbol);
+    if (savedAnalysis) {
+      console.log('[App] ♻️ Restored last analysis for:', selectedAsset.symbol);
+      setLastAnalysis(savedAnalysis);
+    } else {
+      setLastAnalysis(null);
     }
   }, [selectedAsset]); // Re-fetch when asset changes
 
@@ -634,7 +667,7 @@ function App() {
 
             const riskedAmount = dist * quantity;
 
-            setBalance(b => b + pnl);
+            updateBalance(b => b + pnl);
 
             // Add to Trade History
             const completedTrade: EnhancedExecutedTrade = {
@@ -706,6 +739,9 @@ function App() {
               return [newHistory, ...prev].slice(0, 15);
             });
 
+            // Clear active signal from persistent storage once closed
+            storageService.saveActiveSignal(null, currentSignal.symbol);
+            
             return { ...currentSignal, outcome: closedOutcome };
           }
 
@@ -762,6 +798,7 @@ function App() {
     if (signal) {
       signal.marketContext = context;
       setLastAnalysis(signal);
+      storageService.saveLastAnalysis(selectedAsset.symbol, signal); // Persist scan results
     }
 
     setIsAnalyzing(false);
@@ -944,8 +981,18 @@ function App() {
 
     console.log('[confirmTrade] 🚀 Executing trade:', signal);
 
-    // Execute the trade
-    setActiveSignal({ ...signal, outcome: 'PENDING' });
+    const signalToPersist = { 
+      ...signal, 
+      outcome: 'PENDING',
+      execution: {
+        status: 'FILLED',
+        side: signal.type,
+        leverage: leverage,
+        mode: tradingMode
+      }
+    };
+    setActiveSignal(signalToPersist);
+    storageService.saveActiveSignal(signalToPersist, signal.symbol); // Persist for refresh
     setPendingSignal(null);
 
     // Send push notification
@@ -1037,8 +1084,10 @@ function App() {
     // Calculate Quantity (Asset Units)
     const entry = entryPrice || 1; // Prevent div by zero
     const positionSizeUsd = balance * leverage * (riskPercent / 100);
-    // Round quantity to 6 decimal places for Binance LOT_SIZE compliance
-    const quantityAsset = Math.floor((positionSizeUsd / entry) * 1000000) / 1000000;
+    
+    // Dynamically round quantity based on Binance LOT_SIZE stepSize
+    const tradeSymbol = selectedAsset.symbol.replace('/', '').replace('USD', 'USDT');
+    const quantityAsset = await binanceTradingService.roundQuantity(tradeSymbol, positionSizeUsd / entry);
     
     // Safety check: Don't allow 0 or extremely small quantity
     if (quantityAsset <= 0) {
@@ -1076,9 +1125,18 @@ function App() {
         }
     }
 
-    const signalWithQty = { ...newSignal, quantity: quantityAsset };
+    const signalWithQty = { 
+      ...newSignal, 
+      quantity: quantityAsset,
+      execution: {
+        status: 'FILLED',
+        side: newSignal.type,
+        leverage: leverage,
+        mode: tradingMode
+      }
+    };
     setActiveSignal(signalWithQty);
-    storageService.saveActiveSignal(signalWithQty); // Persist state
+    storageService.saveActiveSignal(signalWithQty, signalWithQty.symbol); // Persist state
     setShowManualModal(false);
 
     // Send push notification for manual trade
@@ -1163,7 +1221,7 @@ function App() {
 
     const riskedAmount = dist * quantity;
 
-    setBalance(b => b + pnl);
+    updateBalance(b => b + pnl);
 
     // Trigger Webhook
     sendWebhookNotification('MANUAL_CLOSE', activeSignal, activeSignal.entryPrice).then(res => {
@@ -1808,12 +1866,14 @@ function App() {
                                     const tradeSymbol = activeSignal.symbol.replace('/', '').replace('USD', 'USDT');
                                     const closeSide = activeSignal.type === 'BUY' ? 'SELL' : 'BUY';
                                     
+                                    // Dynamically round quantity based on Binance LOT_SIZE stepSize
+                                    const roundedQty = await binanceTradingService.roundQuantity(tradeSymbol, activeSignal.quantity || 0);
+                                    
                                     await binanceTradingService.placeOrder({
                                         symbol: tradeSymbol,
                                         side: closeSide,
                                         type: 'MARKET',
-                                        // Ensure quantity is rounded (6 decimal places is safe for most assets)
-                                        quantity: Math.floor((activeSignal.quantity || 0) * 1000000) / 1000000
+                                        quantity: roundedQty
                                     });
                                     
                                     showNotification("Position Closed on Binance!", "success");
@@ -1825,9 +1885,9 @@ function App() {
                                         ? (closePrice - activeSignal.entryPrice) * (activeSignal.quantity || 0)
                                         : (activeSignal.entryPrice - closePrice) * (activeSignal.quantity || 0);
 
-                                    setBalance(b => b + pnl); // Update local balance (will obtain real on refresh)
+                                    const symbolToClear = activeSignal.symbol;
                                     setActiveSignal(null); // Clear active signal
-                                    storageService.saveActiveSignal(null); // Clear persistence
+                                    storageService.saveActiveSignal(null, symbolToClear); // Clear persistence
                                     
                                     // Save log
                                     // ... existing log logic ...
@@ -1984,7 +2044,10 @@ function App() {
                     <div className="space-y-2">
                       <div className="flex bg-slate-950 p-1 rounded-lg border border-slate-800">
                         <button
-                          onClick={() => setTradingMode('paper')}
+                          onClick={() => {
+                            setTradingMode('paper');
+                            storageService.saveTradingMode('paper');
+                          }}
                           className={`flex-1 py-1.5 rounded-md text-[10px] font-bold transition-all flex items-center justify-center gap-1.5 ${tradingMode === 'paper'
                             ? 'bg-slate-800 text-blue-400 shadow-sm'
                             : 'text-slate-500 hover:text-slate-300'
@@ -2000,6 +2063,7 @@ function App() {
                             }
                             if (window.confirm('Enable LIVE TRADING mode? Real funds will be used.')) {
                               setTradingMode('live');
+                              storageService.saveTradingMode('live');
                             }
                           }}
                           className={`flex-1 py-1.5 rounded-md text-[10px] font-bold transition-all flex items-center justify-center gap-1.5 ${tradingMode === 'live'
@@ -2030,7 +2094,11 @@ function App() {
                         </div>
                         <input
                           type="range" min="1" max="20" value={leverage}
-                          onChange={(e) => setLeverage(parseInt(e.target.value))}
+                          onChange={(e) => {
+                            const val = parseInt(e.target.value);
+                            setLeverage(val);
+                            storageService.saveLeverage(val);
+                          }}
                           className="w-full h-6 opacity-0 cursor-pointer absolute z-10"
                         />
                         <div className="w-3 h-3 bg-amber-500 rounded-full shadow-lg absolute pointer-events-none transition-all" 
@@ -2041,7 +2109,10 @@ function App() {
                         {[5, 10, 15, 20].map(preset => (
                           <button
                             key={preset}
-                            onClick={() => setLeverage(preset)}
+                            onClick={() => {
+                              setLeverage(preset);
+                              storageService.saveLeverage(preset);
+                            }}
                             className={`flex-1 py-1 rounded text-[9px] font-bold transition-all border ${leverage === preset
                               ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
                               : 'bg-slate-950 text-slate-500 border-slate-800 hover:border-slate-700'

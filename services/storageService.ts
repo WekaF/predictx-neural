@@ -8,6 +8,10 @@ const CONFIG_STORAGE_KEY = 'neurotrade_backtest_configs';
 const MODEL_WEIGHTS_KEY = 'neurotrade_ml_weights';
 const SETTINGS_STORAGE_KEY = 'neurotrade_settings';
 const AUTO_TRADE_KEY = 'neurotrade_auto_mode';
+const BALANCE_STORAGE_KEY = 'neurotrade_balance';
+const LEVERAGE_STORAGE_KEY = 'neurotrade_leverage';
+const TRADING_MODE_STORAGE_KEY = 'neurotrade_trading_mode';
+const LAST_ANALYSIS_STORAGE_KEY = 'neurotrade_last_analysis';
 
 export const storageService = {
   // --- Training Data ---
@@ -350,6 +354,16 @@ export const storageService = {
     }
   },
 
+  // --- Balance Persistence ---
+  saveBalance: (balance: number) => {
+    localStorage.setItem(BALANCE_STORAGE_KEY, balance.toString());
+  },
+
+  getBalance: (): number | null => {
+    const saved = localStorage.getItem(BALANCE_STORAGE_KEY);
+    return saved ? parseFloat(saved) : null;
+  },
+
   saveSettings: async (settings: AppSettings) => {
     localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
 
@@ -401,21 +415,110 @@ export const storageService = {
     }
   },
 
-  // --- Active Signal Persistence (State Restore) ---
-  getActiveSignal: (): any | null => {
+  // --- Leverage Persistence ---
+  saveLeverage: (leverage: number) => {
+    localStorage.setItem(LEVERAGE_STORAGE_KEY, leverage.toString());
+  },
+
+  getLeverage: (): number | null => {
+    const saved = localStorage.getItem(LEVERAGE_STORAGE_KEY);
+    return saved ? parseInt(saved) : null;
+  },
+
+  // --- Trading Mode Persistence ---
+  saveTradingMode: (mode: 'paper' | 'live') => {
+    localStorage.setItem(TRADING_MODE_STORAGE_KEY, mode);
+  },
+
+  getTradingMode: (): 'paper' | 'live' | null => {
+    const saved = localStorage.getItem(TRADING_MODE_STORAGE_KEY);
+    return (saved === 'paper' || saved === 'live') ? saved : null;
+  },
+
+  // --- Last Analysis Persistence (Engine Scan Results) ---
+  saveLastAnalysis: (symbol: string, analysis: any) => {
     try {
-      const data = localStorage.getItem('neurotrade_active_signal');
-      return data ? JSON.parse(data) : null;
+      const existingData = localStorage.getItem(LAST_ANALYSIS_STORAGE_KEY);
+      const analysisMap: Record<string, any> = existingData ? JSON.parse(existingData) : {};
+      
+      analysisMap[symbol] = analysis;
+      localStorage.setItem(LAST_ANALYSIS_STORAGE_KEY, JSON.stringify(analysisMap));
+    } catch (e) {
+      console.error('[Storage] Failed to save last analysis:', e);
+    }
+  },
+
+  getLastAnalysis: (symbol: string): any | null => {
+    try {
+      const data = localStorage.getItem(LAST_ANALYSIS_STORAGE_KEY);
+      if (!data) return null;
+      
+      const analysisMap = JSON.parse(data);
+      return analysisMap[symbol] || null;
     } catch {
       return null;
     }
   },
 
-  saveActiveSignal: (signal: any | null) => {
-    if (signal) {
-      localStorage.setItem('neurotrade_active_signal', JSON.stringify(signal));
-    } else {
-      localStorage.removeItem('neurotrade_active_signal');
+  // --- Active Signal Persistence (State Restore) ---
+  getActiveSignal: (symbol?: string): any | null => {
+    try {
+      const data = localStorage.getItem('neurotrade_active_signal');
+      if (!data) return null;
+      
+      const parsed = JSON.parse(data);
+      
+      // Migration: if it's an old signal object and not a map
+      if (parsed && parsed.id && !symbol) return parsed;
+      if (parsed && parsed.id && symbol) {
+        return parsed.symbol === symbol ? parsed : null;
+      }
+      
+      // New Map-based storage
+      if (symbol) {
+        return parsed[symbol] || null;
+      }
+      
+      // Fallback: return the first one found or null
+      const firstKey = Object.keys(parsed)[0];
+      return firstKey ? parsed[firstKey] : null;
+
+    } catch {
+      return null;
+    }
+  },
+
+  saveActiveSignal: (signal: any | null, symbol?: string) => {
+    try {
+      const existingData = localStorage.getItem('neurotrade_active_signal');
+      let signalMap: Record<string, any> = {};
+      
+      if (existingData) {
+        const parsed = JSON.parse(existingData);
+        // Migration: convert old single signal to map
+        if (parsed && parsed.id) {
+          signalMap[parsed.symbol] = parsed;
+        } else {
+          signalMap = parsed;
+        }
+      }
+
+      if (signal) {
+        const targetSymbol = symbol || signal.symbol;
+        if (targetSymbol) {
+          signalMap[targetSymbol] = signal;
+          localStorage.setItem('neurotrade_active_signal', JSON.stringify(signalMap));
+        }
+      } else if (symbol) {
+        // Clear specific symbol if provided
+        delete signalMap[symbol];
+        localStorage.setItem('neurotrade_active_signal', JSON.stringify(signalMap));
+      } else {
+        // Fallback: if no symbol/signal, clear everything (legacy behavior)
+        localStorage.removeItem('neurotrade_active_signal');
+      }
+    } catch (e) {
+      console.error('[Storage] Failed to save active signal:', e);
     }
   },
 

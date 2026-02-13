@@ -16,6 +16,10 @@ const CORS_PROXIES = [
 const BINANCE_PRODUCTION_API = 'https://api.binance.com';
 const BINANCE_TESTNET_API = 'https://testnet.binance.vision';
 
+// Local cache for symbol stepSize (LOT_SIZE filter)
+const symbolStepSizeCache = new Map<string, number>();
+const symbolPrecisionCache = new Map<string, number>();
+
 /**
  * Get API base URL based on testnet setting
  * Uses local proxy in development to avoid CORS
@@ -321,6 +325,65 @@ export async function placeOrder(params: {
 }
 
 /**
+ * Get exchange info for a symbol to find LOT_SIZE filters
+ */
+export async function getSymbolFilters(symbol: string): Promise<{ stepSize: number, precision: number } | null> {
+    // Check cache first
+    if (symbolStepSizeCache.has(symbol)) {
+        return { 
+            stepSize: symbolStepSizeCache.get(symbol)!, 
+            precision: symbolPrecisionCache.get(symbol)! 
+        };
+    }
+
+    try {
+        const url = `${getApiBase()}/api/v3/exchangeInfo?symbol=${symbol}`;
+        const response = await fetchWithProxy(url);
+        const data = await response.json();
+        
+        const symbolInfo = data.symbols?.find((s: any) => s.symbol === symbol);
+        if (!symbolInfo) return null;
+
+        const lotSizeFilter = symbolInfo.filters.find((f: any) => f.filterType === 'LOT_SIZE');
+        if (!lotSizeFilter) return null;
+
+        const stepSize = parseFloat(lotSizeFilter.stepSize);
+        const precision = symbolInfo.baseAssetPrecision || 8;
+
+        symbolStepSizeCache.set(symbol, stepSize);
+        symbolPrecisionCache.set(symbol, precision);
+
+        return { stepSize, precision };
+    } catch (error) {
+        console.error(`[Binance] Error fetching filters for ${symbol}:`, error);
+        return null;
+    }
+}
+
+/**
+ * Round quantity to comply with Binance LOT_SIZE stepSize
+ */
+export async function roundQuantity(symbol: string, quantity: number): Promise<number> {
+    const filters = await getSymbolFilters(symbol);
+    if (!filters) {
+        // Fallback to 6 decimals if filter not found (safer than nothing)
+        return Math.floor(quantity * 1000000) / 1000000;
+    }
+
+    const { stepSize } = filters;
+    
+    // Calculate number of decimals from stepSize (e.g., 0.001 -> 3)
+    // Avoid precision issues with log/toString
+    const stepStr = stepSize.toString();
+    const decimals = stepStr.indexOf('.') === -1 ? 0 : stepStr.split('.')[1].length;
+    
+    // Round down to the nearest multiple of stepSize
+    // Using simple truncate to decimals is usually sufficient for Binance
+    const factor = Math.pow(10, decimals);
+    return Math.floor(quantity * factor) / factor;
+}
+
+/**
  * Cancel an order
  */
 export async function cancelOrder(symbol: string, orderId: number): Promise<any> {
@@ -377,5 +440,7 @@ export default {
     cancelOrder,
     getTradeHistory,
     testConnection,
-    isConfigured
+    isConfigured,
+    getSymbolFilters,
+    roundQuantity
 };
