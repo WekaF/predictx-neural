@@ -43,7 +43,10 @@ const reconstructMarketState = async (
         ...trade.marketContext.indicators,
         sma50: trade.marketContext.indicators.sma50,
         sma200: trade.marketContext.indicators.sma200,
-        ema20: trade.marketContext.indicators.ema12 || 0, // Fallback
+        sma20: trade.marketContext.indicators.sma20 || 0,
+        ema20: trade.marketContext.indicators.sma20 || 0, // No ema20 in MarketContext, fallback to sma20
+        ema12: trade.marketContext.indicators.ema12 || 0,
+        ema26: trade.marketContext.indicators.ema26 || 0,
         volumeSma: trade.marketContext.volume.average,
         fibLevels: {
           level0: 0,
@@ -111,7 +114,10 @@ const reconstructMarketState = async (
       rsi: calculateRSI(closes),
       sma50: calculateSMA(closes, 50),
       sma200: calculateSMA(closes, 200),
+      sma20: calculateSMA(closes, 20),
       ema20: calculateEMA(closes, 20),
+      ema12: calculateEMA(closes, 12),
+      ema26: calculateEMA(closes, 26),
       volumeSma: calculateSMA(mockCandles.map(c => c.volume), 20),
       fibLevels: {
         level0: Math.min(...lows),

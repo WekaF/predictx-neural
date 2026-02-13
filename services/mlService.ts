@@ -7,6 +7,7 @@ import { aiBackendService } from "./apiService";
 import { batchTrainingService, BatchTrainingProgress, BatchTrainingResult } from "./batchTrainingService";
 import { hyperparameterOptimizer, OptimizationResult } from "./hyperparameterOptimizer";
 import { EnhancedExecutedTrade } from "../types/enhanced";
+import { smcService } from "./smcService";
 
 // Gemini API removed - using pure self-learning RL agent
 // import { analyzeMarketWithAI } from "./geminiService";
@@ -465,6 +466,7 @@ export const analyzeMarket = async (
     let backendAction = null;
     let backendConfidence = 0;
     let backendExecution = null;
+    let backendMeta = null;
     
     // Only call backend if not in rapid training loop (optimization)
     if (!isTraining) {
@@ -474,6 +476,7 @@ export const analyzeMarket = async (
                 backendAction = backendRes.agent_action.action; // BUY, SELL, HOLD
                 backendConfidence = backendRes.agent_action.confidence; // 0-100
                 backendExecution = backendRes.execution;
+                backendMeta = backendRes.agent_action.meta;
                 console.log(`[Python AI] ${backendAction} with ${backendConfidence}% confidence`);
             }
         } catch (e) {
@@ -675,7 +678,8 @@ export const analyzeMarket = async (
             confidence: Math.round(enhancedConfidence),
             reasoning: `AI Strategy (${strategy}): Wait. ${generateReasoning()}`,
             timestamp: Date.now(),
-            execution: backendExecution
+            execution: backendExecution,
+            meta: backendMeta
         };
     }
 
@@ -700,6 +704,17 @@ export const analyzeMarket = async (
     // Get pattern for logging
     const currentPattern = brain.identifyPattern(state);
 
+    // --- SMC ANALYSIS (Local Fallback) ---
+    // Ensure we always have SMC data for the UI
+    const localSMC = smcService.getSMCContext(candles);
+
+    // Merge backend meta with local fallback if needed
+    const finalMeta = backendMeta || {};
+    if (!finalMeta.smc) {
+        finalMeta.smc = localSMC;
+        console.log(`[SMC] Used local fallback analysis. Score: ${localSMC.score}, Active OB: ${localSMC.active_ob ? 'YES' : 'NO'}`);
+    }
+
     return {
         id: generateUUID(),
         symbol: assetSymbol,
@@ -714,7 +729,8 @@ export const analyzeMarket = async (
         confluenceFactors: [`Strategy: ${strategy}`, `Enhanced Confidence: ${enhancedConfidence.toFixed(0)}%`, `Trend: ${indicators.trend}`, `RSI: ${indicators.rsi.toFixed(0)}`],
         riskRewardRatio: rr,
         outcome: 'PENDING',
-        execution: backendExecution
+        execution: backendExecution,
+        meta: finalMeta
     };
 };
 

@@ -8,12 +8,11 @@ class TradingService:
     """
     Execution Service for PredictX
     Handles position sizing, leverage, and trade logging.
-    Optimized for Rp 250,000 capital.
+    Optimized for USDT capital.
     """
-    def __init__(self, initial_balance=250000):
-        self.balance_idr = initial_balance
+    def __init__(self, initial_balance=10000):
+        self.balance_usdt = initial_balance
         self.min_order_usd = 5.0 # Binance minimum notional
-        self.usd_to_idr = 15500 # Approx exchange rate
         
         # Binance Setup
         self.api_key = os.environ.get("BINANCE_API_KEY")
@@ -50,21 +49,16 @@ class TradingService:
             leverage = 2
             
         # 2. Position Sizing
-        # Use 20% of balance (Rp 50,000) per trade
-        margin_idr = self.balance_idr * 0.2
-        position_size_idr = margin_idr * leverage
+        # Use 20% of balance per trade
+        margin_usdt = self.balance_usdt * 0.05 # Conservative 5% per trade
+        position_size_usdt = margin_usdt * leverage
         
         # Verify Minimum Notional ($5)
-        # Rp 50,000 * 3x = Rp 150,000 (~$9.6) -> OK
-        # Rp 50,000 * 1x = Rp 50,000 (~$3.2) -> TOO SMALL
-        if position_size_idr < (self.min_order_usd * self.usd_to_idr):
-            # Boost leverage to meet minimum if possible
-            needed_leverage = (self.min_order_usd * self.usd_to_idr) / margin_idr
-            if needed_leverage <= 5:
-                leverage = round(needed_leverage + 0.5)
-                position_size_idr = margin_idr * leverage
-            else:
-                return {"status": "ERROR", "reason": "Balance too small for minimum Binance order"}
+        if position_size_usdt < self.min_order_usd:
+            # Boost leverage or margin to meet minimum if possible
+            if position_size_usdt * 2 < self.min_order_usd:
+                 margin_usdt = self.min_order_usd
+                 position_size_usdt = margin_usdt * leverage
 
         # 3. Calculate TP / SL (Standard Tier 5/7 settings)
         tp_pct = 0.06 # +6%
@@ -83,8 +77,8 @@ class TradingService:
             "symbol": symbol,
             "side": "BUY" if is_buy else "SELL",
             "leverage": leverage,
-            "margin_idr": round(margin_idr, 0),
-            "size_idr": round(position_size_idr, 0),
+            "margin": round(margin_usdt, 2),
+            "size": round(position_size_usdt, 2),
             "price": current_price,
             "tp": round(tp_price, 2),
             "sl": round(sl_price, 2),

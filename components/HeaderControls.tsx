@@ -65,7 +65,7 @@ export const HeaderControls: React.FC<HeaderControlsProps> = ({
                         <Wallet className="w-3 h-3" /> BALANCE
                     </span>
                     <span className="font-mono text-emerald-400 font-bold text-sm">
-                        ${balance.toFixed(2)}
+                        USDT {balance.toLocaleString('id-ID', { maximumFractionDigits: 2 })}
                     </span>
                 </div>
             </div>

@@ -81,30 +81,37 @@ function App() {
 
   // Helper to map raw logs to EnhancedExecutedTrade
   const mapToEnhancedTrades = (logs: any[]): EnhancedExecutedTrade[] => {
-    return logs.map((log: any) => ({
-      id: log.id,
-      symbol: log.symbol,
-      entryTime: log.entryTime || log.created_at || new Date().toISOString(),
-      exitTime: log.exitTime || log.updated_at || new Date().toISOString(),
-      type: log.type,
-      entryPrice: log.entryPrice || log.entry_price || 0,
-      exitPrice: log.exitPrice || log.exit_price || 0,
-      stopLoss: log.stopLoss || log.stop_loss || 0,
-      takeProfit: log.takeProfit || log.take_profit || 0,
-      quantity: log.quantity || 0,
-      pnl: log.pnl || 0,
-      outcome: log.outcome || 'PENDING',
-      source: log.source || 'AI',
-      marketContext: log.marketContext || log.market_context,
-      patternDetected: log.patternDetected || log.pattern_detected,
-      confluenceFactors: log.confluenceFactors || log.confluence_factors,
-      aiConfidence: log.aiConfidence || log.ai_confidence,
-      aiReasoning: log.aiReasoning || log.ai_reasoning,
-      holdDuration: log.holdDuration || log.hold_duration,
-      riskRewardRatio: log.riskRewardRatio || log.risk_reward_ratio,
-      actualRR: log.actualRR || log.actual_rr,
-      tags: log.tags
-    }));
+    return logs.map((log: any) => {
+      // Ensure we have valid timestamps
+      const now = new Date().toISOString();
+      const entryTime = log.entryTime || log.created_at || log.entry_time || now;
+      const exitTime = log.exitTime || log.updated_at || log.exit_time || entryTime;
+      
+      return {
+        id: log.id,
+        symbol: log.symbol,
+        entryTime,
+        exitTime,
+        type: log.type,
+        entryPrice: log.entryPrice || log.entry_price || 0,
+        exitPrice: log.exitPrice || log.exit_price || 0,
+        stopLoss: log.stopLoss || log.stop_loss || 0,
+        takeProfit: log.takeProfit || log.take_profit || 0,
+        quantity: log.quantity || 0,
+        pnl: log.pnl || 0,
+        outcome: log.outcome || 'PENDING',
+        source: log.source || 'AI',
+        marketContext: log.marketContext || log.market_context,
+        patternDetected: log.patternDetected || log.pattern_detected,
+        confluenceFactors: log.confluenceFactors || log.confluence_factors,
+        aiConfidence: log.aiConfidence || log.ai_confidence,
+        aiReasoning: log.aiReasoning || log.ai_reasoning,
+        holdDuration: log.holdDuration || log.hold_duration,
+        riskRewardRatio: log.riskRewardRatio || log.risk_reward_ratio,
+        actualRR: log.actualRR || log.actual_rr,
+        tags: log.tags
+      };
+    });
   };
  // Confirmed & Active
   const [tradeHistory, setTradeHistory] = useState<EnhancedExecutedTrade[]>([]);
@@ -346,8 +353,10 @@ function App() {
       try {
         console.log(`[App] Loading market data for ${selectedAsset.symbol} (${selectedAsset.type})...`);
 
-        // Clear previous data
-        setCandles([]);
+        // Clear previous data ONLY if not in cache (Smart Loading)
+        if (!binanceService.hasCachedData(selectedAsset.symbol, selectedInterval)) {
+             setCandles([]);
+        }
         setPendingSignal(null);
 
         if (activeSignal?.outcome === 'PENDING') {
@@ -519,7 +528,7 @@ function App() {
         clearInterval(pollingInterval);
       }
     };
-  }, [selectedAsset]);
+  }, [selectedAsset, selectedInterval]);
 
   // Show Notification Helper
   const showNotification = (message: string, type: 'success' | 'error' | 'info' | 'warning') => {
@@ -606,7 +615,10 @@ function App() {
           trend,
           sma200,
           sma50: calculateSMA(closes, 50),
+          sma20: calculateSMA(closes, 20),
           ema20: calculateEMA(closes, 20),
+          ema12: calculateEMA(closes, 12),
+          ema26: calculateEMA(closes, 26),
           volumeSma: calculateSMA(volumes, 20),
           nearestSupport: sr.support,
           nearestResistance: sr.resistance,
@@ -896,17 +908,21 @@ function App() {
         const futureSlice = candles.slice(i, i + 20);
 
         // Calculate indicators
-        const rsi = calculateRSI(subset);
-        const sma200 = calculateSMA(subset, 200);
+        const prices = subset.map(c => c.close);
+        const rsi = calculateRSI(prices);
+        const sma200 = calculateSMA(prices, 200);
         const trend = analyzeTrend(subset, sma200);
 
         const trainingIndicators: TechnicalIndicators = {
           rsi,
           trend,
           fibLevels: { level0: 0, level236: 0, level382: 0, level500: 0, level618: 0, level100: 0 },
-          sma50: calculateSMA(subset, 50),
+          sma50: calculateSMA(prices, 50),
           sma200,
-          ema20: calculateEMA(subset, 20),
+          sma20: calculateSMA(prices, 20),
+          ema20: calculateEMA(prices, 20),
+          ema12: calculateEMA(prices, 12),
+          ema26: calculateEMA(prices, 26),
           nearestSupport: Math.min(...subset.slice(-20).map(c => c.low)),
           nearestResistance: Math.max(...subset.slice(-20).map(c => c.high)),
           volumeSma: calculateSMA(subset.map(c => c.volume), 20),
@@ -979,6 +995,13 @@ function App() {
       return;
     }
 
+    // CRITICAL: Prevent double entry - check if there's already an active trade
+    if (activeSignal && activeSignal.outcome === 'PENDING') {
+      console.warn('[confirmTrade] ⚠️ BLOCKED: Active trade already exists. Cannot enter new position.');
+      showNotification(`⚠️ Cannot enter: Active ${activeSignal.type} position on ${activeSignal.symbol} already exists`, 'warning');
+      return;
+    }
+
     console.log('[confirmTrade] 🚀 Executing trade:', signal);
 
     const signalToPersist = { 
@@ -1005,17 +1028,25 @@ function App() {
       positionSize: balance * leverage * (riskPercent / 100)
     });
 
-    // Save signal to Supabase
-    storageService.saveTradeSignal(signal);
-
     // --- SAVE TRADING LOG (JOURNAL) ---
     if (indicators) {
+      const now = new Date().toISOString();
       const log: TradingLog = {
         id: generateUUID(),
         tradeId: signal.id,
         timestamp: Date.now(),
+        entryTime: now, // Add timestamp for trade history display
+        exitTime: now,  // Will be updated when trade closes
         symbol: signal.symbol,
         type: signal.type as 'BUY' | 'SELL',
+        entryPrice: signal.entryPrice,
+        exitPrice: 0, // Will be updated when trade closes
+        stopLoss: signal.stopLoss,
+        takeProfit: signal.takeProfit,
+        quantity: 0, // Will be calculated when trade closes
+        pnl: 0, // Will be calculated when trade closes
+        outcome: 'PENDING',
+        source: signal.patternDetected === "Manual Entry" ? "MANUAL" : "AI",
         items: {
           snapshot: {
             price: signal.entryPrice,
@@ -1668,7 +1699,7 @@ function App() {
 
         {/* View Content */}
         {currentView === 'analytics' ? (
-          <AnalyticsDashboard />
+          <AnalyticsDashboard trades={tradeHistory} />
         ) : currentView === 'leverage' ? (
           <LeverageDashboard />
         ) : currentView === 'journal' ? (
@@ -1786,7 +1817,7 @@ function App() {
 
                   <div className="flex-1 relative">
                     <ModernCandleChart
-                      data={candles.slice(-100)}
+                      data={candles.slice(-150)}
                       pendingSignal={pendingSignal}
                       activeTrade={activeSignal?.outcome === 'PENDING' ? activeSignal : null}
                       fibLevels={indicators?.fibLevels}
@@ -2000,12 +2031,12 @@ function App() {
                       </div>
 
                       {/* Execution Preview (Only if not HOLD) */}
-                      {lastAnalysis.type !== 'HOLD' && lastAnalysis.execution && (
+                       {lastAnalysis.type !== 'HOLD' && lastAnalysis.execution && (
                         <div className="bg-slate-950/80 rounded-lg p-3 border border-slate-800/50 space-y-2">
                            <div className="flex justify-between items-center">
                               <span className="text-[10px] text-slate-500">Margin</span>
                               <span className="text-xs font-bold text-white">
-                                Rp {lastAnalysis.execution?.margin_idr?.toLocaleString() || '0'}
+                                USDT {lastAnalysis.execution?.margin?.toFixed(2) || '0.00'}
                               </span>
                            </div>
                            <div className="flex justify-between items-center">
@@ -2028,6 +2059,69 @@ function App() {
                     <div className="py-8 flex flex-col items-center justify-center text-slate-600 space-y-2 italic">
                        <Radio className="w-8 h-8 opacity-20 animate-pulse" />
                        <span className="text-[10px]">Awaiting engine scan...</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* SMC Insights Panel */}
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-lg flex flex-col shrink-0 overflow-hidden relative group">
+                  <div className="absolute top-0 right-0 w-24 h-24 bg-purple-500/5 rounded-full blur-2xl group-hover:bg-purple-500/10 transition-all"></div>
+                  
+                  <div className="flex justify-between items-center mb-4 relative z-10">
+                    <h3 className="text-xs font-bold text-purple-500 flex items-center gap-2 tracking-wider">
+                      <Layers className="w-4 h-4" /> SMC INSIGHTS
+                    </h3>
+                  </div>
+
+                  {lastAnalysis && lastAnalysis.meta && lastAnalysis.meta.smc ? (
+                    <div className="space-y-4 relative z-10">
+                       <div className="flex items-center justify-between">
+                          <div className="flex flex-col">
+                             <span className="text-[10px] text-slate-500 font-bold uppercase">Structure</span>
+                             <span className={`text-lg font-black ${
+                               lastAnalysis.meta.smc.score >= 0.7 ? 'text-emerald-400' : 
+                               lastAnalysis.meta.smc.score <= 0.3 ? 'text-rose-400' : 'text-slate-400'
+                             }`}>
+                               {lastAnalysis.meta.smc.score >= 0.7 ? 'BULLISH' : 
+                                lastAnalysis.meta.smc.score <= 0.3 ? 'BEARISH' : 'NEUTRAL'}
+                             </span>
+                          </div>
+                          <div className="flex flex-col items-end">
+                             <span className="text-[10px] text-slate-500 font-bold uppercase">Context</span>
+                             <span className={`text-xs font-bold px-2 py-1 rounded ${
+                               lastAnalysis.meta.smc.active_ob ? 'bg-blue-500/20 text-blue-400' : 'bg-slate-800 text-slate-500'
+                             }`}>
+                               {lastAnalysis.meta.smc.active_ob ? 'OB RETEST' : 'NO SETUP'}
+                             </span>
+                          </div>
+                       </div>
+                       
+                       {lastAnalysis.meta.smc.active_ob && (
+                           <div className="bg-slate-950/80 rounded-lg p-3 border border-slate-800/50 space-y-2">
+                               <div className="flex justify-between items-center mb-1">
+                                   <span className="text-[10px] text-slate-400 font-bold">ACTIVE ORDER BLOCK</span>
+                                   <div className="flex items-center gap-1">
+                                       <span className={`w-2 h-2 rounded-full ${lastAnalysis.meta.smc.active_ob.type === 'BULLISH_OB' ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
+                                       <span className="text-[10px] text-slate-500 font-mono">
+                                          {lastAnalysis.meta.smc.active_ob.type === 'BULLISH_OB' ? 'Bullish' : 'Bearish'}
+                                       </span>
+                                   </div>
+                               </div>
+                               <div className="flex justify-between items-center text-xs font-mono">
+                                   <span className="text-slate-500">Top</span>
+                                   <span className="text-rose-400">{lastAnalysis.meta.smc.active_ob.top}</span>
+                               </div>
+                               <div className="flex justify-between items-center text-xs font-mono">
+                                   <span className="text-slate-500">Bottom</span>
+                                   <span className="text-emerald-400">{lastAnalysis.meta.smc.active_ob.bottom}</span>
+                               </div>
+                           </div>
+                       )}
+                    </div>
+                  ) : (
+                    <div className="py-8 flex flex-col items-center justify-center text-slate-600 space-y-2 italic">
+                       <Layers className="w-8 h-8 opacity-20" />
+                       <span className="text-[10px]">No SMC data available</span>
                     </div>
                   )}
                 </div>
@@ -2129,54 +2223,21 @@ function App() {
                       <div className="grid grid-cols-2 gap-y-2 gap-x-4">
                         <div className="flex justify-between items-center">
                           <span className="text-[10px] text-slate-500">Balance</span>
-                          <span className="text-xs font-mono font-medium text-emerald-400">{balance.toFixed(8)} <span className="text-[9px] text-slate-400">{selectedAsset.symbol.split('/')[0]}</span></span>
+                          <span className="text-xs font-mono font-medium text-emerald-400">USDT {balance.toLocaleString('id-ID', { maximumFractionDigits: 2 })}</span>
                         </div>
                         <div className="flex justify-between items-center">
                           <span className="text-[10px] text-slate-500">Max Size</span>
-                          <span className="text-xs font-mono font-medium text-slate-300">${(balance * leverage * (riskPercent / 100)).toFixed(0)}</span>
+                          <span className="text-xs font-mono font-medium text-slate-300">USDT {(balance * leverage * (riskPercent / 100)).toLocaleString('id-ID', { maximumFractionDigits: 0 })}</span>
                         </div>
                       </div>
                     </div>
                   </div>
                 </div>
 
-                {/* AI Training Panel */}
-                <TrainingPanel selectedSymbol={selectedAsset.symbol} />
               </div>
 
-              {/* RIGHT COLUMN: Training & News */}
+              {/* RIGHT COLUMN: News \u0026 Order Book */}
               <div className={`lg:col-span-1 space-y-3 md:space-y-4 flex-col lg:overflow-y-auto ${terminalTab === 'data' ? 'flex' : 'hidden lg:flex'}`}>
-                {/* AI Learning History */}
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 md:p-4 shadow-xl flex flex-col h-64 shrink-0">
-                  <h2 className="text-slate-400 text-xs font-bold tracking-wider mb-4 flex items-center gap-2">
-                    <BrainCircuit className="w-4 h-4" /> NEURAL FEEDBACK
-                  </h2>
-                  <div className="space-y-2 overflow-y-auto pr-2 flex-1">
-                    {trainingHistory.length === 0 ? (
-                      <p className="text-xs text-slate-600 text-center py-4">Training data empty.</p>
-                    ) : (
-                      trainingHistory.map((item, idx) => (
-                        <div key={idx} className="flex justify-between items-start text-xs bg-slate-950 p-2 rounded border border-slate-800 group">
-                          <div>
-                            <span className="block text-slate-300 font-bold mb-0.5">{item.pattern}</span>
-                            <span className="text-slate-500 text-[10px] line-clamp-1">{item.note}</span>
-                          </div>
-                          <div className="flex gap-1">
-                            <button
-                              onClick={() => openFeedbackEditor(item)}
-                              className="p-1 rounded text-slate-500 hover:text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity"
-                            >
-                              <Edit3 className="w-3 h-3" />
-                            </button>
-                            <span className={`px-1.5 py-0.5 rounded font-bold ${item.outcome === 'WIN' ? 'bg-emerald-500/20 text-emerald-500' : 'bg-rose-500/20 text-rose-500'}`}>
-                              {item.outcome}
-                            </span>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
 
                 {/* Order Book Component */}
                 <div className="shrink-0">

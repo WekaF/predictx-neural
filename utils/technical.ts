@@ -241,3 +241,170 @@ export const calculateMomentum = (prices: number[], period: number = 10) => {
   if (prices.length < period) return 0;
   return prices[prices.length - 1] - prices[prices.length - 1 - period];
 };
+
+// --- SERIES CALCULATORS FOR CHARTING ---
+
+export const calculateSeriesSMA = (prices: number[], period: number): (number | null)[] => {
+  const result: (number | null)[] = [];
+  for (let i = 0; i < prices.length; i++) {
+    if (i < period - 1) {
+      result.push(null);
+      continue;
+    }
+    const sum = prices.slice(i - period + 1, i + 1).reduce((a, b) => a + b, 0);
+    result.push(sum / period);
+  }
+  return result;
+};
+
+export const calculateSeriesEMA = (prices: number[], period: number): (number | null)[] => {
+  const result: (number | null)[] = [];
+  const k = 2 / (period + 1);
+  let ema = prices[0];
+  
+  // First value is SMA (or price itself for simplicity at index 0)
+  result.push(ema);
+
+  for (let i = 1; i < prices.length; i++) {
+    ema = prices[i] * k + ema * (1 - k);
+    result.push(ema);
+  }
+  return result;
+};
+
+export const calculateSeriesKDJ = (candles: Candle[], n: number = 9, m1: number = 3, m2: number = 3) => {
+  const kArr: number[] = [];
+  const dArr: number[] = [];
+  const jArr: number[] = [];
+
+  let k = 50;
+  let d = 50;
+
+  for (let i = 0; i < candles.length; i++) {
+    const slice = candles.slice(Math.max(0, i - n + 1), i + 1);
+    const lowLow = Math.min(...slice.map(c => c.low));
+    const highHigh = Math.max(...slice.map(c => c.high));
+    
+    let rsv = 50;
+    if (highHigh - lowLow !== 0) {
+      rsv = ((candles[i].close - lowLow) / (highHigh - lowLow)) * 100;
+    }
+
+    k = (2/3) * k + (1/3) * rsv;
+    d = (2/3) * d + (1/3) * k;
+    const j = 3 * k - 2 * d;
+
+    kArr.push(k);
+    dArr.push(d);
+    jArr.push(j);
+  }
+
+  return { k: kArr, d: dArr, j: jArr };
+};
+
+export const calculateSeriesRSI = (prices: number[], period: number = 14): (number | null)[] => {
+  const result: (number | null)[] = [];
+  let gains = 0;
+  let losses = 0;
+
+  // First RSI
+  for (let i = 1; i <= period; i++) {
+    const diff = prices[i] - prices[i - 1];
+    if (diff >= 0) gains += diff;
+    else losses -= diff;
+  }
+  
+  let avgGain = gains / period;
+  let avgLoss = losses / period;
+
+  // Fill nulls
+  for (let i = 0; i < period; i++) result.push(null);
+  
+  // Calculate first
+  let rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+  result.push(100 - (100 / (1 + rs)));
+
+  // Rest
+  for (let i = period + 1; i < prices.length; i++) {
+    const diff = prices[i] - prices[i - 1];
+    const gain = diff > 0 ? diff : 0;
+    const loss = diff < 0 ? -diff : 0;
+
+    avgGain = (avgGain * (period - 1) + gain) / period;
+    avgLoss = (avgLoss * (period - 1) + loss) / period;
+
+    rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+    result.push(100 - (100 / (1 + rs)));
+  }
+
+  return result;
+};
+
+export const calculateSeriesMACD = (prices: number[], fast: number = 12, slow: number = 26, signal: number = 9) => {
+  const fastEMA = calculateSeriesEMA(prices, fast);
+  const slowEMA = calculateSeriesEMA(prices, slow);
+  
+  const macdLine: (number | null)[] = [];
+  for(let i=0; i<prices.length; i++) {
+      if (fastEMA[i] !== null && slowEMA[i] !== null) {
+          macdLine.push(fastEMA[i]! - slowEMA[i]!);
+      } else {
+          macdLine.push(null);
+      }
+  }
+
+  // Signal line is EMA of MACD line
+  // Filter nulls to calculate signal, then align
+  const validMacd = macdLine.filter(x => x !== null) as number[];
+  const validSignal = calculateSeriesEMA(validMacd, signal);
+  
+  const signalLine: (number | null)[] = [];
+  const histogram: (number | null)[] = [];
+  
+  let signalIdx = 0;
+  for(let i=0; i<macdLine.length; i++) {
+      if (macdLine[i] === null) {
+          signalLine.push(null);
+          histogram.push(null);
+      } else {
+          // Align signal with valid macd start
+          if (signalIdx < validSignal.length) {
+              signalLine.push(validSignal[signalIdx]);
+              histogram.push(macdLine[i]! - validSignal[signalIdx]!);
+              signalIdx++;
+          } else {
+               signalLine.push(null);
+               histogram.push(null);
+          }
+      }
+  }
+
+  return { macd: macdLine, signal: signalLine, histogram };
+};
+
+export const calculateSeriesBollinger = (prices: number[], period: number = 20, multiplier: number = 2) => {
+  const sma = calculateSeriesSMA(prices, period);
+  const upper: (number | null)[] = [];
+  const lower: (number | null)[] = [];
+  const middle: (number | null)[] = [...sma];
+
+  for (let i = 0; i < prices.length; i++) {
+    if (i < period - 1) {
+      upper.push(null);
+      lower.push(null);
+      continue;
+    }
+    
+    // Standard Deviation
+    const slice = prices.slice(i - period + 1, i + 1);
+    const mean = sma[i]!;
+    const squaredDiffs = slice.map(p => Math.pow(p - mean, 2));
+    const variance = squaredDiffs.reduce((a, b) => a + b, 0) / period;
+    const stdDev = Math.sqrt(variance);
+
+    upper.push(mean + multiplier * stdDev);
+    lower.push(mean - multiplier * stdDev);
+  }
+
+  return { upper, middle, lower };
+};

@@ -121,7 +121,7 @@ interface CacheEntry {
 }
 
 const dataCache = new Map<string, CacheEntry>();
-const CACHE_DURATION = 60000; // 1 minute cache
+const CACHE_DURATION = 3600000; // 60 minutes cache
 
 function getCacheKey(symbol: string, interval: string): string {
     return `${symbol}_${interval}`;
@@ -149,7 +149,11 @@ function setCachedData(symbol: string, interval: string, data: Candle[]): void {
     });
 }
 
-// WebSocket API - dynamically selected based on testnet mode
+export function hasCachedData(symbol: string, interval: string): boolean {
+    const key = getCacheKey(symbol, interval);
+    const cached = dataCache.get(key);
+    return !!(cached && (Date.now() - cached.timestamp) < CACHE_DURATION);
+}
 const getBinanceWsApi = () => getApiConfig().wsBase;
 
 // Symbol mapping: App format → Binance format

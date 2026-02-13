@@ -81,7 +81,7 @@ def predict_trend(request: PredictionRequest):
     trend_prob = ai_engine.predict_next_move(request.candles)
     
     # 2. Get Agent Decision (Tier 7 - Ensemble CNN-LSTM)
-    action, confidence = ai_engine.decide_action(trend_prob, candles=request.candles)
+    action, confidence, meta = ai_engine.decide_action(trend_prob, candles=request.candles)
     
     # 3. Get Execution/Position Recommendation
     current_price = request.candles[-1]['close']
@@ -100,7 +100,8 @@ def predict_trend(request: PredictionRequest):
         },
         "agent_action": {
             "action": action,
-            "confidence": confidence
+            "confidence": confidence,
+            "meta": meta
         },
         "execution": execution
     }

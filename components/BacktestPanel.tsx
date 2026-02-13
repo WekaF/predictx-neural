@@ -121,12 +121,15 @@ const BacktestPanel: React.FC<BacktestPanelProps> = ({
                 const sr = findSupportResistance(currentSubset);
 
                 const indicators: TechnicalIndicators = {
-                    rsi: calculateRSI(currentSubset),
+                    rsi: calculateRSI(currentSubset.map(c => c.close)),
                     trend,
                     fibLevels,
                     sma50: calculateSMA(currentSubset, 50),
                     sma200,
+                    sma20: calculateSMA(currentSubset, 20),
                     ema20: calculateEMA(currentSubset, 20),
+                    ema12: calculateEMA(currentSubset, 12),
+                    ema26: calculateEMA(currentSubset, 26),
                     nearestSupport: sr.support,
                     nearestResistance: sr.resistance,
                     volumeSma: calculateSMA(currentSubset.map(c => c.volume), 20),

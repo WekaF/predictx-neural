@@ -1,4 +1,5 @@
 import { supabase } from './supabaseClient';
+import { EnhancedExecutedTrade } from '../types/enhanced';
 
 // Analytics metrics interface
 export interface PerformanceMetrics {
@@ -7,8 +8,8 @@ export interface PerformanceMetrics {
   lossRate: number;
   pendingRate: number;
   avgConfidence: number;
-  bestTrade: { symbol: string; confidence: number } | null;
-  worstTrade: { symbol: string; confidence: number } | null;
+  bestTrade: { symbol: string; confidence: number; pnl: number } | null;
+  worstTrade: { symbol: string; confidence: number; pnl: number } | null;
   // Advanced Metrics
   netProfit: number;
   profitFactor: number;
@@ -25,6 +26,7 @@ export interface AssetPerformance {
   wins: number;
   losses: number;
   winRate: number;
+  netProfit: number;
 }
 
 export interface TradeSignalData {
@@ -57,14 +59,16 @@ export interface GrowthData {
 }
 
 export const analyticsService = {
-  // Fetch all trade signals from Supabase
+  // Fetch all trade signals from Supabase (Legacy support or fallback)
   async getTradeSignals(): Promise<TradeSignalData[]> {
     if (!supabase) return [];
     
     try {
+      console.log('[Analytics] Fetching non-pending trades from Supabase...');
       const { data, error } = await supabase
         .from('trade_signals')
         .select('*')
+        .neq('outcome', 'PENDING') // Exclude pending trades
         .order('created_at', { ascending: false })
         .limit(100);
       
@@ -73,6 +77,7 @@ export const analyticsService = {
         return [];
       }
       
+      console.log(`[Analytics] Fetched ${data?.length} trades from Supabase`);
       return data || [];
     } catch (e) {
       console.error('[Analytics] Unexpected error:', e);
@@ -80,11 +85,37 @@ export const analyticsService = {
     }
   },
 
-  // Calculate performance metrics
-  async getPerformanceMetrics(): Promise<PerformanceMetrics> {
-    const signals = await this.getTradeSignals();
+  // Calculate performance metrics from real trades
+  async getPerformanceMetrics(trades?: EnhancedExecutedTrade[]): Promise<PerformanceMetrics> {
+    console.log('[AnalyticsService] Calculating metrics...');
     
-    if (signals.length === 0) {
+    let completedTrades: any[] = [];
+
+    // Prioritize Supabase fetch if trades are empty OR if we want to ensure we have data
+    // The user requested "ambil saja dari table supabase" (just take from supabase)
+    // So we will fetch if the passed trades seem insufficient or just always fetch for the dashboard
+    
+    if (!trades || trades.length === 0) {
+        const signals = await this.getTradeSignals();
+        completedTrades = signals;
+    } else {
+        // Even if trades are passed, let's filter them here too just in case
+        completedTrades = trades.filter(t => t.outcome !== 'PENDING' && t.outcome !== 'OPEN');
+        
+        // Use Supabase if local trades are empty after filter
+        if (completedTrades.length === 0) {
+             const signals = await this.getTradeSignals();
+             completedTrades = signals;
+        }
+    }
+
+    console.log(`[Analytics] Processing ${completedTrades.length} trades for metrics`);
+    
+    const total = completedTrades.length;
+    const wins = completedTrades.filter(t => t.outcome === 'WIN').length;
+    const losses = completedTrades.filter(t => t.outcome === 'LOSS').length;
+    
+    if (total === 0) {
       return {
         totalTrades: 0,
         winRate: 0,
@@ -102,47 +133,48 @@ export const analyticsService = {
         avgLoss: 0
       };
     }
-    
-    const wins = signals.filter(s => s.outcome === 'WIN').length;
-    const losses = signals.filter(s => s.outcome === 'LOSS').length;
-    const pending = signals.filter(s => s.outcome === 'PENDING').length;
-    const total = signals.length;
-    
-    const avgConfidence = total > 0 ? signals.reduce((sum, s) => sum + (s.confidence || 0), 0) / total : 0;
-    
-    // Find best and worst trades (by confidence)
-    const completedTrades = signals.filter(s => s.outcome === 'WIN' || s.outcome === 'LOSS');
-    const bestTrade = completedTrades.length > 0 
-      ? completedTrades.reduce((best, curr) => curr.confidence > best.confidence ? curr : best)
-      : null;
-    const worstTrade = completedTrades.length > 0
-      ? completedTrades.reduce((worst, curr) => curr.confidence < worst.confidence ? curr : worst)
-      : null;
 
-    // Advanced Metrics Calculation (Mocked mostly as we lack PnL data in generic signals)
-    // In a real scenario, we would sum up actual PnL from the signals
-    const mockPnL = completedTrades.map(s => s.outcome === 'WIN' ? 50 : -25); // Mock: Win=$50, Loss=$25
-    const netProfit = mockPnL.reduce((sum, pnl) => sum + pnl, 0);
-    const grossProfit = mockPnL.filter(p => p > 0).reduce((sum, p) => sum + p, 0);
-    const grossLoss = Math.abs(mockPnL.filter(p => p < 0).reduce((sum, p) => sum + p, 0));
+    const netProfit = completedTrades.reduce((sum, t) => sum + t.pnl, 0);
+    const grossProfit = completedTrades.filter(t => t.pnl > 0).reduce((sum, t) => sum + t.pnl, 0);
+    const grossLoss = Math.abs(completedTrades.filter(t => t.pnl < 0).reduce((sum, t) => sum + t.pnl, 0));
     const profitFactor = grossLoss === 0 ? grossProfit : grossProfit / grossLoss;
     
     const avgWin = wins > 0 ? grossProfit / wins : 0;
     const avgLoss = losses > 0 ? grossLoss / losses : 0;
-    const expectancy = (avgWin * (wins/total)) - (avgLoss * (losses/total));
+    const winRate = (wins / total);
+    const lossRate = (losses / total);
+    
+    // Expectancy = (Win % * Avg Win) - (Loss % * Avg Loss)
+    const expectancy = (avgWin * winRate) - (avgLoss * lossRate);
+
+    // Max Drawdown Calculation
+    let peak = 0;
+    let maxDrawdown = 0;
+    let runningBalance = 0; // Assuming starting at 0 PnL for DD calc relative to peak profit
+    
+    for (const trade of completedTrades) {
+        runningBalance += trade.pnl;
+        if (runningBalance > peak) peak = runningBalance;
+        const drawdown = peak - runningBalance;
+        if (drawdown > maxDrawdown) maxDrawdown = drawdown;
+    }
+    
+    // Best/Worst
+    const bestTrade = completedTrades.reduce((best, curr) => curr.pnl > best.pnl ? curr : best, completedTrades[0]);
+    const worstTrade = completedTrades.reduce((worst, curr) => curr.pnl < worst.pnl ? curr : worst, completedTrades[0]);
 
     return {
       totalTrades: total,
-      winRate: total > 0 ? (wins / total) * 100 : 0,
-      lossRate: total > 0 ? (losses / total) * 100 : 0,
-      pendingRate: total > 0 ? (pending / total) * 100 : 0,
-      avgConfidence: avgConfidence,
-      bestTrade: bestTrade ? { symbol: bestTrade.symbol, confidence: bestTrade.confidence } : null,
-      worstTrade: worstTrade ? { symbol: worstTrade.symbol, confidence: worstTrade.confidence } : null,
+      winRate: winRate * 100,
+      lossRate: lossRate * 100,
+      pendingRate: 0,
+      avgConfidence: completedTrades.reduce((sum, t) => sum + (t.aiConfidence || 0), 0) / total,
+      bestTrade: { symbol: bestTrade.symbol, confidence: bestTrade.aiConfidence || 0, pnl: bestTrade.pnl },
+      worstTrade: { symbol: worstTrade.symbol, confidence: worstTrade.aiConfidence || 0, pnl: worstTrade.pnl },
       netProfit,
       profitFactor,
-      sharpeRatio: 1.5, // Placeholder/Calculated if we had time series
-      maxDrawdown: 3.9, // From user example
+      sharpeRatio: 1.5, // Placeholder - requires standard deviation of returns
+      maxDrawdown, // This is in currency units, typically
       expectancy,
       avgWin,
       avgLoss
@@ -150,19 +182,27 @@ export const analyticsService = {
   },
 
   // Get performance breakdown by asset
-  async getAssetPerformance(): Promise<AssetPerformance[]> {
-    const signals = await this.getTradeSignals();
+  async getAssetPerformance(trades?: EnhancedExecutedTrade[]): Promise<AssetPerformance[]> {
+      let completedTrades: any[] = [];
+      if (trades && trades.length > 0) {
+          completedTrades = trades.filter(t => t.outcome !== 'PENDING' && t.outcome !== 'OPEN');
+      }
+      
+      if (completedTrades.length === 0) {
+         completedTrades = await this.getTradeSignals();
+      }
     
     // Group by symbol
-    const grouped: Record<string, { wins: number; losses: number; total: number }> = signals.reduce((acc, signal) => {
-      if (!acc[signal.symbol]) {
-        acc[signal.symbol] = { wins: 0, losses: 0, total: 0 };
+    const grouped: Record<string, { wins: number; losses: number; total: number; pnl: number }> = completedTrades.reduce((acc, trade) => {
+      if (!acc[trade.symbol]) {
+        acc[trade.symbol] = { wins: 0, losses: 0, total: 0, pnl: 0 };
       }
-      acc[signal.symbol].total++;
-      if (signal.outcome === 'WIN') acc[signal.symbol].wins++;
-      if (signal.outcome === 'LOSS') acc[signal.symbol].losses++;
+      acc[trade.symbol].total++;
+      if (trade.outcome === 'WIN') acc[trade.symbol].wins++;
+      if (trade.outcome === 'LOSS') acc[trade.symbol].losses++;
+      acc[trade.symbol].pnl += (trade.pnl || 0); // Ensure numeric
       return acc;
-    }, {} as Record<string, { wins: number; losses: number; total: number }>);
+    }, {} as Record<string, { wins: number; losses: number; total: number; pnl: number }>);
     
     // Convert to array
     return Object.entries(grouped).map(([symbol, stats]) => ({
@@ -170,54 +210,75 @@ export const analyticsService = {
       totalTrades: stats.total,
       wins: stats.wins,
       losses: stats.losses,
-      winRate: stats.total > 0 ? (stats.wins / stats.total) * 100 : 0
-    }));
+      winRate: stats.total > 0 ? (stats.wins / stats.total) * 100 : 0,
+      netProfit: stats.pnl
+    })).sort((a,b) => b.netProfit - a.netProfit);
   },
 
   // Get recent trades (last 10)
-  async getRecentTrades(): Promise<TradeSignalData[]> {
+  async getRecentTrades(trades?: EnhancedExecutedTrade[]): Promise<TradeSignalData[]> {
+    if (trades && trades.length > 0) {
+        // Map EnhancedExecutedTrade to TradeSignalData for UI compatibility
+        return trades.slice(0, 50).map(t => ({
+            id: t.id,
+            created_at: t.entryTime,
+            symbol: t.symbol,
+            type: t.type,
+            entry_price: t.entryPrice,
+            confidence: t.aiConfidence || 0,
+            outcome: t.outcome,
+            source: t.source,
+            pnl: t.pnl
+        }));
+    }
     const signals = await this.getTradeSignals();
     return signals.slice(0, 10);
   },
 
-  async getRiskMetrics(): Promise<RiskMetrics> {
-     // Check if we have signals
-     const signals = await this.getTradeSignals();
-     const total = signals.length || 1;
-     const wins = signals.filter(s => s.outcome === 'WIN').length;
-     const losses = signals.filter(s => s.outcome === 'LOSS').length;
-
+  async getRiskMetrics(trades?: EnhancedExecutedTrade[]): Promise<RiskMetrics> {
+     const metricData = await this.getPerformanceMetrics(trades);
      return {
          algoTrading: 100,
-         profitTrades: (wins / total) * 100,
-         lossTrades: (losses / total) * 100,
-         tradingActivity: 32.1, // Mock
-         maxDrawdown: 3.9,
-         maxDepositLoad: 1.9
+         profitTrades: metricData.winRate,
+         lossTrades: metricData.lossRate,
+         tradingActivity: 50, // Mock
+         maxDrawdown: metricData.maxDrawdown, // Currency value
+         maxDepositLoad: 5.0
      };
   },
 
-  async getGrowthCurve(): Promise<GrowthData[]> {
-      // Mock growth curve data based on user image
-      const data: GrowthData[] = [];
-      let balance = 1000;
-      let equity = 1000;
+  async getGrowthCurve(trades?: EnhancedExecutedTrade[], initialBalance: number = 1000): Promise<GrowthData[]> {
+      let sortedTrades: any[] = [];
       
-      const now = new Date();
-      for (let i = 30; i >= 0; i--) {
-          const date = new Date(now);
-          date.setDate(date.getDate() - i);
-          
-          // Random walk upward trend
-          const change = (Math.random() - 0.4) * 50; 
-          balance += change;
-          equity = balance + (Math.random() * 20 - 10);
-          
+      if (trades && trades.length > 0) {
+          sortedTrades = [...trades].sort((a, b) => new Date(a.exitTime).getTime() - new Date(b.exitTime).getTime());
+      } else {
+           const signals = await this.getTradeSignals();
+           // Sort signals by created_at (ascending for growth curve)
+           sortedTrades = [...signals].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+      }
+
+      const data: GrowthData[] = [];
+      let currentBalance = initialBalance;
+      
+      // Start point
+      if (sortedTrades.length > 0) {
+          const firstTime = sortedTrades[0].entryTime || sortedTrades[0].created_at;
           data.push({
-              time: date.toISOString().split('T')[0],
-              balance: Number(balance.toFixed(2)),
-              equity: Number(equity.toFixed(2)),
-              deposit: i === 30 ? 1000 : undefined
+            time: new Date(new Date(firstTime).getTime() - 86400000).toISOString().split('T')[0],
+            balance: initialBalance,
+            equity: initialBalance
+          });
+      }
+      
+      for (const trade of sortedTrades) {
+          if (trade.outcome === 'PENDING') continue;
+          currentBalance += (trade.pnl || 0);
+          const time = trade.exitTime || trade.created_at;
+          data.push({
+              time: new Date(time).toISOString().split('T')[0] + ' ' + new Date(time).toLocaleTimeString(),
+              balance: Number(currentBalance.toFixed(2)),
+              equity: Number(currentBalance.toFixed(2))
           });
       }
       return data;

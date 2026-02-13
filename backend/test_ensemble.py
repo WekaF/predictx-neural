@@ -39,8 +39,8 @@ def test_ensemble():
         lstm_prob = ai_engine.predict_next_move(current_candles)
         
         # Get Ensemble prediction (with CNN)
-        action_ensemble, conf_ensemble = ai_engine.decide_action(lstm_prob, candles=current_candles)
-        action_lstm, conf_lstm = ai_engine.decide_action(lstm_prob)  # Tier 5 (no CNN)
+        action_ensemble, conf_ensemble, _ = ai_engine.decide_action(lstm_prob, candles=current_candles)
+        action_lstm, conf_lstm, _ = ai_engine.decide_action(lstm_prob)  # Tier 5 (no CNN)
         
         ensemble_signals.append({'action': action_ensemble, 'conf': conf_ensemble})
         lstm_signals.append({'action': action_lstm, 'conf': conf_lstm})

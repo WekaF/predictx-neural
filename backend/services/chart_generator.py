@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import torch
 
 def generate_chart_windows(df, window_size=20):
     """

@@ -20,17 +20,21 @@ const generateTrainingData = (candles: Candle[]) => {
         const futureSlice = candles.slice(i, i + 20);
 
         // Calculate indicators
-        const rsi = calculateRSI(subset);
-        const sma200 = calculateSMA(subset, 200);
+        const prices = subset.map(c => c.close);
+        const rsi = calculateRSI(prices);
+        const sma200 = calculateSMA(prices, 200);
         const trend = analyzeTrend(subset, sma200);
 
         const indicators: TechnicalIndicators = {
             rsi,
             trend,
             fibLevels: { level0: 0, level236: 0, level382: 0, level500: 0, level618: 0, level100: 0 },
-            sma50: calculateSMA(subset, 50),
+            sma50: calculateSMA(prices, 50),
             sma200,
-            ema20: calculateSMA(subset, 20), // Simplified
+            sma20: calculateSMA(prices, 20),
+            ema20: calculateSMA(prices, 20), // Simplified
+            ema12: calculateSMA(prices, 12),
+            ema26: calculateSMA(prices, 26),
             nearestSupport: Math.min(...subset.slice(-20).map(c => c.low)),
             nearestResistance: Math.max(...subset.slice(-20).map(c => c.high)),
             volumeSma: calculateSMA(subset.map(c => c.volume), 20),

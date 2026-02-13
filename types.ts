@@ -36,21 +36,25 @@ export interface TradeSignal {
     status: string;
     side: string;
     leverage: number;
-    margin_idr: number;
-    size_idr: number;
+    margin: number;
+    size: number;
     tp: number;
     sl: number;
     execution_status: string;
   };
   marketContext?: MarketContext;
   quantity?: number; // Added for real execution tracking
+  meta?: any; // Added for SMC/Backend metadata
 }
 
 export interface TechnicalIndicators {
   rsi: number;
   sma50: number;
   sma200: number;
+  sma20: number;
   ema20: number;
+  ema12: number;
+  ema26: number;
   volumeSma: number;
   fibLevels: {
     level0: number;
@@ -186,8 +190,18 @@ export interface TradingLog {
     id: string;
     tradeId: string;
     timestamp: number; // Entry Time
+    entryTime?: string; // ISO timestamp for display
+    exitTime?: string; // ISO timestamp for display
     symbol: string;
     type: 'BUY' | 'SELL';
+    entryPrice?: number;
+    exitPrice?: number;
+    stopLoss?: number;
+    takeProfit?: number;
+    quantity?: number;
+    pnl?: number;
+    outcome?: 'WIN' | 'LOSS' | 'PENDING';
+    source?: 'AI' | 'MANUAL';
     items: {
         snapshot: MarketSnapshot;
         chartHistory: Candle[]; // Stored candles for visualization

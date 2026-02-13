@@ -1,0 +1,14 @@
+(node:93147) ExperimentalWarning: CommonJS module /opt/homebrew/lib/node_modules/npm/node_modules/debug/src/node.js is loading ES Module /opt/homebrew/lib/node_modules/npm/node_modules/supports-color/index.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+scripts/mass-training.ts(23,34): error TS2345: Argument of type 'Candle[]' is not assignable to parameter of type 'number[]'.
+  Type 'Candle' is not assignable to type 'number'.
+scripts/mass-training.ts(24,37): error TS2345: Argument of type 'Candle[]' is not assignable to parameter of type 'number[]'.
+  Type 'Candle' is not assignable to type 'number'.
+scripts/mass-training.ts(31,33): error TS2345: Argument of type 'Candle[]' is not assignable to parameter of type 'number[]'.
+  Type 'Candle' is not assignable to type 'number'.
+scripts/mass-training.ts(33,33): error TS2345: Argument of type 'Candle[]' is not assignable to parameter of type 'number[]'.
+  Type 'Candle' is not assignable to type 'number'.
+services/marketContextService.ts(255,25): error TS2551: Property 'sma20' does not exist on type 'TechnicalIndicators'. Did you mean 'sma200'?
+services/marketContextService.ts(258,25): error TS2551: Property 'ema12' does not exist on type 'TechnicalIndicators'. Did you mean 'ema20'?
+services/marketContextService.ts(259,25): error TS2551: Property 'ema26' does not exist on type 'TechnicalIndicators'. Did you mean 'ema20'?

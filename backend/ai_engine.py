@@ -10,6 +10,7 @@ import logging
 import time
 from sklearn.preprocessing import StandardScaler
 import joblib
+from utils.smc_utils import get_smc_context
 
 # RL Integration
 try:
@@ -178,6 +179,13 @@ class AIEngine:
         
         ensemble_score = float(trend_prob)
         
+        # 0. SMC Check (New)
+        smc_score = 0.5
+        if candles is not None:
+            smc_df = pd.DataFrame(candles)
+            smc_data = get_smc_context(smc_df)
+            smc_score = smc_data['score']
+            
         # 1. Ensemble Confirmation (CNN)
         if self.cnn_enabled and candles is not None:
             cnn_prob = self.get_cnn_prediction(candles)
@@ -188,6 +196,9 @@ class AIEngine:
             # Penalty for missing CNN: Pull score toward neutral (0.5)
             # Relaxed from 0.8 to 0.9 to allow LSTM-only signals more weight
             ensemble_score = 0.5 + (ensemble_score - 0.5) * 0.9
+
+        # Integrate SMC Core Score (Weight 20%)
+        ensemble_score = (ensemble_score * 0.8) + (smc_score * 0.2)
 
         # 2. Strategic Decision (RL)
         rl_action = "HOLD"
@@ -200,24 +211,31 @@ class AIEngine:
         # 3. FINAL FUSION LOGIC
         confidence = abs(ensemble_score - 0.5) * 2 * 100
 
+        # Construct basic metadata
+        meta = {
+            "smc": smc_data if 'smc_data' in locals() else None,
+            "cnn_prob": float(cnn_prob) if 'cnn_prob' in locals() and cnn_prob is not None else None,
+            "rl_action": rl_action
+        }
+
         # ACTION: BUY
         if ensemble_score >= BUY_ZONE:
             # High quality buy: Trend is Bullish AND RL agrees
             if "BUY" in rl_action:
-                return f"BUY_{rl_leverage}x", min(99, confidence + 10)
+                return f"BUY_{rl_leverage}x", min(99, confidence + 10), meta
             # Mid quality: Trend Bullish but RL is cautious
-            return "BUY_1x", confidence
+            return "BUY_1x", confidence, meta
 
         # ACTION: SELL
         elif ensemble_score <= SELL_ZONE:
-            return "SELL", confidence
+            return "SELL", confidence, meta
 
         # ACTION: CONFLICT / UNCERTAINTY
         # If RL is very sure about SELL but Trend is neutral
         if rl_action == "SELL" and ensemble_score < 0.45:
-            return "SELL", 60
+            return "SELL", 60, meta
             
-        return "HOLD", round(confidence, 1)
+        return "HOLD", round(confidence, 1), meta
 
     # --- Helper Methods (Keep as is but optimized) ---
     def load_rl_agent(self):

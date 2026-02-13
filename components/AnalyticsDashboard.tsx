@@ -6,8 +6,14 @@ import { RiskRadarChart } from './RiskRadarChart';
 import { GrowthChart } from './GrowthChart';
 import { updateLearningRate, updateEpsilon, resetModel, exportWeights, importWeights, getModelStats } from '../services/mlService';
 import { ArrowUp, ArrowDown, Activity, Clock, CheckCircle, XCircle } from 'lucide-react';
+import { EnhancedExecutedTrade } from '../types/enhanced';
 
-export const AnalyticsDashboard: React.FC = () => {
+interface AnalyticsDashboardProps {
+  trades?: EnhancedExecutedTrade[];
+}
+
+export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({ trades = [] }) => {
+  console.log('[AnalyticsDashboard] Received trades:', trades.length, trades); 
   const [metrics, setMetrics] = useState<PerformanceMetrics | null>(null);
   const [assetPerf, setAssetPerf] = useState<AssetPerformance[]>([]);
   const [recentTrades, setRecentTrades] = useState<TradeSignalData[]>([]);
@@ -24,6 +30,15 @@ export const AnalyticsDashboard: React.FC = () => {
   const loadData = async () => {
     setLoading(true);
     try {
+      // User requested to fetch from Supabase explicitly ("ambil saja dari table supabase")
+      // So we will pass undefined to force the service to use its internal Supabase fetch
+      // OR we can pass trades if they are valid, but the user implies the passed data might be empty/wrong.
+      // Let's try passing empty to force fetch, as per user instruction.
+      // Actually, let's just not pass 'trades' and let the service handle it (it now defaults to Supabase if empty)
+      
+      // If trades are empty, service will fetch. If trades has content but PnL is 0, we might want to ignore it?
+      // To be safe and follow "ambil dari table", let's force fetch by passing undefined.
+      
       const [metricsData, assetData, tradesData, riskData, growth] = await Promise.all([
         analyticsService.getPerformanceMetrics(),
         analyticsService.getAssetPerformance(),
@@ -52,7 +67,7 @@ export const AnalyticsDashboard: React.FC = () => {
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [trades]);
 
   // Handle learning rate change
   const handleLearningRateChange = (value: number) => {

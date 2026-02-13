@@ -15,6 +15,39 @@ const TradeList: React.FC<TradeListProps> = ({ trades }) => {
     );
   }
 
+  // Sort trades by entry time (newest first) to ensure correct order
+  const sortedTrades = [...trades].sort((a, b) => {
+    const timeA = new Date(a.exitTime || a.entryTime).getTime();
+    const timeB = new Date(b.exitTime || b.entryTime).getTime();
+    return timeB - timeA; // Descending order (newest first)
+  });
+
+  // Format timestamp to readable format
+  const formatTime = (timestamp: string | undefined): string => {
+    if (!timestamp) return 'N/A';
+    
+    try {
+      const date = new Date(timestamp);
+      
+      // Check if date is valid
+      if (isNaN(date.getTime())) {
+        console.warn(`[TradeList] Invalid timestamp: ${timestamp}`);
+        return 'Invalid Date';
+      }
+      
+      return date.toLocaleString('id-ID', {
+        day: '2-digit',
+        month: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false
+      });
+    } catch (error) {
+      console.error(`[TradeList] Error formatting timestamp: ${timestamp}`, error);
+      return 'Invalid Date';
+    }
+  };
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-xs text-left">
@@ -31,10 +64,10 @@ const TradeList: React.FC<TradeListProps> = ({ trades }) => {
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-800">
-          {trades.map((trade) => (
+          {sortedTrades.map((trade) => (
             <tr key={trade.id} className="hover:bg-slate-800/30 transition-colors">
               <td className="px-4 py-3 font-mono text-slate-400">
-                {trade.exitTime || trade.entryTime}
+                {formatTime(trade.exitTime || trade.entryTime)}
               </td>
               <td className="px-4 py-3 font-bold text-slate-300">
                 {trade.symbol || 'BTC/USD'}
