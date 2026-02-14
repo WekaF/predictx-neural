@@ -100,7 +100,7 @@ export const analyticsService = {
         completedTrades = signals;
     } else {
         // Even if trades are passed, let's filter them here too just in case
-        completedTrades = trades.filter(t => t.outcome !== 'PENDING' && t.outcome !== 'OPEN');
+        completedTrades = trades.filter(t => t.outcome !== 'OPEN');
         
         // Use Supabase if local trades are empty after filter
         if (completedTrades.length === 0) {
@@ -185,7 +185,7 @@ export const analyticsService = {
   async getAssetPerformance(trades?: EnhancedExecutedTrade[]): Promise<AssetPerformance[]> {
       let completedTrades: any[] = [];
       if (trades && trades.length > 0) {
-          completedTrades = trades.filter(t => t.outcome !== 'PENDING' && t.outcome !== 'OPEN');
+          completedTrades = trades.filter(t => t.outcome !== 'OPEN');
       }
       
       if (completedTrades.length === 0) {
