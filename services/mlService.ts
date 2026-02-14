@@ -8,6 +8,9 @@ import { batchTrainingService, BatchTrainingProgress, BatchTrainingResult } from
 import { hyperparameterOptimizer, OptimizationResult } from "./hyperparameterOptimizer";
 import { EnhancedExecutedTrade } from "../types/enhanced";
 import { smcService } from "./smcService";
+import { liquidationCalculator, LiquidationInfo } from "./liquidationCalculator";
+import { fundingRateService } from "./fundingRateService";
+import { futuresRiskManager } from "./futuresRiskManager";
 
 // Gemini API removed - using pure self-learning RL agent
 // import { analyzeMarketWithAI } from "./geminiService";
@@ -745,6 +748,92 @@ export const analyzeMarket = async (
         console.log(`[SMC] Used local fallback analysis. Score: ${localSMC.score}, Active OB: ${localSMC.active_ob ? 'YES' : 'NO'}`);
     }
 
+    // --- FUTURES-SPECIFIC VALIDATION ---
+    // 1. Funding Rate Check
+    let fundingAdjustment = 1.0;
+    try {
+        const fundingData = await fundingRateService.getCurrentFundingRate(assetSymbol);
+        if (fundingData) {
+            const fundingCheck = fundingRateService.isFundingFavorable(decision, fundingData);
+            
+            if (!fundingCheck.favorable) {
+                // Block trade if funding is extremely unfavorable
+                console.log(`[Funding Rate] ❌ BLOCKED ${decision}: ${fundingCheck.warning}`);
+                return {
+                    id: generateUUID(),
+                    symbol: assetSymbol,
+                    type: 'HOLD',
+                    entryPrice: 0,
+                    stopLoss: 0,
+                    takeProfit: 0,
+                    confidence: 0,
+                    reasoning: `Funding rate filter: ${fundingCheck.warning}`,
+                    timestamp: Date.now(),
+                    execution: backendExecution,
+                    meta: { ...finalMeta, funding_blocked: true, funding_rate: fundingData.current }
+                };
+            }
+            
+            if (fundingCheck.warning) {
+                console.log(`[Funding Rate] ⚠️ ${fundingCheck.warning}`);
+                // Reduce confidence if funding is moderately unfavorable
+                fundingAdjustment = fundingRateService.getConfidenceAdjustment(decision, fundingData);
+                enhancedConfidence *= fundingAdjustment;
+            }
+            
+            // Add funding data to metadata
+            finalMeta.funding_rate = {
+                current: fundingData.current,
+                annual: (fundingData.current * 3 * 365 * 100).toFixed(2) + '%',
+                trend: fundingData.trend
+            };
+            
+            console.log(`[Funding Rate] ${assetSymbol}: ${(fundingData.current * 100).toFixed(4)}% (${fundingData.trend})`);
+        }
+    } catch (error) {
+        console.warn('[Funding Rate] Failed to fetch, proceeding without funding check:', error);
+    }
+
+    // 2. Liquidation Risk Assessment
+    const recommendedLeverage = futuresRiskManager.getRecommendedLeverage(strategy);
+    
+    // Convert BUY/SELL to LONG/SHORT for liquidation calculator
+    const side: 'LONG' | 'SHORT' = decision === 'BUY' ? 'LONG' : 'SHORT';
+    const safeLeverage = liquidationCalculator.calculateSafeLeverage(entry, sl, side);
+    const leverage = Math.min(recommendedLeverage, safeLeverage);
+    
+    const liqInfo = liquidationCalculator.validateTrade(entry, sl, leverage, side);
+    
+    // Block trade if liquidation risk is EXTREME
+    if (liqInfo.riskLevel === 'EXTREME') {
+        console.log(`[Liquidation Risk] ❌ BLOCKED ${decision}: ${liqInfo.warningMessage}`);
+        return {
+            id: generateUUID(),
+            symbol: assetSymbol,
+            type: 'HOLD',
+            entryPrice: 0,
+            stopLoss: 0,
+            takeProfit: 0,
+            confidence: 0,
+            reasoning: `Liquidation risk: ${liqInfo.warningMessage}`,
+            timestamp: Date.now(),
+            execution: backendExecution,
+            meta: { ...finalMeta, liquidation_blocked: true, liquidation_info: liqInfo }
+        };
+    }
+    
+    // Warn if risk is HIGH
+    if (liqInfo.riskLevel === 'HIGH') {
+        console.log(`[Liquidation Risk] ⚠️ ${liqInfo.warningMessage}`);
+        enhancedConfidence *= 0.85; // Reduce confidence by 15%
+    }
+    
+    // Add liquidation info to metadata
+    finalMeta.liquidation_info = liqInfo;
+    finalMeta.recommended_leverage = leverage;
+    
+    console.log(`[Liquidation] Price: ${liqInfo.liquidationPrice}, Risk: ${liqInfo.riskLevel}, Leverage: ${leverage}x`);
+
     return {
         id: generateUUID(),
         symbol: assetSymbol,
@@ -753,7 +842,7 @@ export const analyzeMarket = async (
         stopLoss: Number(sl.toFixed(2)),
         takeProfit: Number(tp.toFixed(2)),
         reasoning: generateReasoning(), // Use rule-based reasoning
-        confidence: Math.round(enhancedConfidence), // Use enhanced confidence
+        confidence: Math.round(enhancedConfidence), // Use enhanced confidence (adjusted by funding)
         timestamp: Date.now(),
         patternDetected: `RL-DQN: ${currentPattern}`,
         confluenceFactors: [
@@ -761,7 +850,9 @@ export const analyzeMarket = async (
             `Enhanced Confidence: ${enhancedConfidence.toFixed(0)}%`, 
             `Trend: ${indicators.trend}`, 
             `RSI: ${indicators.rsi.toFixed(0)}`,
-            ...(indicators.rsiDivergence ? [`${indicators.rsiDivergence.type} RSI Divergence (${indicators.rsiDivergence.strength}%)`] : [])
+            ...(indicators.rsiDivergence ? [`${indicators.rsiDivergence.type} RSI Divergence (${indicators.rsiDivergence.strength}%)`] : []),
+            `Leverage: ${leverage}x (${liqInfo.riskLevel} risk)`,
+            ...(finalMeta.funding_rate ? [`Funding: ${(finalMeta.funding_rate.current * 100).toFixed(3)}%`] : [])
         ],
         riskRewardRatio: rr,
         outcome: 'PENDING',

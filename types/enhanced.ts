@@ -64,7 +64,7 @@ export interface EnhancedExecutedTrade {
   takeProfit: number;
   quantity: number;
   pnl: number;
-  outcome: 'WIN' | 'LOSS' | 'OPEN';
+  outcome: 'WIN' | 'LOSS' | 'OPEN' | 'PENDING' | 'EXPIRED' | 'MANUAL_CLOSE';
   source: 'AI' | 'MANUAL' | 'BINANCE_IMPORT';
   
   // Enhanced fields for AI training

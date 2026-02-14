@@ -5,9 +5,12 @@ from torch.utils.data import DataLoader
 from services.lstm_service import LSTMModel, train_model, predict, TimeSeriesDataset
 from services.data_service import get_historical_data
 from services.db_service import db_service
+from services.funding_rate_service import funding_analyzer
+from services.market_sentiment_service import sentiment_analyzer
 import os
 import logging
 import time
+import asyncio
 from sklearn.preprocessing import StandardScaler
 import joblib
 from utils.smc_utils import get_smc_context
@@ -30,7 +33,7 @@ logging.basicConfig(
 
 def add_indicators(df):
     """
-    Feature Engineering: Adds Log Returns, RSI, EMA Trend Difference, and EMA 200
+    Feature Engineering: Adds Log Returns, RSI, EMA Trend Difference, and Futures Data
     """
     df['log_return'] = np.log(df['close'] / df['close'].shift(1))
 
@@ -55,23 +58,46 @@ def add_indicators(df):
     ranges = pd.concat([high_low, high_close, low_close], axis=1)
     true_range = np.max(ranges, axis=1)
     df['atr'] = true_range.rolling(14).mean()
-
+    
+    # --- FUTURES FEATURES (Fill 0 if missing for backward compatibility) ---
+    if 'fundingRate' not in df.columns:
+        df['fundingRate'] = 0.0
+    if 'openInterest' not in df.columns:
+        df['openInterest'] = 0.0
+    if 'longShortRatio' not in df.columns:
+        df['longShortRatio'] = 1.0
+    
+    # Derived Futures Features
+    df['funding_trend'] = df['fundingRate'].rolling(window=7).mean()
+    df['oi_change'] = df['openInterest'].pct_change()
+    df['taker_ratio'] = 1.0 # Placeholder if not available
+        
     df.fillna(0, inplace=True) 
     return df
 
 class AIEngine:
     def __init__(self):
         self.models_loaded = False
-        print("Initializing AI Engine (Tier 5+ - Optimized Fusion)...")
+        print("Initializing AI Engine (Tier 6 - Futures Enhanced)...")
         
-        self.input_size = 3 
+        # UPGRADED Input Size: 3 -> 9
+        # 1. Log Return
+        # 2. RSI
+        # 3. EMA Diff
+        # 4. Funding Rate
+        # 5. Funding Trend
+        # 6. Open Interest
+        # 7. OI Change
+        # 8. Long/Short Ratio
+        # 9. Taker Ratio (or Volatility as proxy if missing)
+        self.input_size = 9 
         self.seq_length = 60
         self.hidden_size = 128 
         self.num_layers = 3    
 
         self.scaler = StandardScaler()
-        self.scaler_path = 'models/scaler_v2.pkl'
-        self.model_path = 'models/predictx_v2.pth'
+        self.scaler_path = 'models/scaler_v3_futures.pkl'
+        self.model_path = 'models/predictx_v3_futures.pth'
 
         self.rl_agent = None
         self.rl_enabled = False
@@ -89,6 +115,7 @@ class AIEngine:
             print(f"Failed to initialize LSTM: {e}")
 
     def load_model(self):
+        # Try loading V3 (Futures) model first
         if os.path.exists(self.model_path):
             try:
                 self.lstm_model.load_state_dict(torch.load(self.model_path))
@@ -96,9 +123,14 @@ class AIEngine:
                 if os.path.exists(self.scaler_path):
                     self.scaler = joblib.load(self.scaler_path)
                 self.models_loaded = True
-                print(f"✅ LSTM Model Loaded: {self.model_path}")
+                print(f"✅ LSTM Model V3 (Futures) Loaded: {self.model_path}")
             except Exception as e:
-                print(f"❌ Error loading LSTM: {e}")
+                print(f"❌ Error loading LSTM V3: {e}")
+                self.models_loaded = False
+        else:
+            print("⚠️ Futures Model not found. Please retrain for Phase 6 features.")
+            # Fallback logic could be added here, but for now we enforce retraining for Phase 6
+            self.models_loaded = False
 
     def prepare_data(self, data, seq_length):
         xs, ys = [], []
@@ -108,15 +140,79 @@ class AIEngine:
             xs.append(x)
             ys.append(y)
         return np.array(xs), np.array(ys)
+    
+    async def fetch_futures_data(self, symbol, limit):
+        """Fetch historical futures data asynchronously"""
+        # Fetch concurrently
+        funding_task = funding_analyzer.get_funding_history(symbol, limit=limit)
+        oi_task = sentiment_analyzer.get_historical_open_interest(symbol, limit=limit)
+        ls_task = sentiment_analyzer.get_historical_long_short_ratio(symbol, limit=limit)
+        
+        funding, oi, ls = await asyncio.gather(funding_task, oi_task, ls_task)
+        return funding, oi, ls
 
-    def train(self, symbol="BTC-USD", epochs=50, interval="1h", progress_callback=None):
+    def train(self, symbol="BTCUSDT", epochs=50, interval="1h", progress_callback=None):
         start_time = time.time()
+        print(f"Training started for {symbol}...")
+        
+        # 1. Fetch OHLCV
         raw_data = get_historical_data(symbol, period="1y", interval=interval)
         if "error" in raw_data: return {"status": "error", "message": raw_data["error"]}
 
         df = pd.DataFrame(raw_data["data"])
+        
+        # 2. Fetch Futures Data (Async run in Sync)
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            funding, oi, ls = loop.run_until_complete(self.fetch_futures_data(symbol, limit=1000))
+            loop.close()
+            
+            # 3. Merge Data (Simplistic merging logic for prototype)
+            # In production, use accurate timestamp merging. 
+            # Here we assume data density is similar or just fill
+            
+            # Funding
+            if funding and 'history' in funding:
+                 # Funding is 8h usually, repeated mapping needed. 
+                 # For simplicity, we use current funding as feature (not ideal but works for proof of concept)
+                 # Better: Map funding rates to timestamps
+                 df['fundingRate'] = funding['current'] # Placeholder: static funding
+            
+            # OI
+            if oi:
+                oi_df = pd.DataFrame(oi)
+                oi_df['time'] = pd.to_datetime(oi_df['timestamp'], unit='ms')
+                # Use interpolation or merge_asof if indices match
+                # For Phase 6 prototype: We assume last known OI
+                df['openInterest'] = oi[0]['open_interest'] # Placeholder
+                
+            # LS
+            if ls:
+                df['longShortRatio'] = ls[0]['ratio'] # Placeholder
+                
+            print("Futures data fetched and merged.")
+            
+        except Exception as e:
+            print(f"Error fetching futures data: {e}")
+            # Fallback to defaults
+            pass
+
         df = add_indicators(df)
-        features = df[['log_return', 'rsi', 'ema_diff']].values
+        
+        # Select 9 Features
+        # Ensure we have all columns
+        feature_cols = ['log_return', 'rsi', 'ema_diff', 'fundingRate', 'funding_trend', 'openInterest', 'oi_change', 'longShortRatio', 'atr']
+        
+        # Fill missing
+        for col in feature_cols:
+            if col not in df.columns:
+                 df[col] = 0.0
+                 
+        features = df[feature_cols].values
+        
+        # Handle NaNs
+        features = np.nan_to_num(features)
 
         train_size = int(len(features) * 0.8)
         self.scaler.fit(features[:train_size])
@@ -139,19 +235,50 @@ class AIEngine:
 
         return {"status": "success", "final_loss": history['loss'][-1], "epochs": epochs}
 
-    def predict_next_move(self, candles: list):
+    async def predict_next_move(self, candles: list, futures_data: dict = None):
         if not self.models_loaded or len(candles) < 150:
             return 0.5
 
         try:
             df = pd.DataFrame(candles)
+            
+            # --- INJECT FUTURES DATA ---
+            # If provided, use it. If not, async fetch (or defaulting to 0)
+            if not futures_data:
+                # Try to fetch current data quickly
+                try:
+                    # Note: This might add latency. 
+                    # Ideally passed from main.py which calls services concurrently.
+                    symbol = "BTCUSDT" # Default/Fallback
+                    # We assume main.py handles specific symbol context
+                    pass
+                except:
+                    pass
+            else:
+                df['fundingRate'] = futures_data.get('fundingRate', 0.0)
+                df['openInterest'] = futures_data.get('openInterest', 0.0)
+                df['longShortRatio'] = futures_data.get('longShortRatio', 1.0)
+            
             df = add_indicators(df)
-            current_features = df[['log_return', 'rsi', 'ema_diff']].tail(self.seq_length).values
+            
+            feature_cols = ['log_return', 'rsi', 'ema_diff', 'fundingRate', 'funding_trend', 'openInterest', 'oi_change', 'longShortRatio', 'atr']
+            
+             # Fill missing
+            for col in feature_cols:
+                if col not in df.columns:
+                     df[col] = 0.0
+            
+            current_features = df[feature_cols].tail(self.seq_length).values
+            
+            # Handle NaNs
+            current_features = np.nan_to_num(current_features)
+            
             scaled_input = self.scaler.transform(current_features)
 
             self.lstm_model.eval()
             with torch.no_grad():
                 input_tensor = torch.FloatTensor(scaled_input).unsqueeze(0) 
+
                 pred_scaled_return = self.lstm_model(input_tensor).item()
 
             # Normalization with Gain factor

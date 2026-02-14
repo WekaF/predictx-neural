@@ -70,17 +70,54 @@ class PredictionRequest(BaseModel):
     candles: List[dict] # OHLCV data
 
 @app.post("/api/predict")
-def predict_trend(request: PredictionRequest):
+async def predict_trend(request: PredictionRequest):
     """
     Get AI prediction and Execution Recommendation (Tier 7).
     """
     if not request.candles:
         raise HTTPException(status_code=400, detail="No candles provided")
 
-    # 1. Get LSTM Prediction
-    trend_prob = ai_engine.predict_next_move(request.candles)
+    # 0. Fetch Futures Data (Concurrent) for Enhanced AI Input
+    futures_data = None
+    try:
+        # Simple heuristic for symbol conversion if needed (e.g. BTC/USD -> BTCUSDT)
+        # However, frontend usually sends correct symbol. We try to be robust.
+        symbol = request.symbol.replace('/', '').replace('-', '')
+        if 'USD' in symbol and 'USDT' not in symbol:
+             symbol = symbol.replace('USD', 'USDT')
+        
+        # Parallel fetch
+        funding_task = funding_analyzer.get_funding_history(symbol, limit=5)
+        sentiment_task = sentiment_analyzer.get_comprehensive_sentiment(symbol)
+        
+        # Use return_exceptions to prevent one failure from blocking everything
+        results = await asyncio.gather(funding_task, sentiment_task, return_exceptions=True)
+        funding, sentiment = results[0], results[1]
+        
+        futures_data = {}
+        
+        # Parse Funding
+        if isinstance(funding, dict):
+            futures_data['fundingRate'] = funding.get('current', 0.0)
+        else:
+            print(f"[Predict] Funding fetch failed: {funding}")
+            
+        # Parse Sentiment
+        if isinstance(sentiment, dict):
+            futures_data['openInterest'] = sentiment.get('open_interest', {}).get('open_interest', 0.0)
+            futures_data['longShortRatio'] = sentiment.get('long_short_ratio', {}).get('ratio', 1.0)
+        else:
+             print(f"[Predict] Sentiment fetch failed: {sentiment}")
+             
+    except Exception as e:
+        print(f"[Predict] Futures data fetch warning: {e}")
+        futures_data = None
+
+    # 1. Get LSTM Prediction (Now Async & Futures Aware)
+    trend_prob = await ai_engine.predict_next_move(request.candles, futures_data)
     
     # 2. Get Agent Decision (Tier 7 - Ensemble CNN-LSTM)
+    # Note: We could pass futures_data to decide_action too in future
     action, confidence, meta = ai_engine.decide_action(trend_prob, candles=request.candles)
     
     # 3. Get Execution/Position Recommendation
@@ -91,6 +128,10 @@ def predict_trend(request: PredictionRequest):
         confidence, 
         current_price
     )
+    
+    # Inject futures metadata into response if available
+    if futures_data:
+        meta['futures_data'] = futures_data
     
     return {
         "symbol": request.symbol,
@@ -116,6 +157,41 @@ def train_model(symbol: str = "BTC-USD", epochs: int = 20):
     if result["status"] == "error":
         raise HTTPException(status_code=400, detail=result["message"])
     return result
+
+# --- Futures-Specific Endpoints ---
+from services.funding_rate_service import funding_analyzer
+from services.market_sentiment_service import sentiment_analyzer
+
+@app.get("/api/funding-rate/{symbol}")
+async def get_funding_rate(symbol: str):
+    """
+    Get current funding rate and historical trends for a futures symbol.
+    
+    Example: /api/funding-rate/BTCUSDT
+    """
+    try:
+        funding_data = await funding_analyzer.get_funding_history(symbol)
+        if not funding_data:
+            raise HTTPException(status_code=404, detail=f"No funding data found for {symbol}")
+        return funding_data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/market-sentiment/{symbol}")
+async def get_market_sentiment(symbol: str):
+    """
+    Get comprehensive market sentiment including:
+    - Open Interest
+    - Long/Short Account Ratio
+    - Taker Buy/Sell Ratio
+    
+    Example: /api/market-sentiment/BTCUSDT
+    """
+    try:
+        sentiment_data = await sentiment_analyzer.get_comprehensive_sentiment(symbol)
+        return sentiment_data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

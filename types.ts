@@ -30,7 +30,7 @@ export interface TradeSignal {
   patternDetected?: string;
   confluenceFactors?: string[]; // e.g. ["SMA200 Support", "RSI Divergence"]
   riskRewardRatio?: number;
-  outcome?: 'WIN' | 'LOSS' | 'PENDING';
+  outcome?: 'WIN' | 'LOSS' | 'PENDING' | 'EXPIRED' | 'MANUAL_CLOSE';
   newsSentiment?: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
   execution?: {
     status: string;
@@ -207,7 +207,7 @@ export interface TradingLog {
     takeProfit?: number;
     quantity?: number;
     pnl?: number;
-    outcome?: 'WIN' | 'LOSS' | 'PENDING';
+    outcome?: 'WIN' | 'LOSS' | 'PENDING' | 'EXPIRED' | 'MANUAL_CLOSE';
     source?: 'AI' | 'MANUAL';
     items: {
         snapshot: MarketSnapshot;

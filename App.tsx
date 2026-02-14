@@ -39,6 +39,8 @@ import * as forexService from './services/forexService';
 import { Candle, TechnicalIndicators, TradeSignal, TrainingData, NewsItem, Alert, ExecutedTrade, Asset } from './types';
 import { generateUUID } from './utils/uuid';
 import { Analytics } from "@vercel/analytics/react"
+import { futuresRiskManager } from './services/futuresRiskManager';
+import { liquidationCalculator } from './services/liquidationCalculator';
 
 
 
@@ -624,11 +626,66 @@ function App() {
 
     setIndicators(newIndicators);
 
-    // 2. Monitor Active Trades (TP/SL)
+    // 2. Monitor Active Trades (TP/SL) + Auto-Expiry
     // Only monitor if the active signal belongs to the currently selected asset
     if (!activeSignal || activeSignal.outcome !== 'PENDING') return;
     if (activeSignal.symbol !== selectedAsset.symbol) return; 
 
+    // 2a. AUTO-EXPIRY CHECK (24 hours default)
+    const AUTO_EXPIRE_HOURS = 24;
+    const entryTimestamp = new Date(activeSignal.timestamp).getTime();
+    const now = Date.now();
+    const hoursSinceEntry = (now - entryTimestamp) / (1000 * 60 * 60);
+    
+    if (hoursSinceEntry > AUTO_EXPIRE_HOURS) {
+      console.log(`[Auto-Expiry] Trade ${activeSignal.id} expired after ${hoursSinceEntry.toFixed(1)} hours`);
+      
+      // Close at current market price
+      const lastCandle = candles[candles.length - 1];
+      const currentPrice = lastCandle.close;
+      
+      // Calculate PNL
+      const dist = Math.abs(activeSignal.entryPrice - activeSignal.stopLoss);
+      const safeDist = dist === 0 ? 1 : dist;
+      const quantity = ((balance * (riskPercent / 100)) / safeDist);
+      const pnl = activeSignal.type === 'BUY'
+        ? (currentPrice - activeSignal.entryPrice) * quantity
+        : (activeSignal.entryPrice - currentPrice) * quantity;
+      
+      updateBalance(b => b + pnl);
+      
+      // Add to Trade History
+      const expiredTrade: EnhancedExecutedTrade = {
+        id: activeSignal.id,
+        symbol: activeSignal.symbol,
+        entryTime: new Date(activeSignal.timestamp).toISOString(),
+        exitTime: new Date().toISOString(),
+        type: activeSignal.type as 'BUY' | 'SELL',
+        entryPrice: activeSignal.entryPrice,
+        exitPrice: currentPrice,
+        stopLoss: activeSignal.stopLoss,
+        takeProfit: activeSignal.takeProfit,
+        quantity: quantity,
+        pnl: pnl,
+        outcome: 'EXPIRED',
+        source: activeSignal.patternDetected === "Manual Entry" ? "MANUAL" : "AI",
+        marketContext: activeSignal.marketContext,
+        aiConfidence: activeSignal.confidence,
+        aiReasoning: `Auto-expired after ${AUTO_EXPIRE_HOURS} hours`,
+        patternDetected: activeSignal.patternDetected,
+        confluenceFactors: activeSignal.confluenceFactors
+      };
+      
+      setTradeHistory(prev => [expiredTrade, ...prev]);
+      storageService.saveTradingLog(expiredTrade);
+      storageService.saveActiveSignal(null, activeSignal.symbol);
+      setActiveSignal(prev => prev ? { ...prev, outcome: 'EXPIRED' } : null);
+      
+      showNotification(`Trade EXPIRED after ${AUTO_EXPIRE_HOURS}h. Closed at $${currentPrice.toFixed(2)}`, 'warning');
+      return; // Exit early, don't check TP/SL
+    }
+
+    // 2b. TP/SL MONITORING
     // Check against the LAST candle's High/Low 
     const lastCandle = candles[candles.length - 1];
     const newHigh = lastCandle.high;
@@ -1070,6 +1127,60 @@ function App() {
     console.log('[confirmTrade] ✅ Trade execution complete');
   };
 
+  // Manual Close Trade Handler
+  const handleManualCloseTrade = useCallback((tradeId: string) => {
+    console.log(`[handleManualCloseTrade] Closing trade ${tradeId}`);
+    
+    // Find the trade in history
+    const trade = tradeHistory.find(t => t.id === tradeId);
+    if (!trade || trade.outcome !== 'PENDING') {
+      showNotification('Trade not found or already closed', 'error');
+      return;
+    }
+    
+    // Get current market price
+    if (candles.length === 0) {
+      showNotification('Cannot close trade: No market data available', 'error');
+      return;
+    }
+    
+    const currentPrice = candles[candles.length - 1].close;
+    
+    // Calculate PNL
+    const dist = Math.abs(trade.entryPrice - trade.stopLoss);
+    const safeDist = dist === 0 ? 1 : dist;
+    const quantity = trade.quantity || ((balance * (riskPercent / 100)) / safeDist);
+    const pnl = trade.type === 'BUY'
+      ? (currentPrice - trade.entryPrice) * quantity
+      : (trade.entryPrice - currentPrice) * quantity;
+    
+    updateBalance(b => b + pnl);
+    
+    // Update trade in history
+    const closedTrade: EnhancedExecutedTrade = {
+      ...trade,
+      exitTime: new Date().toISOString(),
+      exitPrice: currentPrice,
+      quantity: quantity,
+      pnl: pnl,
+      outcome: 'MANUAL_CLOSE',
+      aiReasoning: trade.aiReasoning ? `${trade.aiReasoning} | Manually closed by user` : 'Manually closed by user'
+    };
+    
+    // Update history
+    setTradeHistory(prev => prev.map(t => t.id === tradeId ? closedTrade : t));
+    storageService.saveTradingLog(closedTrade);
+    
+    // If this is the active signal, clear it
+    if (activeSignal?.id === tradeId) {
+      storageService.saveActiveSignal(null, activeSignal.symbol);
+      setActiveSignal(null);
+    }
+    
+    const pnlText = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
+    showNotification(`Trade closed manually at $${currentPrice.toFixed(2)}. PNL: ${pnlText}`, pnl >= 0 ? 'success' : 'warning');
+  }, [tradeHistory, candles, balance, riskPercent, activeSignal, updateBalance]);
+
   const rejectTrade = () => {
     setPendingSignal(null);
     showNotification('Trade rejected', 'info');
@@ -1097,19 +1208,51 @@ function App() {
       outcome: 'PENDING'
     };
 
-    // Calculate Quantity (Asset Units)
+    // Calculate Quantity (Asset Units) - UPGRADED TO FUTURES RISK MANAGER
     const entry = entryPrice || 1; // Prevent div by zero
-    const positionSizeUsd = balance * leverage * (riskPercent / 100);
+    
+    // OLD METHOD (Simple leverage-based):
+    // const positionSizeUsd = balance * leverage * (riskPercent / 100);
+    
+    // NEW METHOD (Stop-loss-aware position sizing):
+    // This ensures we risk exactly riskPercent% of balance regardless of SL distance
+    const positionSizeUsd = futuresRiskManager.calculatePositionSize(
+      balance,
+      entryPrice,
+      stopLoss,
+      leverage
+    );
+    
+    console.log(`[Position Sizing] Balance: $${balance}, Entry: $${entryPrice}, SL: $${stopLoss}, Leverage: ${leverage}x`);
+    console.log(`[Position Sizing] Calculated Position: $${positionSizeUsd.toFixed(2)}`);
     
     // Dynamically round quantity based on Binance LOT_SIZE stepSize
     const tradeSymbol = selectedAsset.symbol.replace('/', '').replace('USD', 'USDT');
     const quantityAsset = await binanceTradingService.roundQuantity(tradeSymbol, positionSizeUsd / entry);
+    
+    console.log(`[Position Sizing] Quantity: ${quantityAsset} ${selectedAsset.symbol.split('/')[0]}`);
     
     // Safety check: Don't allow 0 or extremely small quantity
     if (quantityAsset <= 0) {
         showNotification(`Insufficient balance ($${balance.toFixed(2)}) or risk to open position.`, "error");
         return;
     }
+    
+    // Validate liquidation risk
+    const side: 'LONG' | 'SHORT' = validatedType === 'BUY' ? 'LONG' : 'SHORT';
+    const liqInfo = liquidationCalculator.validateTrade(entryPrice, stopLoss, leverage, side);
+    
+    if (liqInfo.riskLevel === 'EXTREME') {
+      showNotification(`⚠️ Liquidation Risk: ${liqInfo.warningMessage}`, "error");
+      console.error('[Liquidation Risk] Trade blocked:', liqInfo);
+      return;
+    }
+    
+    if (liqInfo.riskLevel === 'HIGH') {
+      showNotification(`⚠️ High Liquidation Risk: ${liqInfo.warningMessage}`, "warning");
+    }
+    
+    console.log(`[Liquidation] Price: $${liqInfo.liquidationPrice}, Risk: ${liqInfo.riskLevel}, Safety: ${liqInfo.safetyMargin.toFixed(1)}%`);
     
     // Execute on Binance (if configured/Testnet)
     if (binanceTradingService.isConfigured()) {
@@ -1141,6 +1284,7 @@ function App() {
         }
     }
 
+    // Add metadata with liquidation info for UI display
     const signalWithQty = { 
       ...newSignal, 
       quantity: quantityAsset,
@@ -1149,6 +1293,10 @@ function App() {
         side: newSignal.type,
         leverage: leverage,
         mode: tradingMode
+      },
+      meta: {
+        liquidation_info: liqInfo,
+        recommended_leverage: leverage
       }
     };
     setActiveSignal(signalWithQty);
@@ -1466,6 +1614,15 @@ function App() {
             >
               <Brain className="w-5 h-5 group-hover:scale-110 transition-transform" />
               {currentView === 'ai-intelligence' && <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 bg-blue-500 rounded-r-full shadow-[0_0_10px_rgba(59,130,246,0.5)]"></div>}
+            </button>
+            
+            <button
+               onClick={() => setCurrentView('futures')}
+               className={`p-3 rounded-xl transition-all duration-300 group relative ${currentView === 'futures' ? 'bg-purple-500/10 text-purple-400' : 'text-slate-400 hover:bg-white/5'}`}
+               title="Futures Dashboard"
+            >
+               <Activity className="w-5 h-5 group-hover:scale-110 transition-transform" />
+               {currentView === 'futures' && <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 bg-purple-500 rounded-r-full shadow-[0_0_10px_rgba(168,85,247,0.5)]"></div>}
             </button>
 
           <button
@@ -1849,13 +2006,13 @@ function App() {
                 </div>
 
                 {/* Trade History Panel */}
-                <div className="bg-slate-900 border border-slate-800 rounded-xl shadow-xl flex flex-col h-40 sm:h-48 overflow-hidden">
+                <div className="bg-slate-900 border border-slate-800 rounded-xl shadow-xl flex flex-col h-64 sm:h-96 overflow-hidden">
                   <div className="px-3 md:px-4 py-2 border-b border-slate-800 flex items-center gap-2">
                     <List className="w-4 h-4 text-slate-400" />
                     <span className="text-xs font-bold text-slate-400">SESSION TRADE HISTORY</span>
                   </div>
                   <div className="flex-1 overflow-y-auto">
-                    <TradeList trades={tradeHistory} />
+                    <TradeList trades={tradeHistory} onCloseTrade={handleManualCloseTrade} />
                   </div>
                 </div>
               </div>
@@ -1910,6 +2067,69 @@ function App() {
                           <span className="text-xs font-mono text-emerald-400">{activeSignal.takeProfit}</span>
                         </div>
                       </div>
+
+                      {/* Futures Info: Liquidation & Funding Rate */}
+                      {(activeSignal.meta?.liquidation_info || activeSignal.meta?.funding_rate) && (
+                        <div className="space-y-2 bg-slate-950/50 rounded-lg p-3 border border-slate-800/50">
+                          {/* Liquidation Info */}
+                          {activeSignal.meta?.liquidation_info && (
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <ShieldCheck className="w-3.5 h-3.5 text-blue-400" />
+                                <span className="text-[10px] text-slate-500 font-bold uppercase">Liquidation</span>
+                              </div>
+                              <div className="text-right">
+                                <div className="text-xs font-mono text-slate-200">
+                                  ${activeSignal.meta.liquidation_info.liquidationPrice.toLocaleString()}
+                                </div>
+                                <div className={`text-[9px] font-bold ${
+                                  activeSignal.meta.liquidation_info.riskLevel === 'SAFE' ? 'text-emerald-400' :
+                                  activeSignal.meta.liquidation_info.riskLevel === 'MODERATE' ? 'text-yellow-400' :
+                                  activeSignal.meta.liquidation_info.riskLevel === 'HIGH' ? 'text-orange-400' :
+                                  'text-rose-400'
+                                }`}>
+                                  {activeSignal.meta.liquidation_info.riskLevel} ({activeSignal.meta.liquidation_info.safetyMargin.toFixed(1)}% margin)
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Leverage */}
+                          {activeSignal.meta?.recommended_leverage && (
+                            <div className="flex items-center justify-between pt-1 border-t border-slate-800/50">
+                              <div className="flex items-center gap-2">
+                                <Zap className="w-3.5 h-3.5 text-purple-400" />
+                                <span className="text-[10px] text-slate-500 font-bold uppercase">Leverage</span>
+                              </div>
+                              <div className="text-xs font-mono text-purple-400 font-bold">
+                                {activeSignal.meta.recommended_leverage}x
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Funding Rate */}
+                          {activeSignal.meta?.funding_rate && (
+                            <div className="flex items-center justify-between pt-1 border-t border-slate-800/50">
+                              <div className="flex items-center gap-2">
+                                <DollarSign className="w-3.5 h-3.5 text-cyan-400" />
+                                <span className="text-[10px] text-slate-500 font-bold uppercase">Funding Rate</span>
+                              </div>
+                              <div className="text-right">
+                                <div className="text-xs font-mono text-slate-200">
+                                  {(activeSignal.meta.funding_rate.current * 100).toFixed(4)}%
+                                </div>
+                                <div className={`text-[9px] font-bold ${
+                                  activeSignal.meta.funding_rate.trend === 'BULLISH' ? 'text-emerald-400' :
+                                  activeSignal.meta.funding_rate.trend === 'BEARISH' ? 'text-rose-400' :
+                                  'text-slate-400'
+                                }`}>
+                                  {activeSignal.meta.funding_rate.trend} ({activeSignal.meta.funding_rate.annual})
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
 
                       {/* Running PnL Display */}
                       {candles.length > 0 && (
