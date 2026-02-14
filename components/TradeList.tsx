@@ -31,7 +31,6 @@ const TradeList: React.FC<TradeListProps> = ({ trades }) => {
       
       // Check if date is valid
       if (isNaN(date.getTime())) {
-        console.warn(`[TradeList] Invalid timestamp: ${timestamp}`);
         return 'Invalid Date';
       }
       
@@ -70,7 +69,7 @@ const TradeList: React.FC<TradeListProps> = ({ trades }) => {
                 {formatTime(trade.exitTime || trade.entryTime)}
               </td>
               <td className="px-4 py-3 font-bold text-slate-300">
-                {trade.symbol || 'BTC/USD'}
+                {trade.symbol || 'BTC/USDT'}
               </td>
               <td className="px-4 py-3">
                 <span className={`flex items-center gap-1 font-bold ${trade.type === 'BUY' ? 'text-emerald-400' : 'text-rose-400'}`}>

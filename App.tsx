@@ -44,34 +44,41 @@ import { Analytics } from "@vercel/analytics/react"
 
 
 // Supported Assets Configuration
-// Binance Trading Pairs (Real-time from Binance API)
-const BINANCE_ASSETS: Asset[] = [
-  // === MAJOR CRYPTO (USDT pairs) ===
-  { symbol: 'BTC/USD', name: 'Bitcoin', type: 'CRYPTO', price: 0 },
-  { symbol: 'ETH/USD', name: 'Ethereum', type: 'CRYPTO', price: 0 },
-  { symbol: 'BNB/USD', name: 'Binance Coin', type: 'CRYPTO', price: 0 },
-  { symbol: 'SOL/USD', name: 'Solana', type: 'CRYPTO', price: 0 },
-  { symbol: 'XRP/USD', name: 'Ripple', type: 'CRYPTO', price: 0 },
-  { symbol: 'ADA/USD', name: 'Cardano', type: 'CRYPTO', price: 0 },
-  { symbol: 'AVAX/USD', name: 'Avalanche', type: 'CRYPTO', price: 0 },
-  { symbol: 'DOGE/USD', name: 'Dogecoin', type: 'CRYPTO', price: 0 },
-  { symbol: 'DOT/USD', name: 'Polkadot', type: 'CRYPTO', price: 0 },
-  { symbol: 'MATIC/USD', name: 'Polygon', type: 'CRYPTO', price: 0 },
-  { symbol: 'LINK/USD', name: 'Chainlink', type: 'CRYPTO', price: 0 },
-  { symbol: 'UNI/USD', name: 'Uniswap', type: 'CRYPTO', price: 0 },
-  { symbol: 'ATOM/USD', name: 'Cosmos', type: 'CRYPTO', price: 0 },
-  { symbol: 'LTC/USD', name: 'Litecoin', type: 'CRYPTO', price: 0 },
-  { symbol: 'NEAR/USD', name: 'NEAR Protocol', type: 'CRYPTO', price: 0 },
-];
-
-const SUPPORTED_ASSETS = BINANCE_ASSETS;
+// Now loaded dynamically from Binance Futures API
+const INITIAL_ASSET: Asset = { symbol: 'BTC/USDT', name: 'Bitcoin', type: 'CRYPTO', price: 0 };
 
 function App() {  
   const [candles, setCandles] = useState<Candle[]>([]);
   const [indicators, setIndicators] = useState<TechnicalIndicators | null>(null);
 
   // Asset State
-  const [selectedAsset, setSelectedAsset] = useState<Asset>(SUPPORTED_ASSETS[0]);
+  const [supportedAssets, setSupportedAssets] = useState<Asset[]>([INITIAL_ASSET]);
+  const [selectedAsset, setSelectedAsset] = useState<Asset>(INITIAL_ASSET);
+  const [isAssetLoading, setIsAssetLoading] = useState(true);
+
+  // Load Dynamic Assets
+  useEffect(() => {
+    // Clear cache on boot to ensure we get fresh Futures data (overwriting any potential Spot data)
+    binanceService.clearCache();
+
+    const loadAssets = async () => {
+      try {
+        const assets = await binanceService.fetchTopAssets();
+        if (assets.length > 0) {
+          setSupportedAssets(assets);
+          // If current selected asset is default placeholder, switch to first real asset
+          if (selectedAsset.symbol === 'BTC/USDT' && !selectedAsset.price) {
+             setSelectedAsset(assets[0]);
+          }
+        }
+      } catch (e) {
+        console.error("Failed to load assets", e);
+      } finally {
+        setIsAssetLoading(false);
+      }
+    };
+    loadAssets();
+  }, []);
   const [isAssetMenuOpen, setIsAssetMenuOpen] = useState(false);
   const [selectedInterval, setSelectedInterval] = useState<string>('15m'); // Candle interval
 
@@ -379,7 +386,7 @@ function App() {
           console.log(`[App] ✅ Loaded ${historicalCandles.length} historical candles for ${selectedAsset.symbol}`);
 
           // 2. Connect WebSocket for real-time updates
-          ws = binanceService.connectKlineStream(selectedAsset.symbol, '1m', (candle, isClosed) => {
+          ws = binanceService.connectKlineStream(selectedAsset.symbol, selectedInterval, (candle, isClosed) => {
             if (!isActive) return;
 
             setCandles(prev => {
@@ -493,22 +500,8 @@ function App() {
 
       } catch (error) {
         console.error('[App] ❌ Error loading market data:', error);
-        showNotification(`Failed to load data for ${selectedAsset.symbol}. Using fallback.`, 'error');
-
-        // Fallback to mock data on error
-        // This part was removed as per instruction, but if the above fails, there's no fallback.
-        // Re-adding a simple mock fallback for robustness if the new Binance call fails.
-        console.warn(`[App] ⚠️ Error with Binance API, falling back to mock data for ${selectedAsset.symbol}`);
-        const mockCandles = Array.from({ length: 1000 }, (_, i) => ({
-          time: new Date(Date.now() - (1000 - i) * 60 * 1000).toISOString(),
-          open: 100 + Math.sin(i / 10) * 10 + Math.random() * 2,
-          high: 115 + Math.sin(i / 10) * 10 + Math.random() * 2,
-          low: 90 + Math.sin(i / 10) * 10 + Math.random() * 2,
-          close: 105 + Math.sin(i / 10) * 10 + Math.random() * 2,
-          volume: Math.floor(Math.random() * 10000)
-        }));
-        setCandles(mockCandles);
-        showNotification(`Using simulated data for ${selectedAsset.symbol} due to API error.`, 'info');
+        showNotification(`Failed to load data for ${selectedAsset.symbol}. Check connection.`, 'error');
+        setCandles([]); // Clear data to indicate error state
       }
     };
 
@@ -568,204 +561,176 @@ function App() {
     return () => clearInterval(newsInterval);
   }, []);
 
-  // Live Data Simulation & TP/SL/Alert Monitoring
+  // Real-time Indicators & TP/SL Monitoring
   useEffect(() => {
-    if (currentView !== 'terminal') return;
+    if (candles.length === 0) return;
 
-    const interval = setInterval(() => {
-      setCandles(prev => {
-        if (prev.length === 0) return prev;
+    // 1. Update Indicators based on LATEST candles (from WebSocket/Polling)
+    const closes = candles.map(c => c.close);
+    const volumes = candles.map(c => c.volume);
+    const highs = candles.map(c => c.high);
+    const lows = candles.map(c => c.low);
+    const CurrentRsi = calculateRSI(closes);
 
-        const last = prev[prev.length - 1];
-        const volatility = last.close * 0.002;
-        const change = (Math.random() - 0.5) * volatility;
-        const newClose = last.close + change;
-        const newHigh = Math.max(last.close, newClose) + Math.random() * (volatility * 0.5);
-        const newLow = Math.min(last.close, newClose) - Math.random() * (volatility * 0.5);
+    const sma200 = calculateSMA(closes, 200);
+    const trend = analyzeTrend(candles, sma200);
+    const sr = findSupportResistance(candles);
 
-        const newCandle: Candle = {
-          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-          open: last.close,
-          close: newClose,
-          high: newHigh,
-          low: newLow,
-          volume: Math.floor(Math.random() * 1000)
-        };
-        const newData = [...prev.slice(1), newCandle];
+    const macd = calculateMACD(closes);
+    const stochastic = calculateStochastic(candles);
+    const momentum = calculateMomentum(closes);
 
-        // Update Indicators
-        const closes = newData.map(c => c.close);
-        const volumes = newData.map(c => c.volume);
-        const high = Math.max(...newData.map(c => c.high));
-        const low = Math.min(...newData.map(c => c.low));
-        const currentRsi = calculateRSI(closes);
+    const newIndicators = {
+      rsi: CurrentRsi,
+      fibLevels: calculateFibonacci(Math.max(...highs), Math.min(...lows), trend),
+      trend,
+      sma200,
+      sma50: calculateSMA(closes, 50),
+      sma20: calculateSMA(closes, 20),
+      ema20: calculateEMA(closes, 20),
+      ema12: calculateEMA(closes, 12),
+      ema26: calculateEMA(closes, 26),
+      volumeSma: calculateSMA(volumes, 20),
+      nearestSupport: sr.support,
+      nearestResistance: sr.resistance,
+      macd: {
+        value: macd.macd,
+        signal: macd.signal,
+        histogram: macd.histogram
+      },
+      stochastic,
+      momentum
+    };
 
-        const sma200 = calculateSMA(closes, 200);
-        const trend = analyzeTrend(newData, sma200);
-        const sr = findSupportResistance(newData);
+    setIndicators(newIndicators);
 
-        // Calculate new indicators for simulation
-        const macd = calculateMACD(closes);
-        const stochastic = calculateStochastic(newData);
-        const momentum = calculateMomentum(closes);
+    // 2. Monitor Active Trades (TP/SL)
+    // Only monitor if the active signal belongs to the currently selected asset
+    if (!activeSignal || activeSignal.outcome !== 'PENDING') return;
+    if (activeSignal.symbol !== selectedAsset.symbol) return; 
 
-        const newIndicators = {
-          rsi: currentRsi,
-          fibLevels: calculateFibonacci(high, low, trend),
-          trend,
-          sma200,
-          sma50: calculateSMA(closes, 50),
-          sma20: calculateSMA(closes, 20),
-          ema20: calculateEMA(closes, 20),
-          ema12: calculateEMA(closes, 12),
-          ema26: calculateEMA(closes, 26),
-          volumeSma: calculateSMA(volumes, 20),
-          nearestSupport: sr.support,
-          nearestResistance: sr.resistance,
-          macd: {
-            value: macd.macd,
-            signal: macd.signal,
-            histogram: macd.histogram
-          },
-          stochastic,
-          momentum
-        };
+    // Check against the LAST candle's High/Low 
+    const lastCandle = candles[candles.length - 1];
+    const newHigh = lastCandle.high;
+    const newLow = lastCandle.low;
 
-        setIndicators(newIndicators);
+    let closedOutcome: 'WIN' | 'LOSS' | null = null;
+    let actualClosePrice = 0;
+    let webhookEvent: 'TAKE_PROFIT' | 'STOP_LOSS' | null = null;
 
-        // --- REAL-TIME TP/SL MONITORING ---
-        setActiveSignal(currentSignal => {
-          // Only monitor if the active signal belongs to the currently selected asset
-          if (!currentSignal || currentSignal.outcome !== 'PENDING') return currentSignal;
-          if (currentSignal.symbol !== selectedAsset.symbol) return currentSignal; // Skip if different asset
+    if (activeSignal.type === 'BUY') {
+      if (newLow <= activeSignal.stopLoss) {
+        closedOutcome = 'LOSS';
+        actualClosePrice = activeSignal.stopLoss;
+        webhookEvent = 'STOP_LOSS';
+        showNotification(`STOP LOSS HIT! Position Closed at ${actualClosePrice}`, 'error');
+      } else if (newHigh >= activeSignal.takeProfit) {
+        closedOutcome = 'WIN';
+        actualClosePrice = activeSignal.takeProfit;
+        webhookEvent = 'TAKE_PROFIT';
+        showNotification(`TAKE PROFIT HIT! Position Closed at ${actualClosePrice}`, 'success');
+      }
+    } else if (activeSignal.type === 'SELL') {
+      if (newHigh >= activeSignal.stopLoss) {
+        closedOutcome = 'LOSS';
+        actualClosePrice = activeSignal.stopLoss;
+        webhookEvent = 'STOP_LOSS';
+        showNotification(`STOP LOSS HIT! Position Closed at ${actualClosePrice}`, 'error');
+      } else if (newLow <= activeSignal.takeProfit) {
+        closedOutcome = 'WIN';
+        actualClosePrice = activeSignal.takeProfit;
+        webhookEvent = 'TAKE_PROFIT';
+        showNotification(`TAKE PROFIT HIT! Position Closed at ${actualClosePrice}`, 'success');
+      }
+    }
 
-          let closedOutcome: 'WIN' | 'LOSS' | null = null;
-          let closePrice = 0;
-          let webhookEvent: 'TAKE_PROFIT' | 'STOP_LOSS' | null = null;
+    if (closedOutcome && webhookEvent) {
+      // Auto-update balance
+      const dist = Math.abs(activeSignal.entryPrice - activeSignal.stopLoss);
+      const safeDist = dist === 0 ? 1 : dist;
+      const quantity = ((balance * (riskPercent / 100)) / safeDist);
+      const pnl = activeSignal.type === 'BUY'
+        ? (actualClosePrice - activeSignal.entryPrice) * quantity
+        : (activeSignal.entryPrice - actualClosePrice) * quantity;
 
-          if (currentSignal.type === 'BUY') {
-            if (newLow <= currentSignal.stopLoss) {
-              closedOutcome = 'LOSS';
-              closePrice = currentSignal.stopLoss;
-              webhookEvent = 'STOP_LOSS';
-              showNotification(`STOP LOSS HIT! Position Closed at ${closePrice}`, 'error');
-            } else if (newHigh >= currentSignal.takeProfit) {
-              closedOutcome = 'WIN';
-              closePrice = currentSignal.takeProfit;
-              webhookEvent = 'TAKE_PROFIT';
-              showNotification(`TAKE PROFIT HIT! Position Closed at ${closePrice}`, 'success');
-            }
-          } else if (currentSignal.type === 'SELL') {
-            if (newHigh >= currentSignal.stopLoss) {
-              closedOutcome = 'LOSS';
-              closePrice = currentSignal.stopLoss;
-              webhookEvent = 'STOP_LOSS';
-              showNotification(`STOP LOSS HIT! Position Closed at ${closePrice}`, 'error');
-            } else if (newLow <= currentSignal.takeProfit) {
-              closedOutcome = 'WIN';
-              closePrice = currentSignal.takeProfit;
-              webhookEvent = 'TAKE_PROFIT';
-              showNotification(`TAKE PROFIT HIT! Position Closed at ${closePrice}`, 'success');
-            }
+      const riskedAmount = safeDist * quantity;
+
+      updateBalance(b => b + pnl);
+
+      // Add to Trade History
+      const completedTrade: EnhancedExecutedTrade = {
+        id: activeSignal.id,
+        symbol: activeSignal.symbol,
+        entryTime: new Date(activeSignal.timestamp).toLocaleTimeString(),
+        exitTime: lastCandle.time,
+        type: activeSignal.type as 'BUY' | 'SELL',
+        entryPrice: activeSignal.entryPrice,
+        exitPrice: actualClosePrice,
+        stopLoss: activeSignal.stopLoss,
+        takeProfit: activeSignal.takeProfit,
+        quantity: quantity,
+        pnl: pnl,
+        outcome: closedOutcome,
+        source: activeSignal.patternDetected === "Manual Entry" ? "MANUAL" : "AI",
+        marketContext: activeSignal.marketContext,
+        aiConfidence: activeSignal.confidence,
+        aiReasoning: activeSignal.reasoning,
+        patternDetected: activeSignal.patternDetected,
+        confluenceFactors: activeSignal.confluenceFactors
+      };
+      setTradeHistory(prev => [completedTrade, ...prev]);
+
+      // Persist to localStorage and Supabase
+      storageService.saveTradingLog(completedTrade);
+
+      // --- TRIGGER AUTOMATION ---
+      sendWebhookNotification(webhookEvent, activeSignal, actualClosePrice).then(res => {
+        if (res.success) {
+          if (res.warning) {
+            showNotification(`Webhook Warning: ${res.warning}`, 'warning');
           }
-
-          if (closedOutcome && webhookEvent) {
-            // Auto-update balance
-            const dist = Math.abs(currentSignal.entryPrice - currentSignal.stopLoss);
-            const quantity = ((balance * (riskPercent / 100)) / dist);
-            const pnl = currentSignal.type === 'BUY'
-              ? (closePrice - currentSignal.entryPrice) * quantity
-              : (currentSignal.entryPrice - closePrice) * quantity;
-
-            const riskedAmount = dist * quantity;
-
-            updateBalance(b => b + pnl);
-
-            // Add to Trade History
-            const completedTrade: EnhancedExecutedTrade = {
-              id: currentSignal.id,
-              symbol: currentSignal.symbol,
-              entryTime: new Date(currentSignal.timestamp).toLocaleTimeString(),
-              exitTime: newCandle.time,
-              type: currentSignal.type as 'BUY' | 'SELL',
-              entryPrice: currentSignal.entryPrice,
-              exitPrice: closePrice,
-              stopLoss: currentSignal.stopLoss,
-              takeProfit: currentSignal.takeProfit,
-              quantity: quantity,
-              pnl: pnl,
-              outcome: closedOutcome,
-              source: currentSignal.patternDetected === "Manual Entry" ? "MANUAL" : "AI",
-              marketContext: currentSignal.marketContext,
-              aiConfidence: currentSignal.confidence,
-              aiReasoning: currentSignal.reasoning,
-              patternDetected: currentSignal.patternDetected,
-              confluenceFactors: currentSignal.confluenceFactors
-            };
-            setTradeHistory(prev => [completedTrade, ...prev]);
-
-            // Persist to localStorage and Supabase
-            storageService.saveTradingLog(completedTrade);
-
-            // --- TRIGGER AUTOMATION ---
-            sendWebhookNotification(webhookEvent, currentSignal, closePrice).then(res => {
-              if (res.success) {
-                if (res.warning) {
-                  showNotification(`Webhook Warning: ${res.warning}`, 'warning');
-                }
-              } else if (!res.skipped) {
-                showNotification(`Webhook Failed: ${res.error}`, 'error');
-              }
-            });
-
-            // --- TRAIN LOCAL ML MODEL (REINFORCEMENT LEARNING) ---
-            // We now pass the PNL and Risk Amount so the Q-Learning agent can calculate reward
-            if (currentSignal.patternDetected !== "Manual Entry") {
-              trainModel(
-                closedOutcome,
-                currentSignal.type as 'BUY' | 'SELL',
-                newData.slice(-50),
-                newIndicators,
-                sentimentScore,
-                pnl,
-                riskedAmount,
-                currentSignal.confidence // Pass predicted confidence for meta-learning
-              );
-            }
-
-            // Add to UI history
-            setTrainingHistory(prev => {
-              const newHistory: TrainingData = {
-                id: currentSignal.id,
-                pattern: currentSignal.patternDetected || 'Manual/Unknown',
-                outcome: closedOutcome!,
-                confluence: currentSignal.confluenceFactors?.join(', ') || 'Automated Close',
-                riskReward: currentSignal.riskRewardRatio || 0,
-                note: `Auto-Closed by System at ${newCandle.time}. PNL: ${pnl.toFixed(2)}`
-              };
-              storageService.saveTrainingData([newHistory, ...prev].slice(0, 15));
-
-              // Update signal outcome in Supabase
-              storageService.updateTradeSignalOutcome(currentSignal.id, closedOutcome!);
-
-              return [newHistory, ...prev].slice(0, 15);
-            });
-
-            // Clear active signal from persistent storage once closed
-            storageService.saveActiveSignal(null, currentSignal.symbol);
-            
-            return { ...currentSignal, outcome: closedOutcome };
-          }
-
-          return currentSignal;
-        });
-
-        return newData;
+        } else if (!res.skipped) {
+          showNotification(`Webhook Failed: ${res.error}`, 'error');
+        }
       });
-    }, 2000);
 
-    return () => clearInterval(interval);
-  }, [currentView, sentimentScore, balance, riskPercent, selectedAsset, activeSignal]); // Removed alerts dependency
+      // --- TRAIN LOCAL ML MODEL (REINFORCEMENT LEARNING) ---
+      if (activeSignal.patternDetected !== "Manual Entry") {
+        trainModel(
+          closedOutcome,
+          activeSignal.type as 'BUY' | 'SELL',
+          candles.slice(-50),
+          newIndicators,
+          sentimentScore,
+          pnl,
+          riskedAmount,
+          activeSignal.confidence
+        );
+      }
+
+      // Add to UI history
+      setTrainingHistory(prev => {
+        const newHistory: TrainingData = {
+          id: activeSignal.id,
+          pattern: activeSignal.patternDetected || 'Manual/Unknown',
+          outcome: closedOutcome!,
+          confluence: activeSignal.confluenceFactors?.join(', ') || 'Automated Close',
+          riskReward: activeSignal.riskRewardRatio || 0,
+          note: `Auto-Closed by System at ${lastCandle.time}. PNL: ${pnl.toFixed(2)}`
+        };
+        storageService.saveTrainingData([newHistory, ...prev].slice(0, 15));
+
+        // Update signal outcome in Supabase
+        storageService.updateTradeSignalOutcome(activeSignal.id, closedOutcome!);
+
+        return [newHistory, ...prev].slice(0, 15);
+      });
+
+      // Clear active signal from persistent storage once closed
+      storageService.saveActiveSignal(null, activeSignal.symbol);
+      setActiveSignal(prev => prev ? { ...prev, outcome: closedOutcome! } : null);
+    }
+  }, [candles, activeSignal, balance, riskPercent, selectedAsset]); // Executing whenever candles update (which is often via WS)
 
   // Trigger Local ML Analysis
   const handleAnalyze = useCallback(async () => {
@@ -1615,29 +1580,67 @@ function App() {
               <div className="relative">
                 <button
                   onClick={() => setIsAssetMenuOpen(!isAssetMenuOpen)}
-                  className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 px-3 py-2 rounded-lg border border-slate-700 transition-colors"
+                  className="flex items-center gap-3 bg-slate-800 hover:bg-slate-700 px-3 py-2 rounded-lg border border-slate-700 transition-colors group"
                 >
-                  <Coins className="w-4 h-4 text-blue-400" />
-                  <span className="font-bold text-white text-sm">{selectedAsset.symbol}</span>
-                  <ChevronDown className="w-3 h-3 text-slate-400" />
+                  <div className="flex items-center gap-2">
+                      <Coins className="w-4 h-4 text-blue-400" />
+                      <span className="font-bold text-white text-sm">{selectedAsset.symbol}</span>
+                  </div>
+                  
+                  {/* LIVE PRICE INDICATOR */}
+                  {candles.length > 0 && (
+                      <div className="flex items-center gap-2 px-2 py-0.5 bg-slate-900 rounded border border-slate-700">
+                          <span className={`text-sm font-mono font-bold ${
+                              candles[candles.length - 1].close >= candles[candles.length - 2]?.close 
+                                ? 'text-emerald-400' 
+                                : 'text-rose-400'
+                          }`}>
+                              ${candles[candles.length - 1].close.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </span>
+                      </div>
+                  )}
+
+                  <ChevronDown className="w-3 h-3 text-slate-400 group-hover:text-white transition-colors" />
                 </button>
 
                 {isAssetMenuOpen && (
                   <div className="absolute top-full left-0 mt-2 w-56 bg-slate-900 border border-slate-700 rounded-lg shadow-2xl z-50 overflow-hidden max-h-[300px] overflow-y-auto">
                     <div className="p-2 text-[10px] font-bold text-slate-500 uppercase sticky top-0 bg-slate-900">Select Asset</div>
-                    {SUPPORTED_ASSETS.map(asset => (
+                    <div className="max-h-96 overflow-y-auto">
+                  {isAssetLoading ? (
+                     <div className="p-4 text-center text-slate-400">Loading Assets...</div>
+                  ) : (
+                    supportedAssets.map((asset) => (
                       <button
                         key={asset.symbol}
                         onClick={() => {
                           setSelectedAsset(asset);
                           setIsAssetMenuOpen(false);
                         }}
-                        className={`w-full text-left px-4 py-3 text-sm hover:bg-slate-800 flex justify-between items-center ${selectedAsset.symbol === asset.symbol ? 'bg-slate-800 text-blue-400' : 'text-slate-300'}`}
+                        className={`w-full px-4 py-3 flex items-center justify-between hover:bg-slate-800 transition-colors ${
+                          selectedAsset.symbol === asset.symbol ? 'bg-indigo-500/10 text-indigo-400' : 'text-slate-300'
+                        }`}
                       >
-                        <span>{asset.name}</span>
-                        <span className="font-mono text-xs opacity-50">{asset.symbol}</span>
+                        <div className="flex items-center gap-3">
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                            selectedAsset.symbol === asset.symbol ? 'bg-indigo-500/20' : 'bg-slate-800'
+                          }`}>
+                            {asset.type === 'CRYPTO' ? <Coins className="w-4 h-4" /> : <Globe className="w-4 h-4" />}
+                          </div>
+                          <div className="text-left">
+                            <div className="font-medium">{asset.symbol}</div>
+                            <div className="text-xs text-slate-500">{asset.name}</div>
+                          </div>
+                        </div>
+                        {asset.price > 0 && (
+                          <div className="text-right">
+                            <div className="font-medium">${asset.price.toLocaleString()}</div>
+                          </div>
+                        )}
                       </button>
-                    ))}
+                    ))
+                  )}
+                </div>
                   </div>
                 )}
               </div>
@@ -1887,6 +1890,47 @@ function App() {
                           <span className="text-xs font-mono text-emerald-400">{activeSignal.takeProfit}</span>
                         </div>
                       </div>
+
+                      {/* Running PnL Display */}
+                      {candles.length > 0 && (
+                        (() => {
+                            const currentPrice = candles[candles.length - 1].close;
+                            const entryPrice = activeSignal.entryPrice;
+                            const quantity = activeSignal.quantity || (activeSignal.execution?.margin ? activeSignal.execution.margin / entryPrice * (activeSignal.execution.leverage || 1) : 0);
+                            
+                            let pnl = 0;
+                            let pnlPercent = 0;
+                            
+                            if (activeSignal.type === 'BUY') {
+                                pnl = (currentPrice - entryPrice) * quantity;
+                                pnlPercent = ((currentPrice - entryPrice) / entryPrice) * 100 * (activeSignal.execution?.leverage || 1);
+                            } else {
+                                pnl = (entryPrice - currentPrice) * quantity;
+                                pnlPercent = ((entryPrice - currentPrice) / entryPrice) * 100 * (activeSignal.execution?.leverage || 1);
+                            }
+                            
+                            // If quantity is 0 or undefined (e.g. manual signal without size), just show % based on price move
+                            if (!quantity) {
+                                // Fallback for % calculation if no leverage info
+                                if (activeSignal.type === 'BUY') {
+                                    pnlPercent = ((currentPrice - entryPrice) / entryPrice) * 100;
+                                } else {
+                                    pnlPercent = ((entryPrice - currentPrice) / entryPrice) * 100;
+                                }
+                            }
+
+                            return (
+                                <div className={`flex justify-between items-center px-3 py-2 rounded-lg border ${pnl >= 0 ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-rose-500/10 border-rose-500/20'}`}>
+                                    <span className="text-[10px] font-bold text-slate-400 uppercase">Running PnL</span>
+                                    <div className="text-right">
+                                        <div className={`text-sm font-mono font-black ${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                            {pnl >= 0 ? '+' : ''}{quantity ? `$${pnl.toFixed(2)}` : (activeSignal.type === 'BUY' ? currentPrice - entryPrice : entryPrice - currentPrice).toFixed(2)}
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })()
+                      )}
 
                       <div className="grid grid-cols-2 gap-3 pt-1">
                         {binanceTradingService.isConfigured() ? (

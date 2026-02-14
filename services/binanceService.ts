@@ -11,8 +11,10 @@ const CORS_PROXIES = [
 // API Configuration with Testnet Support
 const BINANCE_PRODUCTION_API = 'https://api.binance.com/api/v3';
 const BINANCE_TESTNET_API = 'https://testnet.binance.vision/api/v3';
-const BINANCE_TESTNET_WS = 'wss://testnet.binance.vision/ws';
-const BINANCE_PRODUCTION_WS = 'wss://stream.binance.com:9443/ws';
+const BINANCE_TESTNET_WS = 'wss://stream.binance.com:443/ws'; // Try port 443 first
+const BINANCE_PRODUCTION_WS = 'ws://localhost:8000/ws/proxy'; // Local Proxy (Bypass ISP Block)
+const BINANCE_DIRECT_WS = 'wss://stream.binance.com:9443/ws'; // Backup
+const LOCAL_PROXY_API = 'http://localhost:8000/api/proxy';
 
 /**
  * Get API configuration based on testnet setting
@@ -20,10 +22,12 @@ const BINANCE_PRODUCTION_WS = 'wss://stream.binance.com:9443/ws';
 function getApiConfig(): { apiBase: string; wsBase: string } {
     try {
         const settings = localStorage.getItem('neurotrade_settings');
-        const useTestnet = settings ? JSON.parse(settings).useTestnet : false;
+        // FORCE PROXY for now to ensure connection works (Bypass Block)
+        const useTestnet = false; // settings ? JSON.parse(settings).useTestnet : false;
+        
+        console.log(`[Binance] ⚙️ API Config - Testnet: ${useTestnet} (Forced False for Proxy Support)`);
         
         if (useTestnet) {
-            console.log('[Binance] 🧪 Using TESTNET mode');
             return {
                 apiBase: BINANCE_TESTNET_API,
                 wsBase: BINANCE_TESTNET_WS
@@ -154,26 +158,19 @@ export function hasCachedData(symbol: string, interval: string): boolean {
     const cached = dataCache.get(key);
     return !!(cached && (Date.now() - cached.timestamp) < CACHE_DURATION);
 }
+
+// Force clear cache (useful when switching modes or fixing data)
+export function clearCache() {
+    console.log('[Cache] 🗑️ Clearing all market data cache...');
+    dataCache.clear();
+}
 const getBinanceWsApi = () => getApiConfig().wsBase;
 
+import { Asset } from '../types';
+
 // Symbol mapping: App format → Binance format
-const SYMBOL_MAP: Record<string, string> = {
-    'BTC/USD': 'BTCUSDT',
-    'ETH/USD': 'ETHUSDT',
-    'BNB/USD': 'BNBUSDT',
-    'SOL/USD': 'SOLUSDT',
-    'XRP/USD': 'XRPUSDT',
-    'ADA/USD': 'ADAUSDT',
-    'AVAX/USD': 'AVAXUSDT',
-    'DOGE/USD': 'DOGEUSDT',
-    'DOT/USD': 'DOTUSDT',
-    'MATIC/USD': 'MATICUSDT',
-    'LINK/USD': 'LINKUSDT',
-    'UNI/USD': 'UNIUSDT',
-    'ATOM/USD': 'ATOMUSDT',
-    'LTC/USD': 'LTCUSDT',
-    'NEAR/USD': 'NEARUSDT',
-};
+// Now dynamic, but kept for legacy support if needed
+const S_MAP: Record<string, string> = {};
 
 // Binance Kline data format
 interface BinanceKline {
@@ -198,9 +195,72 @@ interface BinanceKline {
 
 /**
  * Convert app symbol to Binance symbol
+ * e.g. BTC/USDT -> BTCUSDT
  */
 export function toBinanceSymbol(appSymbol: string): string {
-    return SYMBOL_MAP[appSymbol] || appSymbol.replace('/', '');
+    return appSymbol.replace('/', '');
+}
+
+/**
+ * Fetch Top Assets from Binance Futures via Proxy
+ * Filters for USDT-M Perpetual contracts
+ */
+export async function fetchTopAssets(): Promise<Asset[]> {
+    try {
+        console.log('[Binance] 🔄 Fetching Exchange Info & Ticker Data...');
+        
+        // 1. Get Exchange Info (to filter for TRADING status and USDT margin)
+        // Proxy: /api/proxy/exchangeInfo
+        const exchangeInfoUrl = `${LOCAL_PROXY_API}/exchangeInfo`;
+        const exchangeInfoRes = await fetchWithTimeout(exchangeInfoUrl, {}, 10000);
+        
+        if (!exchangeInfoRes.ok) throw new Error('Failed to fetch exchange info');
+        const exchangeInfo = await exchangeInfoRes.json();
+        
+        // Filter for TRADING perps with USDT quote
+        const validSymbols = new Set(
+            exchangeInfo.symbols
+                .filter((s: any) => 
+                    s.status === 'TRADING' && 
+                    s.contractType === 'PERPETUAL' && 
+                    s.quoteAsset === 'USDT'
+                )
+                .map((s: any) => s.symbol)
+        );
+
+        // 2. Get 24hr Ticker (for Volume sorting)
+        // Proxy: /api/proxy/ticker/24hr
+        const tickerUrl = `${LOCAL_PROXY_API}/ticker/24hr`;
+        const tickerRes = await fetchWithTimeout(tickerUrl, {}, 10000);
+        
+        if (!tickerRes.ok) throw new Error('Failed to fetch ticker data');
+        const tickerData = await tickerRes.json();
+        
+        // 3. Filter, Sort and Map
+        const assets: Asset[] = tickerData
+            .filter((t: any) => validSymbols.has(t.symbol))
+            .sort((a: any, b: any) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume)) // Sort by Volume (USDT)
+            .slice(0, 50) // Top 50 assets
+            .map((t: any) => ({
+                symbol: t.symbol.replace('USDT', '/USDT'), // BTCUSDT -> BTC/USDT
+                name: t.symbol.replace('USDT', ''), // Simple name derivation
+                type: 'CRYPTO',
+                price: parseFloat(t.lastPrice)
+            }));
+            
+        console.log(`[Binance] ✅ Loaded ${assets.length} top assets by volume`);
+        return assets;
+
+    } catch (error) {
+        console.error('[Binance] ❌ Failed to load dynamic assets:', error);
+        // Fallback to minimal static list if API fails
+        return [
+            { symbol: 'BTC/USDT', name: 'Bitcoin', type: 'CRYPTO', price: 0 },
+            { symbol: 'ETH/USDT', name: 'Ethereum', type: 'CRYPTO', price: 0 },
+            { symbol: 'SOL/USDT', name: 'Solana', type: 'CRYPTO', price: 0 },
+            { symbol: 'BNB/USDT', name: 'Binance Coin', type: 'CRYPTO', price: 0 },
+        ];
+    }
 }
 
 /**
@@ -259,7 +319,18 @@ export async function getHistoricalKlines(
         if (startTime) query += `&startTime=${startTime}`;
         if (endTime) query += `&endTime=${endTime}`;
 
-        const data = await fetchWithFallback('/klines', query);
+        // Create proxy-specific query for our backend
+        // Backend expects: /api/proxy/klines?symbol=BTCUSDT&interval=1m&limit=100
+        const proxyUrl = `${LOCAL_PROXY_API}/klines?${query}`;
+        
+        console.log(`[Binance] Fetching from Proxy: ${proxyUrl}`);
+        const response = await fetchWithTimeout(proxyUrl, {}, 10000);
+        
+        if (!response.ok) {
+             throw new Error(`Proxy Error: ${response.status}`);
+        }
+        
+        const data = await response.json();
         
         // Normalize data
         const candles = data.map((k: any[]) => normalizeKlineArray(k));
@@ -269,17 +340,9 @@ export async function getHistoricalKlines(
         return candles;
         
     } catch (error) {
-        console.warn(`[Binance] Failed to fetch klines, falling back to CoinGecko:`, error);
+        console.error(`[Binance] Failed to fetch klines via Proxy:`, error);
+        throw error; // Fail instead of showing stale CoinGecko data
     }
-    
-    // 2. Fallback to CoinGecko
-    console.log(`[Data] Fetching ${limit} ${interval} candles for ${symbol} via CoinGecko...`);
-    const data = await getHistoricalKlinesFromCoinGecko(symbol, interval, limit);
-    
-    // Cache the result
-    setCachedData(symbol, interval, data);
-    
-    return data;
 }
 
 /**
@@ -321,8 +384,7 @@ async function getHistoricalKlinesFromCoinGecko(
         
         // Check for rate limit
         if (response.status === 429) {
-            console.warn('[CoinGecko] ⚠️ Rate limit hit. Using simulated data...');
-            return generateSimulatedCandles(symbol, limit);
+            throw new Error('CoinGecko API Rate Limit');
         }
         
         if (!response.ok) {
@@ -333,8 +395,7 @@ async function getHistoricalKlinesFromCoinGecko(
         
         // Check if response has error (CoinGecko sometimes returns 200 with error object)
         if (data.status && data.status.error_code === 429) {
-            console.warn('[CoinGecko] ⚠️ Rate limit in response. Using simulated data...');
-            return generateSimulatedCandles(symbol, limit);
+            throw new Error('CoinGecko API Rate Limit');
         }
         
         // Convert CoinGecko format to Candle format
@@ -352,63 +413,8 @@ async function getHistoricalKlinesFromCoinGecko(
         return candles;
     } catch (error) {
         console.error(`[CoinGecko] ❌ Error fetching data:`, error);
-        console.warn('[CoinGecko] Using simulated data as fallback...');
-        return generateSimulatedCandles(symbol, limit);
+        throw error;
     }
-}
-
-/**
- * Generate simulated candle data when APIs are unavailable
- */
-function generateSimulatedCandles(symbol: string, limit: number): Candle[] {
-    console.log(`[Simulator] Generating ${limit} simulated candles for ${symbol}...`);
-    
-    // Base prices for different assets
-    const basePrices: Record<string, number> = {
-        'BTC/USD': 95000,
-        'ETH/USD': 3500,
-        'BNB/USD': 600,
-        'SOL/USD': 180,
-        'XRP/USD': 2.5,
-        'ADA/USD': 0.95,
-        'AVAX/USD': 40,
-        'DOGE/USD': 0.35,
-        'DOT/USD': 7.5,
-        'MATIC/USD': 0.85,
-        'LINK/USD': 20,
-        'UNI/USD': 12,
-        'ATOM/USD': 10,
-        'LTC/USD': 105,
-        'NEAR/USD': 6
-    };
-    
-    let basePrice = basePrices[symbol] || 100;
-    const candles: Candle[] = [];
-    const now = Date.now();
-    
-    for (let i = 0; i < limit; i++) {
-        const volatility = 0.002; // 0.2% volatility
-        const change = (Math.random() - 0.5) * 2 * volatility;
-        
-        const open = basePrice;
-        const close = basePrice * (1 + change);
-        const high = Math.max(open, close) * (1 + Math.random() * volatility);
-        const low = Math.min(open, close) * (1 - Math.random() * volatility);
-        
-        candles.push({
-            time: String(now - (limit - i) * 60000), // 1 minute intervals
-            open,
-            high,
-            low,
-            close,
-            volume: Math.random() * 1000000
-        });
-        
-        basePrice = close; // Next candle starts where this one ended
-    }
-    
-    console.log(`[Simulator] ✅ Generated ${candles.length} simulated candles`);
-    return candles;
 }
 
 /**
@@ -423,11 +429,15 @@ export function connectKlineStream(
     interval: string = '1m',
     onUpdate: (candle: Candle, isClosed: boolean) => void
 ): WebSocket {
+    // Futures streams must be lowercase
     const binanceSymbol = toBinanceSymbol(symbol).toLowerCase();
     const stream = `${binanceSymbol}@kline_${interval}`;
-    const url = `${getBinanceWsApi()}/${stream}`;
+    
+    // Use proxy base URL
+    const wsBase = getBinanceWsApi();
+    const url = `${wsBase}/${stream}`;
 
-    console.log(`[Binance WS] Connecting to ${stream}...`);
+    console.log(`[Binance WS] Connecting to ${url}...`);
     const ws = new WebSocket(url);
 
     ws.onopen = () => {
@@ -437,14 +447,19 @@ export function connectKlineStream(
     ws.onmessage = (event) => {
         try {
             const data = JSON.parse(event.data);
-            const kline: BinanceKline = data.k;
-            const candle = normalizeKlineWS(kline);
-            const isClosed = kline.x; // Is kline closed?
+            // console.log('[Binance WS Debug]', data); // Uncomment for verbose debug
+            
+            // Check if it's a kline event
+            if (data.e && data.e === 'kline') {
+                const kline: BinanceKline = data.k;
+                const candle = normalizeKlineWS(kline);
+                const isClosed = kline.x;
 
-            onUpdate(candle, isClosed);
+                onUpdate(candle, isClosed);
 
-            if (isClosed) {
-                console.log(`[Binance WS] 🕯️ New ${interval} candle closed for ${symbol}: ${candle.close}`);
+                if (isClosed) {
+                    console.log(`[Binance WS] 🕯️ New ${interval} candle closed for ${symbol}: ${candle.close}`);
+                }
             }
         } catch (error) {
             console.error('[Binance WS] Error parsing message:', error);
@@ -481,15 +496,24 @@ export async function getCurrentPrice(symbol: string): Promise<number> {
  * Check if symbol is supported by Binance
  */
 export function isBinanceSupported(symbol: string): boolean {
-    return symbol in SYMBOL_MAP;
+    // Since we are dynamic, we assume any symbol passed from the UI (which comes from our dynamic list) is supported
+    // Could add regex check for /USDT suffix
+    return symbol.endsWith('/USDT') || symbol.endsWith('USDT');
 }
 // --- Order Book Data ---
+// Note: We are using direct connection for OrderBook for now, 
+// but it should also use proxy if moving to production in blocked region.
 export const getOrderBook = async (symbol: string, limit: number = 10) => {
     const binanceSymbol = toBinanceSymbol(symbol);
     
     try {
-        // Fetch order book with the requested limit (keep it low to avoid API weights)
-        const data = await fetchWithFallback('/depth', `symbol=${binanceSymbol}&limit=${limit}`);
+        // Fetch order book via Backend Proxy (to ensure Futures data)
+        // Proxy: /api/proxy/depth?symbol=BTCUSDT&limit=10
+        const proxyUrl = `${LOCAL_PROXY_API}/depth?symbol=${binanceSymbol}&limit=${limit}`;
+        const response = await fetchWithTimeout(proxyUrl, {}, 5000);
+        
+        if (!response.ok) throw new Error('Failed to fetch order book');
+        const data = await response.json();
         
         // Filter bids and asks where quantity > 1
         // Structure is [price, quantity]

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
@@ -119,3 +119,82 @@ def train_model(symbol: str = "BTC-USD", epochs: int = 20):
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+
+# --- Tier 0.5: Binance Proxy (Bypass Blokir) ---
+import aiohttp
+import websockets
+from fastapi import WebSocket, WebSocketDisconnect
+import asyncio
+import json
+
+BINANCE_WS_BASE = "wss://fstream.binance.com/ws"
+BINANCE_API_BASE = "https://fapi.binance.com/fapi/v1"
+
+@app.websocket("/ws/proxy/{stream}")
+async def websocket_proxy(websocket: WebSocket, stream: str):
+    """
+    WebSocket Proxy to bypass ISP blocking.
+    Connects to Binance WS -> Forwards to Frontend
+    """
+    await websocket.accept()
+    print(f"[Proxy] Client connected for stream: {stream}")
+    
+    binance_ws_url = f"{BINANCE_WS_BASE}/{stream}"
+    print(f"[Proxy] 🔄 Attempting to connect upstream to: {binance_ws_url}")
+    
+    try:
+        async with websockets.connect(binance_ws_url) as binance_ws:
+            print(f"[Proxy] ✅ Connected to Binance Upstream: {binance_ws_url}")
+            
+            async def forward_to_client():
+                try:
+                    async for message in binance_ws:
+                        await websocket.send_text(message)
+                except Exception as e:
+                    print(f"[Proxy] Error reading from Binance: {e}")
+
+            async def forward_to_binance():
+                try:
+                    while True:
+                        data = await websocket.receive_text()
+                        await binance_ws.send(data)
+                except WebSocketDisconnect:
+                    print("[Proxy] Client disconnected")
+                except Exception as e:
+                    print(f"[Proxy] Error reading from Client: {e}")
+
+            # Run both tasks concurrently
+            await asyncio.gather(forward_to_client(), forward_to_binance())
+            
+    except Exception as e:
+        import traceback
+        error_msg = f"Connection error: {str(e)}"
+        print(f"[Proxy] ❌ {error_msg}")
+        traceback.print_exc()
+        try:
+            await websocket.close(code=1011, reason=error_msg[:100])
+        except:
+            pass
+
+@app.get("/api/proxy/{path:path}")
+async def proxy_get_request(path: str, request: Request):
+    """
+    Generic GET Proxy for Binance Futures API
+    Example: /api/proxy/exchangeInfo -> https://fapi.binance.com/fapi/v1/exchangeInfo
+    """
+    url = f"{BINANCE_API_BASE}/{path}"
+    # Forward query parameters
+    params = dict(request.query_params)
+    
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(url, params=params) as resp:
+                if resp.status == 200:
+                    return await resp.json()
+                else:
+                    error_text = await resp.text()
+                    print(f"[Proxy] Error {resp.status}: {error_text}")
+                    raise HTTPException(status_code=resp.status, detail=f"Binance API Error: {error_text}")
+        except Exception as e:
+            print(f"[Proxy] Exception: {e}")
+            raise HTTPException(status_code=500, detail=str(e))

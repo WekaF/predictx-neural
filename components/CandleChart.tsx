@@ -16,6 +16,16 @@ type OscillatorType = 'VOL' | 'RSI' | 'MACD' | 'KDJ';
 
 const ModernCandleChart: React.FC<CandleChartProps> = ({ data, pendingSignal, activeTrade, trades = [], fibLevels }) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  // --- ZOOM & PAN STATE ---
+  const [viewState, setViewState] = useState({ 
+      start: 0, 
+      count: 100, // Default zoom level (100 candles visible)
+      yOffset: 0 // New: Vertical Panning Offset
+  });
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState<{x: number, y: number, start: number, yOffset: number} | null>(null);
+
+  // Interaction State
   const [hoveredCandle, setHoveredCandle] = useState<Candle | null>(null);
   const [cursorPos, setCursorPos] = useState<{x: number, y: number} | null>(null);
   
@@ -23,14 +33,27 @@ const ModernCandleChart: React.FC<CandleChartProps> = ({ data, pendingSignal, ac
   const [activeOverlay, setActiveOverlay] = useState<OverlayType>('MA');
   const [activeOscillator, setActiveOscillator] = useState<OscillatorType>('VOL');
 
-  // --- CALCULATIONS ---
-  const prices = useMemo(() => data.map(c => c.close), [data]);
-  
-  const indicators = useMemo(() => {
-    if (data.length === 0) return {
-        ma7: [], ma25: [], ma99: [], ema7: [], ema25: [], boll: { upper: [], middle: [], lower: [] }, rsi: [], macd: { macd: [], signal: [], histogram: [] }, kdj: { k: [], d: [], j: [] }
-    };
+  // Initialize view when data loads (Keep yOffset 0 on initial load only)
+  useEffect(() => {
+    if (data.length > 0) {
+        setViewState(prev => ({
+            ...prev,
+            start: Math.max(0, data.length - prev.count)
+        }));
+    }
+  }, [data.length]);
 
+  // Derived Visible Data
+  const visibleData = useMemo(() => {
+      if (data.length === 0) return [];
+      const end = Math.min(data.length, viewState.start + viewState.count);
+      return data.slice(viewState.start, end);
+  }, [data, viewState.start, viewState.count]);
+
+  // ... (Full Indicators Calculation - No Change) ...
+  const fullIndicators = useMemo(() => {
+    if (data.length === 0) return null;
+    const prices = data.map(c => c.close);
     return {
       ma7: calculateSeriesSMA(prices, 7),
       ma25: calculateSeriesSMA(prices, 25),
@@ -42,23 +65,69 @@ const ModernCandleChart: React.FC<CandleChartProps> = ({ data, pendingSignal, ac
       macd: calculateSeriesMACD(prices, 12, 26, 9),
       kdj: calculateSeriesKDJ(data, 9, 3, 3)
     };
-  }, [prices, data]);
+  }, [data]);
+
+
+  const indicators = useMemo(() => {
+      if (!fullIndicators) return {
+         ma7: [], ma25: [], ma99: [], ema7: [], ema25: [], boll: { upper: [], middle: [], lower: [] }, rsi: [], macd: { macd: [], signal: [], histogram: [] }, kdj: { k: [], d: [], j: [] }
+      };
+
+      const sliceInd = (arr: (number | null)[]) => arr.slice(viewState.start, viewState.start + viewState.count);
+      
+      return {
+          ma7: sliceInd(fullIndicators.ma7),
+          ma25: sliceInd(fullIndicators.ma25),
+          ma99: sliceInd(fullIndicators.ma99),
+          ema7: sliceInd(fullIndicators.ema7),
+          ema25: sliceInd(fullIndicators.ema25),
+          boll: {
+              upper: sliceInd(fullIndicators.boll.upper),
+              middle: sliceInd(fullIndicators.boll.middle),
+              lower: sliceInd(fullIndicators.boll.lower)
+          },
+          rsi: sliceInd(fullIndicators.rsi),
+          macd: {
+              macd: sliceInd(fullIndicators.macd.macd),
+              signal: sliceInd(fullIndicators.macd.signal),
+              histogram: sliceInd(fullIndicators.macd.histogram)
+          },
+          kdj: {
+              k: sliceInd(fullIndicators.kdj.k),
+              d: sliceInd(fullIndicators.kdj.d),
+              j: sliceInd(fullIndicators.kdj.j)
+          }
+      };
+  }, [fullIndicators, viewState.start, viewState.count]);
+
 
   if (data.length === 0) return <div className="h-64 flex items-center justify-center text-slate-500">Loading Market Data...</div>;
 
-  const maxPrice = Math.max(...data.map(c => c.high));
-  const minPrice = Math.min(...data.map(c => c.low));
-  const maxVolume = Math.max(...data.map(c => c.volume));
-  const priceRange = maxPrice - minPrice;
-  const padding = priceRange * 0.1;
+  const maxPrice = Math.max(...visibleData.map(c => c.high));
+  const minPrice = Math.min(...visibleData.map(c => c.low));
+  const maxVolume = Math.max(...visibleData.map(c => c.volume));
+  
+  // Calculate Price Range with UNRESTRICTED Y Offset
+  // This allows viewing prices far above/below the current candles (like TradingView)
+  const rawPriceRange = maxPrice - minPrice;
+  
+  // Use a generous base padding (50% of range) to give room for viewing above/below
+  const basePadding = rawPriceRange * 0.5; 
+  
+  // Apply yOffset directly to shift the visible window
+  // Positive yOffset = View shifts UP (see higher prices)
+  // Negative yOffset = View shifts DOWN (see lower prices)
+  const effectiveMin = (minPrice - basePadding) + viewState.yOffset;
+  const effectiveMax = (maxPrice + basePadding) + viewState.yOffset;
+  const effectiveRange = effectiveMax - effectiveMin;
 
   // Chart dimensions in percentage (SVG viewbox 0-100)
-  const CHART_HEIGHT = 75; // Reduced to give space for oscillator
-  const OSCILLATOR_HEIGHT = 20; // Bottom panel
+  const CHART_HEIGHT = 75; 
+  const OSCILLATOR_HEIGHT = 20;
   const OSCILLATOR_TOP = 80;
 
   const getY = (price: number) => {
-    return CHART_HEIGHT - ((price - (minPrice - padding)) / (priceRange + padding * 2)) * CHART_HEIGHT;
+    return CHART_HEIGHT - ((price - effectiveMin) / effectiveRange) * CHART_HEIGHT;
   };
 
   // Oscillator Scale Helper
@@ -68,30 +137,130 @@ const ModernCandleChart: React.FC<CandleChartProps> = ({ data, pendingSignal, ac
       return OSCILLATOR_TOP + OSCILLATOR_HEIGHT - ((val - min) / range) * OSCILLATOR_HEIGHT;
   };
 
+  // INTERACTION HANDLERS
+  const handleWheel = (e: React.WheelEvent) => {
+      // Support both mouse wheel AND trackpad pinch-to-zoom (MacBook)
+      // On Mac trackpad, pinch gesture sets e.ctrlKey = true
+      if (Math.abs(e.deltaY) < 1) return;
+
+      // Prevent page scroll when zooming
+      e.preventDefault();
+
+      const zoomSpeed = 0.05;
+      const delta = Math.sign(e.deltaY);
+      let change = Math.floor(viewState.count * zoomSpeed);
+      if (change === 0) change = 1;
+      change *= delta;
+
+      let newCount = Math.min(Math.max(10, viewState.count + change), 1000);
+      let newStart = viewState.start + (viewState.count - newCount);
+      
+      if (newStart < 0) newStart = 0;
+      const maxStart = Math.max(0, data.length - newCount);
+      if (newStart > maxStart) newStart = maxStart;
+      
+      setViewState(prev => ({ ...prev, start: newStart, count: newCount }));
+  };
+
+  // Zoom helper function for buttons
+  const handleZoom = (direction: 'in' | 'out') => {
+      const zoomSpeed = 0.2; // 20% change per click
+      const delta = direction === 'out' ? 1 : -1;
+      let change = Math.floor(viewState.count * zoomSpeed);
+      if (change === 0) change = 1;
+      change *= delta;
+
+      let newCount = Math.min(Math.max(10, viewState.count + change), 1000);
+      let newStart = viewState.start + (viewState.count - newCount);
+      
+      if (newStart < 0) newStart = 0;
+      const maxStart = Math.max(0, data.length - newCount);
+      if (newStart > maxStart) newStart = maxStart;
+      
+      setViewState(prev => ({ ...prev, start: newStart, count: newCount }));
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+      setIsDragging(true);
+      setDragStart({ 
+          x: e.clientX, 
+          y: e.clientY, 
+          start: viewState.start,
+          yOffset: viewState.yOffset
+      });
+  };
+
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (!containerRef.current) return;
-    const rect = containerRef.current.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    
-    // Calculate index from x
-    const candleWidth = rect.width / data.length;
-    const index = Math.floor(x / candleWidth);
-    
-    if (index >= 0 && index < data.length) {
-      setHoveredCandle(data[index]);
-    }
-    setCursorPos({ x, y });
+      if (!containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      // PANNING
+      if (isDragging && dragStart) {
+          // Horizontal Pan (Time)
+          const deltaX = e.clientX - dragStart.x;
+          const pixelPerCandle = rect.width / viewState.count;
+          const candlesMoved = Math.round(deltaX / pixelPerCandle);
+          
+          let newStart = dragStart.start - candlesMoved;
+          newStart = Math.max(0, Math.min(newStart, data.length - viewState.count));
+          
+          // Vertical Pan (Price) - UNRESTRICTED
+          const deltaY = e.clientY - dragStart.y;
+          // Scale pixel delta to price delta
+          const pricePerPixel = effectiveRange / (rect.height * 0.75);
+          // Apply 1.5x multiplier for more responsive vertical scrolling
+          const priceChange = deltaY * pricePerPixel * 1.5;
+          
+          // Dragging DOWN (+deltaY) moves the chart DOWN visually
+          // This means we see HIGHER prices at the top
+          // So positive deltaY -> positive priceChange -> increase yOffset
+          const newYOffset = dragStart.yOffset + priceChange;
+
+          setViewState(prev => ({ 
+              ...prev, 
+              start: newStart,
+              yOffset: newYOffset 
+          }));
+          return; 
+      }
+      
+      // HOVER
+      const candleWidth = rect.width / visibleData.length;
+      const index = Math.floor(x / candleWidth);
+      
+      if (index >= 0 && index < visibleData.length) {
+        setHoveredCandle(visibleData[index]);
+      }
+      setCursorPos({ x, y });
+  };
+
+
+  const handleMouseUp = () => {
+      setIsDragging(false);
+      setDragStart(null);
   };
 
   const handleMouseLeave = () => {
+    if (isDragging) {
+       setIsDragging(false);
+       setDragStart(null);
+    }
     setHoveredCandle(null);
     setCursorPos(null);
   };
 
-  // Generate Y-axis labels (Price)
+
+  // ... (Keep existing axis/drawing helpers but map to VISIBLE DATA dimensions) ...
+
+
+  // ... (Keep existing axis/drawing helpers but map to VISIBLE DATA dimensions) ...
+
+
+  // Generate Y-axis labels (Price) - Use EFFECTIVE range to show correct prices when scrolled
   const yLabels = Array.from({ length: 6 }, (_, i) => {
-    const price = minPrice + (priceRange * (i / 5));
+    const price = effectiveMin + (effectiveRange * (i / 5));
     return { y: getY(price), price };
   });
 
@@ -112,14 +281,22 @@ const ModernCandleChart: React.FC<CandleChartProps> = ({ data, pendingSignal, ac
 
   return (
     <div 
-      className="relative w-full h-full min-h-[300px] bg-slate-950 border border-slate-800 rounded-lg overflow-hidden select-none cursor-crosshair group" 
+      className={`relative w-full h-full min-h-[300px] bg-slate-950 border border-slate-800 rounded-lg overflow-hidden select-none group ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
       ref={containerRef}
+      onWheel={handleWheel}
+      onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseLeave}
     >
       
       {/* TOOLBAR */}
       <div className="absolute top-2 left-2 z-30 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+          {/* Zoom Controls */}
+          <div className="flex gap-1 bg-slate-900/80 p-1 rounded backdrop-blur">
+             <button onClick={() => handleZoom('in')} className="text-[9px] px-1.5 py-0.5 rounded font-bold text-slate-400 hover:text-white hover:bg-slate-700" title="Zoom In">+</button>
+             <button onClick={() => handleZoom('out')} className="text-[9px] px-1.5 py-0.5 rounded font-bold text-slate-400 hover:text-white hover:bg-slate-700" title="Zoom Out">−</button>
+          </div>
           {/* Overlays */}
           <div className="flex gap-1 bg-slate-900/80 p-1 rounded backdrop-blur">
              <button onClick={() => setActiveOverlay(activeOverlay === 'MA' ? 'NONE' : 'MA')} className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${activeOverlay === 'MA' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}>MA</button>
@@ -136,14 +313,14 @@ const ModernCandleChart: React.FC<CandleChartProps> = ({ data, pendingSignal, ac
       </div>
 
       {/* SVG CHART */}
-      <svg className="w-full h-full" viewBox={`0 0 ${data.length * 10} 100`} preserveAspectRatio="none">
+      <svg className="w-full h-full" viewBox={`0 0 ${visibleData.length * 10} 100`} preserveAspectRatio="none">
         
         {/* Grid Lines (Horizontal) */}
         {yLabels.map((label, i) => (
-            <line key={`grid-y-${i}`} x1="0" y1={label.y} x2={data.length * 10} y2={label.y} stroke="#334155" strokeWidth="0.1" strokeDasharray="2 2" />
+            <line key={`grid-y-${i}`} x1="0" y1={label.y} x2={visibleData.length * 10} y2={label.y} stroke="#334155" strokeWidth="0.1" strokeDasharray="2 2" />
         ))}
         {/* Oscillator Separator */}
-        <line x1="0" y1={OSCILLATOR_TOP} x2={data.length * 10} y2={OSCILLATOR_TOP} stroke="#334155" strokeWidth="0.2" />
+        <line x1="0" y1={OSCILLATOR_TOP} x2={visibleData.length * 10} y2={OSCILLATOR_TOP} stroke="#334155" strokeWidth="0.2" />
 
         {/* --- MAIN CHART OVERLAYS --- */}
         {activeOverlay === 'MA' && (
@@ -164,15 +341,13 @@ const ModernCandleChart: React.FC<CandleChartProps> = ({ data, pendingSignal, ac
                 {drawLine(indicators.boll.upper, '#60a5fa', "0.3")}
                 {drawLine(indicators.boll.middle, '#fbbf24', "0.3")}
                 {drawLine(indicators.boll.lower, '#60a5fa', "0.3")}
-                {/* Fill Area - simple implementation */}
-                {/* Note: SVG fill requires a closed path, handling that elegantly for arrays with nulls is complex in one go, lines are sufficient for now */}
             </>
         )}
 
         {/* --- OSCILLATORS --- */}
         
         {/* VOLUME */}
-        {activeOscillator === 'VOL' && data.map((candle, i) => {
+        {activeOscillator === 'VOL' && visibleData.map((candle, i) => {
             const x = i * 10;
             const height = (candle.volume / maxVolume) * OSCILLATOR_HEIGHT;
             const y = 100 - height;
@@ -186,9 +361,9 @@ const ModernCandleChart: React.FC<CandleChartProps> = ({ data, pendingSignal, ac
         {activeOscillator === 'RSI' && (
             <>
                 {/* RSI Zones */}
-                <rect x="0" y={getOscillatorY(70, 0, 100)} width={data.length * 10} height={getOscillatorY(30, 0, 100) - getOscillatorY(70, 0, 100)} fill="#8b5cf6" opacity="0.1" />
-                <line x1="0" y1={getOscillatorY(70, 0, 100)} x2={data.length * 10} y2={getOscillatorY(70, 0, 100)} stroke="#8b5cf6" strokeWidth="0.1" strokeDasharray="2 2" />
-                <line x1="0" y1={getOscillatorY(30, 0, 100)} x2={data.length * 10} y2={getOscillatorY(30, 0, 100)} stroke="#8b5cf6" strokeWidth="0.1" strokeDasharray="2 2" />
+                <rect x="0" y={getOscillatorY(70, 0, 100)} width={visibleData.length * 10} height={getOscillatorY(30, 0, 100) - getOscillatorY(70, 0, 100)} fill="#8b5cf6" opacity="0.1" />
+                <line x1="0" y1={getOscillatorY(70, 0, 100)} x2={visibleData.length * 10} y2={getOscillatorY(70, 0, 100)} stroke="#8b5cf6" strokeWidth="0.1" strokeDasharray="2 2" />
+                <line x1="0" y1={getOscillatorY(30, 0, 100)} x2={visibleData.length * 10} y2={getOscillatorY(30, 0, 100)} stroke="#8b5cf6" strokeWidth="0.1" strokeDasharray="2 2" />
                 
                 {drawLine(indicators.rsi, '#c084fc', "0.4", (v) => getOscillatorY(v, 0, 100))}
             </>
@@ -198,7 +373,7 @@ const ModernCandleChart: React.FC<CandleChartProps> = ({ data, pendingSignal, ac
         {activeOscillator === 'MACD' && (
             <>
                 {/* Zero Line */}
-                <line x1="0" y1={getOscillatorY(0, -500, 500)} x2={data.length * 10} y2={getOscillatorY(0, -500, 500)} stroke="#475569" strokeWidth="0.1" />
+                <line x1="0" y1={getOscillatorY(0, -500, 500)} x2={visibleData.length * 10} y2={getOscillatorY(0, -500, 500)} stroke="#475569" strokeWidth="0.1" />
                 
                 {/* Since MACD scales vary wildly, we find local min/max of MACD+Signal+Hist */}
                 {(() => {
@@ -250,13 +425,13 @@ const ModernCandleChart: React.FC<CandleChartProps> = ({ data, pendingSignal, ac
            return (
              <g key={level}>
                <line 
-                  x1="0" y1={y} x2={data.length * 10} y2={y} 
+                  x1="0" y1={y} x2={visibleData.length * 10} y2={y} 
                   stroke={isGolden ? '#fbbf24' : '#64748b'} 
                   strokeWidth={isGolden ? 0.3 : 0.1} 
                   strokeDasharray="2 2" 
                   opacity="0.5"
                />
-               <text x={(data.length * 10) - 2} y={y - 1} textAnchor="end" fontSize="2.5" fill={isGolden ? '#fbbf24' : '#64748b'}>
+               <text x={(visibleData.length * 10) - 2} y={y - 1} textAnchor="end" fontSize="2.5" fill={isGolden ? '#fbbf24' : '#64748b'}>
                   {level.replace('level', '')}
                </text>
              </g>
@@ -264,7 +439,7 @@ const ModernCandleChart: React.FC<CandleChartProps> = ({ data, pendingSignal, ac
         })}
 
         {/* Candles */}
-        {data.map((candle, i) => {
+        {visibleData.map((candle, i) => {
           const x = i * 10;
           const w = 6;
           const yHigh = getY(candle.high);
@@ -285,18 +460,18 @@ const ModernCandleChart: React.FC<CandleChartProps> = ({ data, pendingSignal, ac
         {/* Pending Signal */}
         {pendingSignal && (
             <g>
-                <line x1="0" y1={getY(pendingSignal.entryPrice)} x2={data.length * 10} y2={getY(pendingSignal.entryPrice)} stroke="#3b82f6" strokeWidth="0.4" strokeDasharray="4 4" />
-                <line x1="0" y1={getY(pendingSignal.stopLoss)} x2={data.length * 10} y2={getY(pendingSignal.stopLoss)} stroke="#ef4444" strokeWidth="0.4" strokeDasharray="4 4" />
-                <line x1="0" y1={getY(pendingSignal.takeProfit)} x2={data.length * 10} y2={getY(pendingSignal.takeProfit)} stroke="#10b981" strokeWidth="0.4" strokeDasharray="4 4" />
+                <line x1="0" y1={getY(pendingSignal.entryPrice)} x2={visibleData.length * 10} y2={getY(pendingSignal.entryPrice)} stroke="#3b82f6" strokeWidth="0.4" strokeDasharray="4 4" />
+                <line x1="0" y1={getY(pendingSignal.stopLoss)} x2={visibleData.length * 10} y2={getY(pendingSignal.stopLoss)} stroke="#ef4444" strokeWidth="0.4" strokeDasharray="4 4" />
+                <line x1="0" y1={getY(pendingSignal.takeProfit)} x2={visibleData.length * 10} y2={getY(pendingSignal.takeProfit)} stroke="#10b981" strokeWidth="0.4" strokeDasharray="4 4" />
             </g>
         )}
 
         {/* Active Trade */}
         {activeTrade && activeTrade.outcome === 'PENDING' && (
             <g>
-                <line x1="0" y1={getY(activeTrade.entryPrice)} x2={data.length * 10} y2={getY(activeTrade.entryPrice)} stroke="#3b82f6" strokeWidth="0.5" />
-                <line x1="0" y1={getY(activeTrade.stopLoss)} x2={data.length * 10} y2={getY(activeTrade.stopLoss)} stroke="#ef4444" strokeWidth="0.5" />
-                <line x1="0" y1={getY(activeTrade.takeProfit)} x2={data.length * 10} y2={getY(activeTrade.takeProfit)} stroke="#10b981" strokeWidth="0.5" />
+                <line x1="0" y1={getY(activeTrade.entryPrice)} x2={visibleData.length * 10} y2={getY(activeTrade.entryPrice)} stroke="#3b82f6" strokeWidth="0.5" />
+                <line x1="0" y1={getY(activeTrade.stopLoss)} x2={visibleData.length * 10} y2={getY(activeTrade.stopLoss)} stroke="#ef4444" strokeWidth="0.5" />
+                <line x1="0" y1={getY(activeTrade.takeProfit)} x2={visibleData.length * 10} y2={getY(activeTrade.takeProfit)} stroke="#10b981" strokeWidth="0.5" />
             </g>
         )}
       </svg>
@@ -317,7 +492,7 @@ const ModernCandleChart: React.FC<CandleChartProps> = ({ data, pendingSignal, ac
           {xLabels.map((lbl, i) => {
               const date = new Date(Number(lbl.time));
               return (
-                 <span key={i} className="absolute bottom-1 transform -translate-x-1/2 whitespace-nowrap" style={{ left: `${(data.indexOf(data.find(c => c.time === lbl.time)!) / data.length) * 100}%` }}>
+                 <span key={i} className="absolute bottom-1 transform -translate-x-1/2 whitespace-nowrap" style={{ left: `${(visibleData.indexOf(visibleData.find(c => c.time === lbl.time)!) / visibleData.length) * 100}%` }}>
                      {date.getHours()}:{String(date.getMinutes()).padStart(2, '0')}
                  </span>
               );
@@ -350,13 +525,13 @@ const ModernCandleChart: React.FC<CandleChartProps> = ({ data, pendingSignal, ac
                     {/* Active Indicators in Tooltip */}
                     {activeOverlay === 'MA' && hoveredCandle && (
                         <>
-                           <span className="text-amber-400">MA7:</span> <span>{indicators.ma7[data.indexOf(hoveredCandle)]?.toFixed(2) || '-'}</span>
-                           <span className="text-purple-400">MA25:</span> <span>{indicators.ma25[data.indexOf(hoveredCandle)]?.toFixed(2) || '-'}</span>
-                           <span className="text-cyan-400">MA99:</span> <span>{indicators.ma99[data.indexOf(hoveredCandle)]?.toFixed(2) || '-'}</span>
+                           <span className="text-amber-400">MA7:</span> <span>{indicators.ma7[visibleData.indexOf(hoveredCandle)]?.toFixed(2) || '-'}</span>
+                           <span className="text-purple-400">MA25:</span> <span>{indicators.ma25[visibleData.indexOf(hoveredCandle)]?.toFixed(2) || '-'}</span>
+                           <span className="text-cyan-400">MA99:</span> <span>{indicators.ma99[visibleData.indexOf(hoveredCandle)]?.toFixed(2) || '-'}</span>
                         </>
                     )}
                     {activeOscillator === 'RSI' && hoveredCandle && (
-                        <><span className="text-purple-400">RSI:</span> <span>{indicators.rsi[data.indexOf(hoveredCandle)]?.toFixed(1) || '-'}</span></>
+                        <><span className="text-purple-400">RSI:</span> <span>{indicators.rsi[visibleData.indexOf(hoveredCandle)]?.toFixed(1) || '-'}</span></>
                     )}
                 </div>
             </div>

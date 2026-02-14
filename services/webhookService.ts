@@ -291,12 +291,12 @@ export const testWebhook = async (
     } else if (eventType === 'TAKE_PROFIT') {
         mockData = {
             event: 'TAKE_PROFIT',
-            asset: 'BTC/USD',
+            asset: 'BTC/USDT',
             timestamp,
-            message: '💰 *TEST TAKE PROFIT*\n\n*Pair:* BTC/USD\n*Type:* BUY\n*Closed At:* $52000\n*PNL:* PROFIT',
+            message: '💰 *TEST TAKE PROFIT*\n\n*Pair:* BTC/USDT\n*Type:* BUY\n*Closed At:* $52000\n*PNL:* PROFIT',
             raw_data: {
                 id: 'test-id-tp',
-                symbol: 'BTC/USD',
+                symbol: 'BTC/USDT',
                 type: 'BUY',
                 entryPrice: 50000,
                 exitPrice: 52000,
@@ -310,12 +310,12 @@ export const testWebhook = async (
     } else if (eventType === 'STOP_LOSS') {
         mockData = {
             event: 'STOP_LOSS',
-            asset: 'BTC/USD',
+            asset: 'BTC/USDT',
             timestamp,
-            message: '🛑 *TEST STOP LOSS*\n\n*Pair:* BTC/USD\n*Type:* BUY\n*Closed At:* $49000\n*PNL:* LOSS',
+            message: '🛑 *TEST STOP LOSS*\n\n*Pair:* BTC/USDT\n*Type:* BUY\n*Closed At:* $49000\n*PNL:* LOSS',
             raw_data: {
                 id: 'test-id-sl',
-                symbol: 'BTC/USD',
+                symbol: 'BTC/USDT',
                 type: 'BUY',
                 entryPrice: 50000,
                 exitPrice: 49000,
