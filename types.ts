@@ -77,6 +77,13 @@ export interface TechnicalIndicators {
       d: number;
   };
   momentum: number;
+  rsiDivergence?: {
+    type: 'BULLISH' | 'BEARISH';
+    strength: number;
+    pricePoints: { index: number; value: number }[];
+    rsiPoints: { index: number; value: number }[];
+    detectedAt: number;
+  } | null;
 }
 
 export interface TrainingData {

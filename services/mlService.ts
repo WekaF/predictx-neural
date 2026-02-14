@@ -1,6 +1,6 @@
 import { Candle, TechnicalIndicators, TradeSignal, TrainingData, NewsItem } from "../types";
 import { storageService } from "./storageService";
-import { calculateBollingerBands } from "../utils/technical";
+import { calculateBollingerBands, detectRSIDivergence, calculateSeriesRSI } from "../utils/technical";
 import { generateUUID } from "../utils/uuid";
 import { confidenceCalibrator, adaptiveHyperparameters, patternDiscovery } from "./metaLearning";
 import { aiBackendService } from "./apiService";
@@ -601,7 +601,27 @@ export const analyzeMarket = async (
     // CRITICAL: This filter ensures we only trade with high confidence based on deep RL analysis
     // Calculate enhanced confidence BEFORE proceeding with signal generation
     const actionIndex = decision === 'BUY' ? 0 : decision === 'SELL' ? 1 : 2;
-    const enhancedConfidence = brain.getEnhancedConfidence(state, actionIndex);
+    let enhancedConfidence = brain.getEnhancedConfidence(state, actionIndex);
+
+    // --- RSI DIVERGENCE BOOST ---
+    // Apply confidence boost if divergence aligns with trading signal
+    if (indicators.rsiDivergence && decision !== 'HOLD') {
+        const div = indicators.rsiDivergence;
+        const divergenceBoost = (div.strength / 100) * 15; // Up to 15% boost based on strength
+        
+        if ((div.type === 'BULLISH' && decision === 'BUY') || 
+            (div.type === 'BEARISH' && decision === 'SELL')) {
+            enhancedConfidence += divergenceBoost;
+            console.log(`[RSI Divergence] ✅ ${div.type} divergence aligns with ${decision} signal. Confidence boost: +${divergenceBoost.toFixed(1)}%`);
+        } else if ((div.type === 'BULLISH' && decision === 'SELL') || 
+                   (div.type === 'BEARISH' && decision === 'BUY')) {
+            enhancedConfidence -= divergenceBoost;
+            console.log(`[RSI Divergence] ⚠️ ${div.type} divergence CONTRADICTS ${decision} signal. Confidence penalty: -${divergenceBoost.toFixed(1)}%`);
+        }
+        
+        // Ensure confidence stays within 0-100 range
+        enhancedConfidence = Math.min(Math.max(enhancedConfidence, 0), 100);
+    }
 
     const MINIMUM_ENHANCED_CONFIDENCE = 40; // Relaxed from 45% to allow more entries
 
@@ -628,6 +648,16 @@ export const analyzeMarket = async (
             reasons.push("RSI oversold (bullish signal)");
         } else if (indicators.rsi > 70) {
             reasons.push("RSI overbought (bearish signal)");
+        }
+
+        // RSI Divergence analysis
+        if (indicators.rsiDivergence) {
+            const div = indicators.rsiDivergence;
+            if (div.type === 'BULLISH') {
+                reasons.push(`Bullish RSI divergence detected (strength: ${div.strength}%)`);
+            } else {
+                reasons.push(`Bearish RSI divergence detected (strength: ${div.strength}%)`);
+            }
         }
 
         // Bollinger Bands (using nearestSupport/Resistance as proxy)
@@ -726,7 +756,13 @@ export const analyzeMarket = async (
         confidence: Math.round(enhancedConfidence), // Use enhanced confidence
         timestamp: Date.now(),
         patternDetected: `RL-DQN: ${currentPattern}`,
-        confluenceFactors: [`Strategy: ${strategy}`, `Enhanced Confidence: ${enhancedConfidence.toFixed(0)}%`, `Trend: ${indicators.trend}`, `RSI: ${indicators.rsi.toFixed(0)}`],
+        confluenceFactors: [
+            `Strategy: ${strategy}`, 
+            `Enhanced Confidence: ${enhancedConfidence.toFixed(0)}%`, 
+            `Trend: ${indicators.trend}`, 
+            `RSI: ${indicators.rsi.toFixed(0)}`,
+            ...(indicators.rsiDivergence ? [`${indicators.rsiDivergence.type} RSI Divergence (${indicators.rsiDivergence.strength}%)`] : [])
+        ],
         riskRewardRatio: rr,
         outcome: 'PENDING',
         execution: backendExecution,

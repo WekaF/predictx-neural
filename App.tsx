@@ -17,7 +17,7 @@ import { OrderBook } from './components/OrderBook';
 import { TrainingPanel } from './components/TrainingPanel';
 import { TrainingHistory } from './components/TrainingHistory';
 import { HeaderControls } from './components/HeaderControls';
-import { calculateRSI, calculateFibonacci, analyzeTrend, calculateSMA, calculateEMA, findSupportResistance, calculateMACD, calculateStochastic, calculateMomentum } from './utils/technical';
+import { calculateRSI, calculateFibonacci, analyzeTrend, calculateSMA, calculateEMA, findSupportResistance, calculateMACD, calculateStochastic, calculateMomentum, detectRSIDivergence, calculateSeriesRSI } from './utils/technical';
 import { getHistoricalKlines, getCurrentPrice } from './services/binanceService';
 import { getAccountBalances } from './services/binanceTradingService';
 import { analyzeMarket, trainModel, refreshModel, batchTrainModel, optimizeHyperparameters } from './services/mlService';
@@ -580,6 +580,25 @@ function App() {
     const stochastic = calculateStochastic(candles);
     const momentum = calculateMomentum(closes);
 
+    // Calculate RSI series for divergence detection
+    const rsiSeries = calculateSeriesRSI(closes, 14);
+    const rsiValues = rsiSeries.filter(v => v !== null) as number[];
+    
+    // Detect RSI divergence
+    const rsiDivergence = rsiValues.length >= 20 ? detectRSIDivergence(candles.slice(-rsiValues.length), rsiValues) : null;
+    
+    if (rsiDivergence) {
+      console.log(`[RSI Divergence] 🔍 ${rsiDivergence.type} divergence detected! Strength: ${rsiDivergence.strength}%`);
+      
+      // Show notification to user
+      const emoji = rsiDivergence.type === 'BULLISH' ? '📈' : '📉';
+      const color = rsiDivergence.type === 'BULLISH' ? 'success' : 'warning';
+      showNotification(
+        `${emoji} ${rsiDivergence.type} RSI Divergence detected! Strength: ${rsiDivergence.strength}%`,
+        color
+      );
+    }
+
     const newIndicators = {
       rsi: CurrentRsi,
       fibLevels: calculateFibonacci(Math.max(...highs), Math.min(...lows), trend),
@@ -599,7 +618,8 @@ function App() {
         histogram: macd.histogram
       },
       stochastic,
-      momentum
+      momentum,
+      rsiDivergence
     };
 
     setIndicators(newIndicators);
@@ -2168,9 +2188,88 @@ function App() {
                        <span className="text-[10px]">No SMC data available</span>
                     </div>
                   )}
-                </div>
+                 </div>
 
-                {/* Trading Configuration Panel */}
+                 {/* RSI Divergence Panel */}
+                 {indicators?.rsiDivergence && (
+                   <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-lg flex flex-col shrink-0 overflow-hidden relative group">
+                     <div className={`absolute top-0 right-0 w-24 h-24 rounded-full blur-2xl transition-all ${
+                       indicators.rsiDivergence.type === 'BULLISH' ? 'bg-emerald-500/10' : 'bg-rose-500/10'
+                     }`}></div>
+                     
+                     <div className="flex justify-between items-center mb-4 relative z-10">
+                       <h3 className={`text-xs font-bold flex items-center gap-2 tracking-wider ${
+                         indicators.rsiDivergence.type === 'BULLISH' ? 'text-emerald-500' : 'text-rose-500'
+                       }`}>
+                         <Activity className="w-4 h-4" /> RSI DIVERGENCE
+                       </h3>
+                       <span className="text-[10px] text-slate-500 font-mono">
+                         {new Date(indicators.rsiDivergence.detectedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                       </span>
+                     </div>
+
+                     <div className="space-y-4 relative z-10">
+                       <div className="flex items-center justify-between">
+                         <div className="flex flex-col">
+                           <span className="text-[10px] text-slate-500 font-bold uppercase">Type</span>
+                           <span className={`text-lg font-black ${
+                             indicators.rsiDivergence.type === 'BULLISH' ? 'text-emerald-400' : 'text-rose-400'
+                           }`}>
+                             {indicators.rsiDivergence.type === 'BULLISH' ? '📈 BULLISH' : '📉 BEARISH'}
+                           </span>
+                         </div>
+                         <div className="flex flex-col items-end">
+                           <span className="text-[10px] text-slate-500 font-bold uppercase">Strength</span>
+                           <span className="text-xl font-mono font-black text-white">
+                             {indicators.rsiDivergence.strength}%
+                           </span>
+                         </div>
+                       </div>
+
+                       <div className="space-y-1">
+                         <div className="h-2 w-full bg-slate-800 rounded-full overflow-hidden">
+                           <div 
+                             className={`h-full transition-all duration-700 ${
+                               indicators.rsiDivergence.type === 'BULLISH' ? 'bg-emerald-500' : 'bg-rose-500'
+                             }`}
+                             style={{ width: `${indicators.rsiDivergence.strength}%` }}
+                           ></div>
+                         </div>
+                       </div>
+
+                       <div className={`bg-slate-950/80 rounded-lg p-3 border ${
+                         indicators.rsiDivergence.type === 'BULLISH' ? 'border-emerald-500/20' : 'border-rose-500/20'
+                       }`}>
+                         <p className="text-[10px] text-slate-400 leading-relaxed">
+                           {indicators.rsiDivergence.type === 'BULLISH' 
+                             ? '🔄 Price making lower lows while RSI making higher lows. Potential reversal to upside.'
+                             : '🔄 Price making higher highs while RSI making lower highs. Potential reversal to downside.'}
+                         </p>
+                       </div>
+
+                       <div className="grid grid-cols-2 gap-2 text-[10px]">
+                         <div className="bg-slate-800/50 rounded p-2">
+                           <div className="text-slate-500 font-bold mb-1">Price Pivots</div>
+                           <div className="text-white font-mono">
+                             {indicators.rsiDivergence.pricePoints.map((p, i) => (
+                               <div key={i}>${p.value.toFixed(2)}</div>
+                             ))}
+                           </div>
+                         </div>
+                         <div className="bg-slate-800/50 rounded p-2">
+                           <div className="text-slate-500 font-bold mb-1">RSI Pivots</div>
+                           <div className="text-white font-mono">
+                             {indicators.rsiDivergence.rsiPoints.map((p, i) => (
+                               <div key={i}>{p.value.toFixed(1)}</div>
+                             ))}
+                           </div>
+                         </div>
+                       </div>
+                     </div>
+                   </div>
+                 )}
+
+                 {/* Trading Configuration Panel */}
                 <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-lg flex flex-col shrink-0">
                   <h3 className="text-xs font-bold text-slate-400 mb-4 flex items-center gap-2">
                     <Settings className="w-4 h-4 text-slate-400" />

@@ -408,3 +408,174 @@ export const calculateSeriesBollinger = (prices: number[], period: number = 20, 
 
   return { upper, middle, lower };
 };
+
+// --- RSI DIVERGENCE DETECTION ---
+
+export interface PivotPoint {
+  index: number;
+  value: number;
+  type: 'HIGH' | 'LOW';
+}
+
+export interface RSIDivergence {
+  type: 'BULLISH' | 'BEARISH';
+  strength: number; // 0-100
+  pricePoints: { index: number; value: number }[];
+  rsiPoints: { index: number; value: number }[];
+  detectedAt: number;
+}
+
+/**
+ * Find pivot points (local peaks and troughs) in a data series
+ * @param values - Array of values (prices or RSI)
+ * @param lookback - Number of candles to look left and right (default: 5)
+ * @returns Array of pivot points with their indices and values
+ */
+export const findPivotPoints = (
+  values: number[],
+  lookback: number = 5
+): PivotPoint[] => {
+  const pivots: PivotPoint[] = [];
+  
+  // Need at least lookback*2+1 values to find a pivot
+  if (values.length < lookback * 2 + 1) return pivots;
+
+  for (let i = lookback; i < values.length - lookback; i++) {
+    const current = values[i];
+    let isHigh = true;
+    let isLow = true;
+
+    // Check if current point is higher/lower than surrounding points
+    for (let j = 1; j <= lookback; j++) {
+      if (values[i - j] >= current || values[i + j] >= current) {
+        isHigh = false;
+      }
+      if (values[i - j] <= current || values[i + j] <= current) {
+        isLow = false;
+      }
+    }
+
+    if (isHigh) {
+      pivots.push({ index: i, value: current, type: 'HIGH' });
+    } else if (isLow) {
+      pivots.push({ index: i, value: current, type: 'LOW' });
+    }
+  }
+
+  return pivots;
+};
+
+/**
+ * Detect RSI divergence between price action and RSI indicator
+ * @param candles - Array of candles
+ * @param rsiValues - Array of RSI values (must match candles length)
+ * @param lookback - Lookback period for pivot detection (default: 5)
+ * @param minStrength - Minimum strength threshold (default: 40)
+ * @returns RSIDivergence object or null if no divergence detected
+ */
+export const detectRSIDivergence = (
+  candles: Candle[],
+  rsiValues: number[],
+  lookback: number = 5,
+  minStrength: number = 40
+): RSIDivergence | null => {
+  if (candles.length < 20 || rsiValues.length !== candles.length) {
+    return null;
+  }
+
+  // Extract price highs and lows
+  const highs = candles.map(c => c.high);
+  const lows = candles.map(c => c.low);
+
+  // Find pivot points
+  const priceHighPivots = findPivotPoints(highs, lookback).filter(p => p.type === 'HIGH');
+  const priceLowPivots = findPivotPoints(lows, lookback).filter(p => p.type === 'LOW');
+  const rsiHighPivots = findPivotPoints(rsiValues, lookback).filter(p => p.type === 'HIGH');
+  const rsiLowPivots = findPivotPoints(rsiValues, lookback).filter(p => p.type === 'LOW');
+
+  // Need at least 2 pivots to detect divergence
+  if (priceHighPivots.length < 2 || priceLowPivots.length < 2 ||
+      rsiHighPivots.length < 2 || rsiLowPivots.length < 2) {
+    return null;
+  }
+
+  // Check for BULLISH divergence (price lower low, RSI higher low)
+  const recentPriceLows = priceLowPivots.slice(-2);
+  const recentRsiLows = rsiLowPivots.slice(-2);
+
+  if (recentPriceLows.length === 2 && recentRsiLows.length === 2) {
+    const priceLow1 = recentPriceLows[0];
+    const priceLow2 = recentPriceLows[1];
+    const rsiLow1 = recentRsiLows[0];
+    const rsiLow2 = recentRsiLows[1];
+
+    // Check if indices are reasonably close (within 10 candles)
+    if (Math.abs(priceLow1.index - rsiLow1.index) < 10 &&
+        Math.abs(priceLow2.index - rsiLow2.index) < 10) {
+      
+      // Bullish: price making lower low, RSI making higher low
+      if (priceLow2.value < priceLow1.value && rsiLow2.value > rsiLow1.value) {
+        const priceChange = ((priceLow1.value - priceLow2.value) / priceLow1.value) * 100;
+        const rsiChange = rsiLow2.value - rsiLow1.value;
+        const strength = Math.min(100, (priceChange + rsiChange) * 2);
+
+        if (strength >= minStrength) {
+          return {
+            type: 'BULLISH',
+            strength: Math.round(strength),
+            pricePoints: [
+              { index: priceLow1.index, value: priceLow1.value },
+              { index: priceLow2.index, value: priceLow2.value }
+            ],
+            rsiPoints: [
+              { index: rsiLow1.index, value: rsiLow1.value },
+              { index: rsiLow2.index, value: rsiLow2.value }
+            ],
+            detectedAt: Date.now()
+          };
+        }
+      }
+    }
+  }
+
+  // Check for BEARISH divergence (price higher high, RSI lower high)
+  const recentPriceHighs = priceHighPivots.slice(-2);
+  const recentRsiHighs = rsiHighPivots.slice(-2);
+
+  if (recentPriceHighs.length === 2 && recentRsiHighs.length === 2) {
+    const priceHigh1 = recentPriceHighs[0];
+    const priceHigh2 = recentPriceHighs[1];
+    const rsiHigh1 = recentRsiHighs[0];
+    const rsiHigh2 = recentRsiHighs[1];
+
+    // Check if indices are reasonably close
+    if (Math.abs(priceHigh1.index - rsiHigh1.index) < 10 &&
+        Math.abs(priceHigh2.index - rsiHigh2.index) < 10) {
+      
+      // Bearish: price making higher high, RSI making lower high
+      if (priceHigh2.value > priceHigh1.value && rsiHigh2.value < rsiHigh1.value) {
+        const priceChange = ((priceHigh2.value - priceHigh1.value) / priceHigh1.value) * 100;
+        const rsiChange = rsiHigh1.value - rsiHigh2.value;
+        const strength = Math.min(100, (priceChange + rsiChange) * 2);
+
+        if (strength >= minStrength) {
+          return {
+            type: 'BEARISH',
+            strength: Math.round(strength),
+            pricePoints: [
+              { index: priceHigh1.index, value: priceHigh1.value },
+              { index: priceHigh2.index, value: priceHigh2.value }
+            ],
+            rsiPoints: [
+              { index: rsiHigh1.index, value: rsiHigh1.value },
+              { index: rsiHigh2.index, value: rsiHigh2.value }
+            ],
+            detectedAt: Date.now()
+          };
+        }
+      }
+    }
+  }
+
+  return null;
+};
