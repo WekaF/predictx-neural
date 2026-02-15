@@ -7,7 +7,7 @@
   "rewrites": [
     {
       "source": "/api/futures/:path*",
-      "destination": "https://fapi.binance.com/fapi/:path*"
+      "destination": "https://fapi.binance.com/:path*"
     },
     {
       "source": "/api/:path*",
