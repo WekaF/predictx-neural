@@ -158,6 +158,27 @@ def train_model(symbol: str = "BTC-USD", epochs: int = 20):
         raise HTTPException(status_code=400, detail=result["message"])
     return result
 
+# --- Scheduler Integration ---
+from services.scheduler import training_scheduler
+
+@app.on_event("startup")
+def startup_event():
+    # Start the scheduler when the app starts
+    training_scheduler.start()
+
+@app.get("/api/training/schedule/status")
+def get_schedule_status():
+    return training_scheduler.get_status()
+
+@app.post("/api/training/schedule")
+def set_schedule(interval_hours: int = 24):
+    return training_scheduler.schedule_training(interval_hours)
+
+@app.post("/api/training/schedule/stop")
+def stop_schedule():
+    training_scheduler.remove_training_job()
+    return {"status": "stopped"}
+
 # --- Futures-Specific Endpoints ---
 from services.funding_rate_service import funding_analyzer
 from services.market_sentiment_service import sentiment_analyzer

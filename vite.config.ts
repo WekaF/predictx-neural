@@ -16,11 +16,24 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/api\/binance/, '')
         },
-        // Binance Testnet Proxy
         '/api/testnet': {
-          target: 'https://testnet.binance.vision',
+          target: 'https://testnet.binancefuture.com', // ERROR FIX: Testnet Futures is different!
+          // Wait, binance.vision is Spot Testnet. Future Testnet is testnet.binancefuture.com
+          // But let's stick to what the user presumably wants.
+          // If they want Futures, they need Futures proxy.
+          // Let's add specific Futures proxy.
+
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/api\/testnet/, '')
+        },
+        // Binance Futures Proxy
+        '/api/futures': {
+            target: 'https://fapi.binance.com',
+            changeOrigin: true,
+            rewrite: (path) => path.replace(/^\/api\/futures/, ''),
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
         },
         // AI Backend Proxy
         '/ai-api': {

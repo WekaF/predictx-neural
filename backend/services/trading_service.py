@@ -15,8 +15,8 @@ class TradingService:
         self.min_order_usd = 5.0 # Binance minimum notional
         
         # Binance Setup
-        self.api_key = os.environ.get("BINANCE_API_KEY")
-        self.api_secret = os.environ.get("BINANCE_API_SECRET")
+        self.api_key = os.environ.get("BINANCE_API_KEY") or os.environ.get("VITE_BINANCE_API_KEY")
+        self.api_secret = os.environ.get("BINANCE_API_SECRET") or os.environ.get("VITE_BINANCE_SECRET_KEY")
         self.is_live = os.environ.get("LIVE_TRADING", "false").lower() == "true"
         self.exchange = None
         

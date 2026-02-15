@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Play, CheckCircle, AlertCircle, Loader, X } from 'lucide-react';
+import { Play, CheckCircle, AlertCircle, Loader, X, Clock } from 'lucide-react';
 
 interface ModelStatus {
   trained: boolean;
@@ -24,6 +24,8 @@ const TrainingDashboard: React.FC = () => {
   
   const [activeJobs, setActiveJobs] = useState<{ [key: string]: TrainingJob }>({});
   const [loading, setLoading] = useState(false);
+  const [autoTraining, setAutoTraining] = useState(false);
+  const [nextRun, setNextRun] = useState<string | null>(null);
 
   const API_BASE = 'http://localhost:8000/api';
 
@@ -55,6 +57,36 @@ const TrainingDashboard: React.FC = () => {
       setModelStatus(data);
     } catch (error) {
       console.error('Failed to fetch model status:', error);
+    }
+  };
+
+  const fetchScheduleStatus = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/training/schedule/status`);
+      const data = await res.json();
+      setAutoTraining(data.running);
+      if (data.next_run) {
+        setNextRun(new Date(data.next_run).toLocaleString());
+      } else {
+        setNextRun(null);
+      }
+    } catch (error) {
+      console.error('Failed to fetch schedule status:', error);
+    }
+  };
+
+  const toggleAutoTraining = async () => {
+    try {
+      if (autoTraining) {
+        await fetch(`${API_BASE}/training/schedule/stop`, { method: 'POST' });
+        setAutoTraining(false);
+        setNextRun(null);
+      } else {
+        const res = await fetch(`${API_BASE}/training/schedule?interval_hours=24`, { method: 'POST' });
+        await fetchScheduleStatus();
+      }
+    } catch (error) {
+      console.error('Failed to toggle auto training:', error);
     }
   };
 
@@ -219,9 +251,38 @@ const TrainingDashboard: React.FC = () => {
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-white mb-2">AI Training Dashboard</h1>
-        <p className="text-gray-400">Train and manage your Trinity AI models</p>
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
+        <div>
+          <h1 className="text-3xl font-bold text-white mb-2">AI Training Dashboard</h1>
+          <p className="text-gray-400">Train and manage your Trinity AI models</p>
+        </div>
+        
+        {/* Auto Training Toggle */}
+        <div className="bg-gray-800 p-4 rounded-lg border border-gray-700 flex items-center gap-4 shadow-lg">
+          <div className="flex flex-col">
+            <div className="flex items-center gap-2 text-blue-400 font-semibold">
+              <Clock className="w-5 h-5" />
+              <span>Auto Training (24h)</span>
+            </div>
+            <span className="text-xs text-gray-500 mt-1">
+              {nextRun ? `Next run: ${nextRun}` : 'Schedule inactive'}
+            </span>
+          </div>
+          
+          <button
+            onClick={toggleAutoTraining}
+            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-900 ${
+              autoTraining ? 'bg-blue-600' : 'bg-gray-600'
+            }`}
+          >
+            <span className="sr-only">Enable Auto Training</span>
+            <span
+              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                autoTraining ? 'translate-x-6' : 'translate-x-1'
+              }`}
+            />
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">

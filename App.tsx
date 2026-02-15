@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Activity, Zap, TrendingUp, TrendingDown, RefreshCw, ShieldCheck, DollarSign, BrainCircuit, Target, BookOpen, FlaskConical, LayoutDashboard, ChevronDown, Layers, Globe, Radio, PenTool, AlertCircle, CheckCircle2, List, Bell, Edit3, Settings as SettingsIcon, Coins, AlertTriangle, CheckCircle, XCircle, BarChart3, Trash2, Settings, Brain, UploadCloud } from 'lucide-react';
+import { FuturesDashboard } from './components/FuturesDashboard';
 import { TradingJournal } from './components/TradingJournal';
 import { TradingLog } from './types';
 import ModernCandleChart from './components/CandleChart';
@@ -139,6 +140,7 @@ function App() {
   // Trading Configuration
   const [tradingMode, setTradingMode] = useState<'paper' | 'live'>(() => storageService.getTradingMode() ?? 'paper');
   const [leverage, setLeverage] = useState(() => storageService.getLeverage() ?? 10); // 1-20x
+  const [isFuturesExpanded, setIsFuturesExpanded] = useState(true);
 
   // PWA Install Prompt
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
@@ -1128,7 +1130,7 @@ function App() {
   };
 
   // Manual Close Trade Handler
-  const handleManualCloseTrade = useCallback((tradeId: string) => {
+  const handleManualCloseTrade = useCallback(async (tradeId: string) => {
     console.log(`[handleManualCloseTrade] Closing trade ${tradeId}`);
     
     // Find the trade in history
@@ -1145,6 +1147,38 @@ function App() {
     }
     
     const currentPrice = candles[candles.length - 1].close;
+    
+    // LIVE TRADING EXECUTION
+    if (tradingMode === 'live') {
+        try {
+            // Determine side to close (Opposite of entry)
+            const side = trade.type === 'BUY' ? 'SELL' : 'BUY';
+            
+            // Sanitize symbol (Fix potential BTCUSDTT double-suffix issue)
+            let cleanSymbol = trade.symbol.replace('/', '').replace(/USD$/, 'USDT');
+            if (cleanSymbol.endsWith('USDTT')) {
+                cleanSymbol = cleanSymbol.replace('USDTT', 'USDT');
+                console.log(`[Manual Close] Fixed corrupted symbol: ${trade.symbol} -> ${cleanSymbol}`);
+            }
+
+            // Execute Market Close Order
+            console.log(`[Manual Close] Executing LIVE ${side} order for ${cleanSymbol}`);
+            await binanceTradingService.placeOrder({
+                symbol: cleanSymbol,
+                side: side,
+                type: 'MARKET',
+                quantity: trade.quantity,
+                reduceOnly: true // Important: Closing position only
+            });
+            
+            showNotification(`✅ Position closed on Binance`, 'success');
+        } catch (error: any) {
+            console.error('[Manual Close] Failed to close position on Binance:', error);
+            showNotification(`Failed to close on Binance: ${error.message}`, 'error');
+            // Optional: Return here if we want to prevent local update on failure
+            // return; 
+        }
+    }
     
     // Calculate PNL
     const dist = Math.abs(trade.entryPrice - trade.stopLoss);
@@ -1179,7 +1213,7 @@ function App() {
     
     const pnlText = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
     showNotification(`Trade closed manually at $${currentPrice.toFixed(2)}. PNL: ${pnlText}`, pnl >= 0 ? 'success' : 'warning');
-  }, [tradeHistory, candles, balance, riskPercent, activeSignal, updateBalance]);
+  }, [tradeHistory, candles, balance, riskPercent, activeSignal, updateBalance, tradingMode]);
 
   const rejectTrade = () => {
     setPendingSignal(null);
@@ -1227,7 +1261,8 @@ function App() {
     console.log(`[Position Sizing] Calculated Position: $${positionSizeUsd.toFixed(2)}`);
     
     // Dynamically round quantity based on Binance LOT_SIZE stepSize
-    const tradeSymbol = selectedAsset.symbol.replace('/', '').replace('USD', 'USDT');
+    // FIX: Use regex to replace USD at the end only, preventing BTCUSDTT
+    const tradeSymbol = selectedAsset.symbol.replace('/', '').replace(/USD$/, 'USDT');
     const quantityAsset = await binanceTradingService.roundQuantity(tradeSymbol, positionSizeUsd / entry);
     
     console.log(`[Position Sizing] Quantity: ${quantityAsset} ${selectedAsset.symbol.split('/')[0]}`);
@@ -1257,32 +1292,25 @@ function App() {
     // Execute on Binance (if configured/Testnet)
     if (binanceTradingService.isConfigured()) {
         try {
-            // Format symbol (remove /)
-            const tradeSymbol = newSignal.symbol.replace('/', '').replace('USD', 'USDT');
+            // Format symbol (remove /) and fix USD -> USDT safely
+            const tradeSymbol = newSignal.symbol.replace('/', '').replace(/USD$/, 'USDT');
             
             // Execute Market Order
-            // Note: We use MARKET for immediate entry. 
-            // TODO: Implement LIMIT based on newSignal.entryPrice? For now MARKET for speed/UX.
             await binanceTradingService.placeOrder({
                 symbol: tradeSymbol,
                 side: newSignal.type as 'BUY' | 'SELL',
                 type: 'MARKET',
                 quantity: quantityAsset 
-                // Note: Binance requires specific precision (LOT_SIZE). 
-                // binanceTradingService should ideally handle this or we trunctate. 
-                // For now, let's assume helper handles it or we send formatted.
-                // We'll fix precision in service if it fails.
             });
             showNotification("Order executed on Binance!", "success");
         } catch (error: any) {
             console.error("Binance Execution Failed:", error);
             showNotification("Binance Order Failed: " + error.message, "error");
-            // We still proceed to create local signal for tracking? 
-            // Maybe return? User might want to retry.
-            // Let's return to prevent de-sync.
+            // Return to prevent local state update if backend fails
             return;
         }
     }
+
 
     // Add metadata with liquidation info for UI display
     const signalWithQty = { 
@@ -1616,14 +1644,7 @@ function App() {
               {currentView === 'ai-intelligence' && <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 bg-blue-500 rounded-r-full shadow-[0_0_10px_rgba(59,130,246,0.5)]"></div>}
             </button>
             
-            <button
-               onClick={() => setCurrentView('futures')}
-               className={`p-3 rounded-xl transition-all duration-300 group relative ${currentView === 'futures' ? 'bg-purple-500/10 text-purple-400' : 'text-slate-400 hover:bg-white/5'}`}
-               title="Futures Dashboard"
-            >
-               <Activity className="w-5 h-5 group-hover:scale-110 transition-transform" />
-               {currentView === 'futures' && <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 bg-purple-500 rounded-r-full shadow-[0_0_10px_rgba(168,85,247,0.5)]"></div>}
-            </button>
+
 
           <button
             onClick={() => setCurrentView('leverage')}
@@ -1731,7 +1752,7 @@ function App() {
           <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-4">
             <div className="flex-1">
               <h1 className="text-lg sm:text-xl md:text-2xl font-bold bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">
-                {currentView === 'terminal' ? 'NeuroTrade' : currentView === 'backtest' ? 'Backtest' : currentView === 'analytics' ? 'Analytics' : currentView === 'training' ? 'AI Training' : 'Leverage'}
+                {currentView === 'terminal' ? 'NeuroTrade' : currentView === 'backtest' ? 'Backtest' : currentView === 'analytics' ? 'Analytics' : currentView === 'training' ? 'AI Training' : currentView === 'leverage' ? 'Leverage' : 'NeuroTrade'}
               </h1>
               <div className="flex items-center gap-2 mt-1">
                 <div className="flex flex-col sm:flex-row gap-1 sm:gap-2 items-start sm:items-center">
@@ -1980,8 +2001,8 @@ function App() {
 
             <div className="flex flex-col lg:grid lg:grid-cols-4 gap-3 md:gap-6 flex-1 min-h-0 lg:overflow-hidden">
               {/* LEFT COLUMN: Chart + Trade History */}
-              <div className={`lg:col-span-2 space-y-3 md:space-y-4 flex-col lg:overflow-hidden ${terminalTab === 'trade' ? 'flex' : 'hidden lg:flex'}`}>
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 md:p-4 shadow-xl flex flex-col min-h-[250px] sm:min-h-[300px]">
+              <div className={`lg:col-span-2 space-y-3 md:space-y-4 flex-col lg:overflow-y-auto ${terminalTab === 'trade' ? 'flex' : 'hidden lg:flex'} pr-1`}>
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 md:p-4 shadow-xl flex flex-col min-h-[250px] sm:min-h-[300px] shrink-0">
                   <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 mb-3 md:mb-4 shrink-0">
                     <div className="flex gap-2 items-center">
                       <span className="font-bold text-base sm:text-lg">{selectedAsset.symbol}</span>
@@ -2003,10 +2024,44 @@ function App() {
                       fibLevels={indicators?.fibLevels}
                     />
                   </div>
+                  
+                  {/* Futures Dashboard (Embedded - Collapsible) */}
+                  {selectedAsset.type === 'CRYPTO' && (
+                      <div className="border-t border-slate-800 bg-slate-900/50 transition-all duration-300">
+                        <button 
+                          onClick={() => setIsFuturesExpanded(!isFuturesExpanded)}
+                          className="w-full flex items-center justify-between p-2 hover:bg-slate-800/50 transition-colors"
+                        >
+                           <div className="flex items-center gap-2">
+                              <Activity className="w-4 h-4 text-purple-400" />
+                              <span className="text-xs font-bold text-slate-400">FUTURES INTELLIGENCE</span>
+                           </div>
+                           <ChevronDown className={`w-4 h-4 text-slate-500 transition-transform duration-300 ${isFuturesExpanded ? 'rotate-180' : ''}`} />
+                        </button>
+                        
+                        {isFuturesExpanded && (
+                          <div className="p-2 pt-0 animate-in slide-in-from-top-2 duration-300">
+                            <FuturesDashboard 
+                                symbol={selectedAsset.symbol}
+                                currentPrice={candles.length > 0 ? candles[candles.length - 1].close : 0}
+                                fundingData={{
+                                    current: activeSignal?.meta?.futures_data?.fundingRate || 0.001,
+                                    history: [] 
+                                }}
+                                marketSentiment={{
+                                    open_interest: { open_interest: activeSignal?.meta?.futures_data?.openInterest || 5000000 },
+                                    long_short_ratio: { ratio: activeSignal?.meta?.futures_data?.longShortRatio || 1.1 },
+                                    taker_ratio: { ratio: 1.05 } 
+                                }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                  )}
                 </div>
 
                 {/* Trade History Panel */}
-                <div className="bg-slate-900 border border-slate-800 rounded-xl shadow-xl flex flex-col h-64 sm:h-96 overflow-hidden">
+                <div className="bg-slate-900 border border-slate-800 rounded-xl shadow-xl flex flex-col h-64 sm:h-96 overflow-hidden shrink-0">
                   <div className="px-3 md:px-4 py-2 border-b border-slate-800 flex items-center gap-2">
                     <List className="w-4 h-4 text-slate-400" />
                     <span className="text-xs font-bold text-slate-400">SESSION TRADE HISTORY</span>

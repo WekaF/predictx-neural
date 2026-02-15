@@ -100,6 +100,10 @@ async function fetchWithProxy(url: string, options: RequestInit = {}): Promise<R
         const response = await fetch(url, options);
         if (!response.ok) {
             const text = await response.text();
+            if (response.status === 403) {
+                console.error('[Binance Proxy] 403 Forbidden. Likely Geo-block.', text);
+                throw new Error(`🚫 Access Denied (403). Binance Futures API is blocked in your region. \n\n➡️ SOLUTION: Please ENABLE A VPN (e.g., to Singapore/Japan) and try again.`);
+            }
             throw new Error(`Local Proxy Error: ${response.status} - ${text}`);
         }
         return response;
@@ -222,8 +226,22 @@ async function authenticatedRequest(
     const signature = generateSignature(queryString);
     const signedQueryString = `${queryString}&signature=${signature}`;
 
+    // Determine Base URL based on endpoint type (Spot vs Futures)
+    let baseUrl = getApiBase();
+    
+    // If endpoint starts with /fapi, usage of Futures Proxy is required
+    if (endpoint.startsWith('/fapi')) {
+        const isTestnet = getApiCredentials().apiKey.includes('test'); // Hacky check or reuse isTestnet logic
+        // Better: Check settings again or pass isTestnet param
+        // For now, let's assume if getApiBase returns /api/testnet, it stays /api/testnet (but we need to ensure testnet target is correct)
+        
+        if (baseUrl === '/api/binance') {
+            baseUrl = '/api/futures';
+        }
+    }
+
     // Make request - use dynamic API base with CORS proxy fallback
-    const baseUrl = `${getApiBase()}${endpoint}?${signedQueryString}`;
+    const url = `${baseUrl}${endpoint}?${signedQueryString}`;
     
     console.log(`[Binance Auth] ${method} ${endpoint}`);
     if (method === 'POST') console.log('[Binance Auth] Body Params:', queryParams);
@@ -293,11 +311,12 @@ export async function getAllOrders(symbol: string, limit: number = 500): Promise
 export async function placeOrder(params: {
     symbol: string;
     side: 'BUY' | 'SELL';
-    type: 'LIMIT' | 'MARKET' | 'STOP_LOSS_LIMIT';
-    quantity: number;
-    price?: number;
-    stopPrice?: number;
+    type: 'LIMIT' | 'MARKET' | 'STOP_LOSS' | 'STOP_LOSS_LIMIT' | 'TAKE_PROFIT' | 'TAKE_PROFIT_LIMIT';
+    quantity: string | number;
+    price?: string | number;
+    stopPrice?: string | number;
     timeInForce?: 'GTC' | 'IOC' | 'FOK';
+    reduceOnly?: boolean;
 }): Promise<any> {
     console.log('[Binance Auth] Placing order:', params);
     
@@ -307,6 +326,10 @@ export async function placeOrder(params: {
         type: params.type,
         quantity: params.quantity
     };
+
+    if (params.reduceOnly) {
+        orderParams.reduceOnly = 'true';
+    }
 
     if (params.type === 'LIMIT') {
         orderParams.price = params.price;
@@ -319,7 +342,7 @@ export async function placeOrder(params: {
         orderParams.timeInForce = params.timeInForce || 'GTC';
     }
 
-    const data = await authenticatedRequest('/api/v3/order', 'POST', orderParams);
+    const data = await authenticatedRequest('/fapi/v1/order', 'POST', orderParams);
     console.log('[Binance Auth] ✅ Order placed:', data.orderId);
     return data;
 }
