@@ -24,11 +24,12 @@ const symbolPrecisionCache = new Map<string, number>();
 /**
  * Get API base URL based on testnet setting and environment
  * - Development: Uses local proxy to avoid CORS
- * - Production: Uses direct Binance API (CORS handled by Binance or browser)
+ * - Production: Uses Railway backend proxy (deployed separately)
  */
 function getApiBase(): string {
     const isDev = import.meta.env.DEV;
     const isProduction = import.meta.env.PROD;
+    const railwayBackendUrl = import.meta.env.VITE_BACKEND_URL; // Set in Vercel env vars
     
     try {
         const settings = localStorage.getItem('neurotrade_settings');
@@ -36,26 +37,38 @@ function getApiBase(): string {
         
         if (useTestnet) {
             console.log('[Binance Trading] 🧪 Using TESTNET mode');
-            // In production, use direct testnet API
+            
+            // In production, use Railway backend proxy
             if (isProduction) {
-                console.log('[Binance Trading] 📡 Production: Direct Testnet API');
-                return 'https://testnet.binancefuture.com';
+                if (railwayBackendUrl) {
+                    console.log('[Binance Trading] 📡 Production: Using Railway Backend at', railwayBackendUrl);
+                    return `${railwayBackendUrl}/ai-api/proxy`;
+                } else {
+                    console.warn('[Binance Trading] ⚠️ VITE_BACKEND_URL not set! Falling back to direct API (may have CORS issues)');
+                    return 'https://testnet.binancefuture.com';
+                }
             }
-            // In development, use backend proxy
-            return LOCAL_PROXY_API;
+            
+            // In development, use local backend proxy
+            return '/ai-api/proxy';
         }
     } catch (e) {
         console.warn('[Binance Trading] Failed to read testnet setting, using production');
     }
     
-    // Production mode: Use direct Binance API
+    // Production mode: Use Railway backend for production API too
     if (isProduction) {
-        console.log('[Binance Trading] 📡 Production: Direct Binance API');
-        return 'https://fapi.binance.com'; // Futures API
+        if (railwayBackendUrl) {
+            console.log('[Binance Trading] 📡 Production: Using Railway Backend at', railwayBackendUrl);
+            return `${railwayBackendUrl}/ai-api/proxy`;
+        } else {
+            console.warn('[Binance Trading] ⚠️ VITE_BACKEND_URL not set! Falling back to direct API (may have CORS issues)');
+            return 'https://fapi.binance.com';
+        }
     }
     
-    // Development: Use Vite proxy
-    return '/api/futures';
+    // Development: Use local backend proxy
+    return '/ai-api/proxy';
 }
 
 // Load API credentials from environment (works in both browser and Node.js)
@@ -160,7 +173,14 @@ async function fetchWithProxy(url: string, options: RequestInit = {}): Promise<R
         }
     }
 
-    throw new Error('All connection attempts failed (Direct + Proxies)');
+    // Final error with helpful message
+    const isProduction = import.meta.env.PROD;
+    const errorMsg = isProduction 
+        ? '❌ Connection failed. Please enable "Paper Trading" mode in Settings, or check your network connection.'
+        : 'All connection attempts failed (Direct + Proxies). Check console for details.';
+    
+    console.error(`[Binance] ${errorMsg}`);
+    throw new Error(errorMsg);
 }
 /**
  * Format parameter value to string, specifically avoiding scientific notation for numbers
