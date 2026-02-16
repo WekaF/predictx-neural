@@ -172,6 +172,11 @@ async def start_rl_training(symbol: str = "BTC-USD", timesteps: int = 50000):
     
     return {"job_id": job_id, "message": "RL training started"}
 
+@router.get("/training/jobs")
+async def list_training_jobs():
+    """List all training jobs"""
+    return training_jobs
+
 @router.get("/training/status/{job_id}")
 async def get_training_status(job_id: str):
     """Get training job status"""

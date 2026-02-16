@@ -229,13 +229,14 @@ class AIEngine:
         train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
 
         self.lstm_model.train()
-        history = train_model(self.lstm_model, train_loader, num_epochs=epochs, progress_callback=progress_callback)
+        with torch.autograd.set_detect_anomaly(True):
+            history = train_model(self.lstm_model, train_loader, num_epochs=epochs, progress_callback=progress_callback)
         torch.save(self.lstm_model.state_dict(), self.model_path)
         self.models_loaded = True
 
         return {"status": "success", "final_loss": history['loss'][-1], "epochs": epochs}
 
-    async def predict_next_move(self, candles: list, futures_data: dict = None):
+    def predict_next_move(self, candles: list, futures_data: dict = None):
         if not self.models_loaded or len(candles) < 150:
             return 0.5
 
@@ -243,17 +244,10 @@ class AIEngine:
             df = pd.DataFrame(candles)
             
             # --- INJECT FUTURES DATA ---
-            # If provided, use it. If not, async fetch (or defaulting to 0)
+            # If provided, use it. If not, defaulting to 0/neutral
             if not futures_data:
-                # Try to fetch current data quickly
-                try:
-                    # Note: This might add latency. 
-                    # Ideally passed from main.py which calls services concurrently.
-                    symbol = "BTCUSDT" # Default/Fallback
-                    # We assume main.py handles specific symbol context
-                    pass
-                except:
-                    pass
+                # In sync, we skip fetching to avoid performance hit/async complexit
+                pass
             else:
                 df['fundingRate'] = futures_data.get('fundingRate', 0.0)
                 df['openInterest'] = futures_data.get('openInterest', 0.0)

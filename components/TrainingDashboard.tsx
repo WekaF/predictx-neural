@@ -30,8 +30,11 @@ const TrainingDashboard: React.FC = () => {
   const API_BASE = 'http://localhost:8000/api';
 
   // Fetch model status on mount
+  // Fetch model status and active jobs on mount
   useEffect(() => {
     fetchModelStatus();
+    fetchScheduleStatus();
+    fetchActiveJobs();
   }, []);
 
   // Poll active jobs
@@ -60,11 +63,25 @@ const TrainingDashboard: React.FC = () => {
     }
   };
 
+  const fetchActiveJobs = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/training/jobs`);
+      const data = await res.json();
+      // Only set if we actually have jobs to avoid wiping state if error
+      if (data && typeof data === 'object') {
+          setActiveJobs(data);
+      }
+    } catch (error) {
+      console.error('Failed to fetch active jobs:', error);
+    }
+  };
+
   const fetchScheduleStatus = async () => {
     try {
       const res = await fetch(`${API_BASE}/training/schedule/status`);
       const data = await res.json();
-      setAutoTraining(data.running);
+      // Use job_scheduled to determine if auto-training is active, not just if scheduler is running
+      setAutoTraining(data.job_scheduled);
       if (data.next_run) {
         setNextRun(new Date(data.next_run).toLocaleString());
       } else {

@@ -114,7 +114,7 @@ async def predict_trend(request: PredictionRequest):
         futures_data = None
 
     # 1. Get LSTM Prediction (Now Async & Futures Aware)
-    trend_prob = await ai_engine.predict_next_move(request.candles, futures_data)
+    trend_prob = ai_engine.predict_next_move(request.candles, futures_data)
     
     # 2. Get Agent Decision (Tier 7 - Ensemble CNN-LSTM)
     # Note: We could pass futures_data to decide_action too in future

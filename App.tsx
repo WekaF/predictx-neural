@@ -740,7 +740,7 @@ function App() {
       const completedTrade: EnhancedExecutedTrade = {
         id: activeSignal.id,
         symbol: activeSignal.symbol,
-        entryTime: new Date(activeSignal.timestamp).toLocaleTimeString(),
+        entryTime: new Date(activeSignal.timestamp).toISOString(),
         exitTime: lastCandle.time,
         type: activeSignal.type as 'BUY' | 'SELL',
         entryPrice: activeSignal.entryPrice,
@@ -1446,8 +1446,8 @@ function App() {
     const completedTrade: ExecutedTrade = {
       id: activeSignal.id,
       symbol: activeSignal.symbol,
-      entryTime: new Date(activeSignal.timestamp).toLocaleTimeString(),
-      exitTime: new Date().toLocaleTimeString(),
+      entryTime: new Date(activeSignal.timestamp).toISOString(),
+      exitTime: new Date().toISOString(),
       type: activeSignal.type as 'BUY' | 'SELL',
       entryPrice: activeSignal.entryPrice,
       exitPrice: activeSignal.entryPrice, // Manual close, approx
