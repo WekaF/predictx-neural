@@ -30,6 +30,7 @@ import { TradeAnalyticsDashboard } from './components/TradeAnalyticsDashboard';
 import TrainingDashboard from './components/TrainingDashboard';
 import { BatchTrainingPanel } from './components/BatchTrainingPanel';
 import { HyperparameterOptimizer } from './components/HyperparameterOptimizer';
+import { OpenOrders } from './components/OpenOrders';
 import { EnhancedExecutedTrade } from './types/enhanced';
 import { generateMarketNews, calculateAggregateSentiment } from './services/newsService';
 import { storageService } from './services/storageService';
@@ -82,6 +83,26 @@ function App() {
     };
     loadAssets();
   }, []);
+
+  // Auto-detect Demo Key and force Testnet
+  useEffect(() => {
+    const demoKey = "WaBJscL1raLkhUB2KcyyiTxNguObcqeWYELLeTxkXvVZbJpygUxYQuvgbl9HQEjK";
+    const configuredKey = import.meta.env.VITE_BINANCE_API_KEY_TESTNET;
+    
+    if (configuredKey === demoKey) {
+        const settings = storageService.getSettings();
+        if (!settings.useTestnet) {
+            console.log('[App] 🔧 Auto-enabling Testnet for Demo Key');
+            storageService.saveSettings({
+                ...settings,
+                useTestnet: true
+            });
+            // Force page reload to ensure all components pick up the change
+            window.location.reload();
+        }
+    }
+  }, []);
+
   const [isAssetMenuOpen, setIsAssetMenuOpen] = useState(false);
   const [selectedInterval, setSelectedInterval] = useState<string>('15m'); // Candle interval
 
@@ -2058,6 +2079,11 @@ function App() {
                         )}
                       </div>
                   )}
+                </div>
+
+                {/* Active Orders Panel */}
+                <div className="mb-4">
+                  <OpenOrders />
                 </div>
 
                 {/* Trade History Panel */}

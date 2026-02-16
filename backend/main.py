@@ -227,16 +227,25 @@ import json
 BINANCE_WS_BASE = "wss://fstream.binance.com/ws"
 BINANCE_API_BASE = "https://fapi.binance.com/fapi/v1"
 
+# Futures Testnet Endpoints
+BINANCE_WS_TESTNET = "wss://stream.binancefuture.com/ws"
+BINANCE_API_TESTNET = "https://demo-fapi.binance.com/fapi/v1"
+
 @app.websocket("/ws/proxy/{stream}")
 async def websocket_proxy(websocket: WebSocket, stream: str):
     """
-    WebSocket Proxy to bypass ISP blocking.
+    WebSocket Proxy with Testnet Support.
     Connects to Binance WS -> Forwards to Frontend
+    Pass ?testnet=true to use Futures Testnet.
     """
     await websocket.accept()
-    print(f"[Proxy] Client connected for stream: {stream}")
     
-    binance_ws_url = f"{BINANCE_WS_BASE}/{stream}"
+    is_testnet = websocket.query_params.get('testnet') == 'true'
+    ws_base = BINANCE_WS_TESTNET if is_testnet else BINANCE_WS_BASE
+    
+    print(f"[Proxy] Client connected for stream: {stream} (Testnet: {is_testnet})")
+    
+    binance_ws_url = f"{ws_base}/{stream}"
     print(f"[Proxy] 🔄 Attempting to connect upstream to: {binance_ws_url}")
     
     try:
@@ -277,11 +286,17 @@ async def websocket_proxy(websocket: WebSocket, stream: str):
 async def proxy_get_request(path: str, request: Request):
     """
     Generic GET Proxy for Binance Futures API
-    Example: /api/proxy/exchangeInfo -> https://fapi.binance.com/fapi/v1/exchangeInfo
+    Pass ?testnet=true to use Futures Testnet.
     """
-    url = f"{BINANCE_API_BASE}/{path}"
-    # Forward query parameters
+    is_testnet = request.query_params.get('testnet') == 'true'
+    base_url = BINANCE_API_TESTNET if is_testnet else BINANCE_API_BASE
+    
+    url = f"{base_url}/{path}"
+    
+    # Forward query parameters (remove testnet flag)
     params = dict(request.query_params)
+    if 'testnet' in params:
+        del params['testnet']
     
     async with aiohttp.ClientSession() as session:
         try:
@@ -290,7 +305,7 @@ async def proxy_get_request(path: str, request: Request):
                     return await resp.json()
                 else:
                     error_text = await resp.text()
-                    print(f"[Proxy] Error {resp.status}: {error_text}")
+                    print(f"[Proxy] Error {resp.status} (Testnet: {is_testnet}): {error_text}")
                     raise HTTPException(status_code=resp.status, detail=f"Binance API Error: {error_text}")
         except Exception as e:
             print(f"[Proxy] Exception: {e}")

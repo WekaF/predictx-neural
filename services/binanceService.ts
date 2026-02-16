@@ -10,8 +10,8 @@ const CORS_PROXIES = [
 
 // API Configuration with Testnet Support
 const BINANCE_PRODUCTION_API = 'https://api.binance.com/api/v3';
-const BINANCE_TESTNET_API = 'https://testnet.binance.vision/api/v3';
-const BINANCE_TESTNET_WS = 'wss://stream.binance.com:443/ws'; // Try port 443 first
+const BINANCE_TESTNET_API = 'https://demo-fapi.binance.com/fapi/v1';
+const BINANCE_TESTNET_WS = 'wss://stream.binancefuture.com/ws'; // Futures Testnet WS
 const BINANCE_PRODUCTION_WS = 'ws://localhost:8000/ws/proxy'; // Local Proxy (Bypass ISP Block)
 const BINANCE_DIRECT_WS = 'wss://stream.binance.com:9443/ws'; // Backup
 const LOCAL_PROXY_API = 'http://localhost:8000/api/proxy';
@@ -23,7 +23,7 @@ function getApiConfig(): { apiBase: string; wsBase: string } {
     try {
         const settings = localStorage.getItem('neurotrade_settings');
         // FORCE PROXY for now to ensure connection works (Bypass Block)
-        const useTestnet = false; // settings ? JSON.parse(settings).useTestnet : false;
+        const useTestnet = settings ? JSON.parse(settings).useTestnet : true;
         
         console.log(`[Binance] ⚙️ API Config - Testnet: ${useTestnet} (Forced False for Proxy Support)`);
         
@@ -211,7 +211,9 @@ export async function fetchTopAssets(): Promise<Asset[]> {
         
         // 1. Get Exchange Info (to filter for TRADING status and USDT margin)
         // Proxy: /api/proxy/exchangeInfo
-        const exchangeInfoUrl = `${LOCAL_PROXY_API}/exchangeInfo`;
+        const isTestnet = getApiConfig().apiBase.includes('testnet');
+        const querySuffix = isTestnet ? '?testnet=true' : '';
+        const exchangeInfoUrl = `${LOCAL_PROXY_API}/exchangeInfo${querySuffix}`;
         const exchangeInfoRes = await fetchWithTimeout(exchangeInfoUrl, {}, 10000);
         
         if (!exchangeInfoRes.ok) throw new Error('Failed to fetch exchange info');
@@ -230,7 +232,7 @@ export async function fetchTopAssets(): Promise<Asset[]> {
 
         // 2. Get 24hr Ticker (for Volume sorting)
         // Proxy: /api/proxy/ticker/24hr
-        const tickerUrl = `${LOCAL_PROXY_API}/ticker/24hr`;
+        const tickerUrl = `${LOCAL_PROXY_API}/ticker/24hr${querySuffix}`;
         const tickerRes = await fetchWithTimeout(tickerUrl, {}, 10000);
         
         if (!tickerRes.ok) throw new Error('Failed to fetch ticker data');
@@ -321,6 +323,9 @@ export async function getHistoricalKlines(
 
         // Create proxy-specific query for our backend
         // Backend expects: /api/proxy/klines?symbol=BTCUSDT&interval=1m&limit=100
+        const isTestnet = getApiConfig().apiBase.includes('testnet');
+        if (isTestnet) query += `&testnet=true`;
+        
         const proxyUrl = `${LOCAL_PROXY_API}/klines?${query}`;
         
         console.log(`[Binance] Fetching from Proxy: ${proxyUrl}`);
@@ -509,7 +514,9 @@ export const getOrderBook = async (symbol: string, limit: number = 10) => {
     try {
         // Fetch order book via Backend Proxy (to ensure Futures data)
         // Proxy: /api/proxy/depth?symbol=BTCUSDT&limit=10
-        const proxyUrl = `${LOCAL_PROXY_API}/depth?symbol=${binanceSymbol}&limit=${limit}`;
+        const isTestnet = getApiConfig().apiBase.includes('testnet');
+        const querySuffix = isTestnet ? '&testnet=true' : '';
+        const proxyUrl = `${LOCAL_PROXY_API}/depth?symbol=${binanceSymbol}&limit=${limit}${querySuffix}`;
         const response = await fetchWithTimeout(proxyUrl, {}, 5000);
         
         if (!response.ok) throw new Error('Failed to fetch order book');

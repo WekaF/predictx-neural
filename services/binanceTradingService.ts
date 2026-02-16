@@ -14,7 +14,7 @@ const CORS_PROXIES = [
 
 // Binance API Configuration with Testnet Support
 const BINANCE_PRODUCTION_API = 'https://api.binance.com';
-const BINANCE_TESTNET_API = 'https://testnet.binance.vision';
+const BINANCE_TESTNET_API = 'https://demo-fapi.binance.com';
 
 // Local cache for symbol stepSize (LOT_SIZE filter)
 const symbolStepSizeCache = new Map<string, number>();
@@ -29,10 +29,10 @@ function getApiBase(): string {
     
     try {
         const settings = localStorage.getItem('neurotrade_settings');
-        const useTestnet = settings ? JSON.parse(settings).useTestnet : false;
+        const useTestnet = settings ? JSON.parse(settings).useTestnet : true;
         
         if (useTestnet) {
-            console.log('[Binance Trading] 🧪 Using TESTNET mode');
+            console.log('[Binance Trading] 🧪 Using s mode');
             // Use relative path if likely in a Vercel-like environment with rewrites
             // In dev (Vite), /api/testnet is handled by vite.config.ts
             // In prod, it should be handled by vercel.json or similar
@@ -52,9 +52,9 @@ function getApiCredentials(): { apiKey: string; secretKey: string } {
     const isTestnet = (() => {
         try {
             const settings = localStorage.getItem('neurotrade_settings');
-            return settings ? JSON.parse(settings).useTestnet : false;
+            return settings ? JSON.parse(settings).useTestnet : true;
         } catch {
-            return false;
+            return true;
         }
     })();
 
@@ -271,7 +271,7 @@ async function authenticatedRequest(
  */
 export async function getAccountInfo(): Promise<any> {
     console.log('[Binance Auth] Fetching account info...');
-    const data = await authenticatedRequest('/api/v3/account');
+    const data = await authenticatedRequest('/fapi/v2/account');
     console.log('[Binance Auth] ✅ Account info retrieved');
     return data;
 }
@@ -290,7 +290,7 @@ export async function getAccountBalances(): Promise<any[]> {
 export async function getOpenOrders(symbol?: string): Promise<any[]> {
     console.log('[Binance Auth] Fetching open orders...');
     const params = symbol ? { symbol } : {};
-    const data = await authenticatedRequest('/api/v3/openOrders', 'GET', params);
+    const data = await authenticatedRequest('/fapi/v1/openOrders', 'GET', params);
     console.log(`[Binance Auth] ✅ Found ${data.length} open orders`);
     return data;
 }
@@ -300,7 +300,7 @@ export async function getOpenOrders(symbol?: string): Promise<any[]> {
  */
 export async function getAllOrders(symbol: string, limit: number = 500): Promise<any[]> {
     console.log(`[Binance Auth] Fetching all orders for ${symbol}...`);
-    const data = await authenticatedRequest('/api/v3/allOrders', 'GET', { symbol, limit });
+    const data = await authenticatedRequest('/fapi/v1/allOrders', 'GET', { symbol, limit });
     console.log(`[Binance Auth] ✅ Found ${data.length} orders`);
     return data;
 }
@@ -411,7 +411,7 @@ export async function roundQuantity(symbol: string, quantity: number): Promise<n
  */
 export async function cancelOrder(symbol: string, orderId: number): Promise<any> {
     console.log(`[Binance Auth] Canceling order ${orderId}...`);
-    const data = await authenticatedRequest('/api/v3/order', 'DELETE', { symbol, orderId });
+    const data = await authenticatedRequest('/fapi/v1/order', 'DELETE', { symbol, orderId });
     console.log('[Binance Auth] ✅ Order canceled');
     return data;
 }
@@ -426,7 +426,7 @@ export async function getTradeHistory(symbol: string, limit: number = 500): Prom
     const formattedSymbol = symbol.replace('/USD', 'USDT').replace('/', '');
     
     console.log(`[Binance Auth] Fetching trade history for ${formattedSymbol}...`);
-    const data = await authenticatedRequest('/api/v3/myTrades', 'GET', { symbol: formattedSymbol, limit });
+    const data = await authenticatedRequest('/fapi/v1/userTrades', 'GET', { symbol: formattedSymbol, limit });
     console.log(`[Binance Auth] ✅ Found ${data ? data.length : 0} trades`);
     return data;
 }
