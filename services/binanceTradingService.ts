@@ -22,26 +22,40 @@ const symbolStepSizeCache = new Map<string, number>();
 const symbolPrecisionCache = new Map<string, number>();
 
 /**
- * Get API base URL based on testnet setting
- * Uses local proxy in development to avoid CORS
+ * Get API base URL based on testnet setting and environment
+ * - Development: Uses local proxy to avoid CORS
+ * - Production: Uses direct Binance API (CORS handled by Binance or browser)
  */
 function getApiBase(): string {
     const isDev = import.meta.env.DEV;
+    const isProduction = import.meta.env.PROD;
     
     try {
         const settings = localStorage.getItem('neurotrade_settings');
         const useTestnet = settings ? JSON.parse(settings).useTestnet : true;
         
         if (useTestnet) {
-            console.log('[Binance Trading] 🧪 Using TESTNET mode via Backend Proxy');
+            console.log('[Binance Trading] 🧪 Using TESTNET mode');
+            // In production, use direct testnet API
+            if (isProduction) {
+                console.log('[Binance Trading] 📡 Production: Direct Testnet API');
+                return 'https://testnet.binancefuture.com';
+            }
+            // In development, use backend proxy
             return LOCAL_PROXY_API;
         }
     } catch (e) {
         console.warn('[Binance Trading] Failed to read testnet setting, using production');
     }
     
-    // Always use relative path to leverage proxies/rewrites and avoid CORS
-    return '/api/binance';
+    // Production mode: Use direct Binance API
+    if (isProduction) {
+        console.log('[Binance Trading] 📡 Production: Direct Binance API');
+        return 'https://fapi.binance.com'; // Futures API
+    }
+    
+    // Development: Use Vite proxy
+    return '/api/futures';
 }
 
 // Load API credentials from environment (works in both browser and Node.js)

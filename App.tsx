@@ -396,48 +396,76 @@ function App() {
     return () => clearInterval(interval);
   }, [activeSignal, candles, selectedAsset.symbol]); // Depend on symbol to re-run guard
 
-  // --- STATE RECONCIILIATION (SYNC WITH BINANCE) ---
-  // Prevents "Double Entry" by checking if we already have a position on exchange
+  // Show Notification Helper (Defined early to avoid circular dependency)
+  const showNotification = (message: string, type: 'success' | 'error' | 'info' | 'warning') => {
+    setNotification({ message, type });
+    setTimeout(() => setNotification(null), 5000); // Auto hide after 5s
+  };
+
+  // --- STATE RECONCILIATION (SYNC WITH BINANCE) ---
+  // Prevents "Double Entry" and "Ghost Trades" by syncing with actual exchange state
   const syncStateWithBinance = useCallback(async () => {
-    if (!selectedAsset || selectedAsset.type !== 'CRYPTO') return;
-    
-    // Skip if we already have a confirmed active signal ensuring it matches formatted symbol
-    // But we should verify if the signal is actually alive on exchange?
-    // Let's basic check first: If NO signal locally, check exchange.
-    if (activeSignal) return; 
+    if (!selectedAsset || selectedAsset.type !== 'CRYPTO') {
+        console.log('[Sync] ⏭️ Skipping sync: Not a crypto asset');
+        return;
+    }
 
     try {
         const symbol = selectedAsset.symbol.replace('/', '').replace(/USD$/, 'USDT');
-        // console.log(`[Sync] Checking remote positions for ${symbol}...`);
+        console.log(`[Sync] 🔄 Checking Binance positions for ${symbol}...`);
+        console.log(`[Sync] Current activeSignal:`, activeSignal ? `${activeSignal.type} ${activeSignal.symbol}` : 'NONE');
         
         const positions = await binanceTradingService.getPositions(symbol);
+        console.log(`[Sync] 📊 Received ${positions.length} positions from Binance:`, positions);
+        
         const activePosition = positions.find(p => parseFloat(p.positionAmt) !== 0);
+        console.log(`[Sync] 🎯 Active position found:`, activePosition ? `${parseFloat(activePosition.positionAmt)} @ ${activePosition.entryPrice}` : 'NONE');
 
-        if (activePosition) {
+        // CASE 1: Binance HAS position, but local is EMPTY → RESTORE
+        if (activePosition && !activeSignal) {
             console.log(`[Sync] ⚠️ Found ORPHANED position on Binance! Restoring...`, activePosition);
             
             const size = parseFloat(activePosition.positionAmt);
             const entryPrice = parseFloat(activePosition.entryPrice);
             const side = size > 0 ? 'BUY' : 'SELL';
+            const realLiquidationPrice = parseFloat(activePosition.liquidationPrice);
+            const lev = parseInt(activePosition.leverage);
+            
+            console.log(`[Sync] 📝 Position details: ${side} ${Math.abs(size)} @ ${entryPrice}, Lev: ${lev}x, Liq: ${realLiquidationPrice}`);
             
             // Attempt to find open orders to infer TP/SL
             const openOrders = await binanceTradingService.getOpenOrders(symbol);
+            console.log(`[Sync] 📋 Found ${openOrders.length} open orders:`, openOrders);
+            
             const tpOrder = openOrders.find(o => o.type === 'TAKE_PROFIT_MARKET' || (o.type === 'LIMIT' && o.reduceOnly));
             const slOrder = openOrders.find(o => o.type === 'STOP_MARKET' || o.type === 'STOP_LOSS_MARKET');
             
             const tp = tpOrder ? parseFloat(tpOrder.stopPrice || tpOrder.price) : 0;
             const sl = slOrder ? parseFloat(slOrder.stopPrice || slOrder.price) : 0;
+            
+            console.log(`[Sync] 🎯 TP: ${tp}, SL: ${sl}`);
+
+            // Calculate safety margin using REAL liquidation
+            const slDistance = Math.abs(entryPrice - sl);
+            const liqDistance = Math.abs(entryPrice - realLiquidationPrice);
+            const safetyMargin = entryPrice > 0 ? ((liqDistance - slDistance) / entryPrice) * 100 : 0;
+            
+            let riskLevel: 'SAFE' | 'MODERATE' | 'HIGH' | 'EXTREME';
+            if (safetyMargin > 5) riskLevel = 'SAFE';
+            else if (safetyMargin > 2) riskLevel = 'MODERATE';
+            else if (safetyMargin > 0) riskLevel = 'HIGH';
+            else riskLevel = 'EXTREME';
 
             const restoredSignal: TradeSignal = {
                 id: 'restored-' + Date.now(),
                 type: side,
-                symbol: selectedAsset.symbol, // Use display symbol "BTC/USDT"
+                symbol: selectedAsset.symbol,
                 entryPrice: entryPrice,
                 quantity: Math.abs(size),
                 stopLoss: sl,
                 takeProfit: tp,
                 outputToken: 'USDT',
-                confidence: 0, // Unknown
+                confidence: 0,
                 reasoning: 'Restored from Active Exchange Position',
                 outcome: 'PENDING',
                 timestamp: Date.now(),
@@ -448,21 +476,42 @@ function App() {
                     quantity: Math.abs(size),
                     filled: Math.abs(size),
                     side: side,
-                    leverage: parseInt(activePosition.leverage), // Get from position
-                    mode: 'live', // Ensure we know it's live
+                    leverage: lev,
+                    mode: 'live',
                     tp: tp,
                     sl: sl
+                },
+                meta: {
+                    liquidation_info: {
+                        liquidationPrice: realLiquidationPrice,
+                        marginRatio: (1 / lev) * 100,
+                        safetyMargin: Number(safetyMargin.toFixed(2)),
+                        riskLevel: riskLevel
+                    },
+                    recommended_leverage: lev
                 }
             };
             
+            console.log(`[Sync] ✅ Restoring signal:`, restoredSignal);
             setActiveSignal(restoredSignal);
             storageService.saveActiveSignal(restoredSignal, selectedAsset.symbol);
-            showNotification(`♻️ Restored active trade for ${selectedAsset.symbol}`, 'info');
+            showNotification(`♻️ Restored active ${side} position for ${selectedAsset.symbol}`, 'success');
+        }
+        // CASE 2: Binance has NO position, but local HAS signal → CLEAR (closed externally)
+        else if (!activePosition && activeSignal && activeSignal.outcome === 'PENDING') {
+            console.log(`[Sync] 🧹 Position closed externally. Clearing local signal...`);
+            setActiveSignal(null);
+            storageService.clearActiveSignal(selectedAsset.symbol);
+            showNotification(`Position for ${selectedAsset.symbol} was closed externally`, 'info');
+        }
+        // CASE 3: Both match or both empty → OK, do nothing
+        else {
+            console.log(`[Sync] ✅ State is synchronized (both have position or both empty)`);
         }
     } catch (e) {
-        console.warn('[Sync] Failed to sync with Binance:', e);
+        console.error('[Sync] ❌ Failed to sync with Binance:', e);
     }
-  }, [selectedAsset, activeSignal]);
+  }, [selectedAsset, activeSignal]); // Removed showNotification to avoid circular dependency
 
   // Run Sync on mount and interval
   useEffect(() => {
@@ -804,12 +853,6 @@ function App() {
       }
     };
   }, [selectedAsset, selectedInterval]);
-
-  // Show Notification Helper
-  const showNotification = (message: string, type: 'success' | 'error' | 'info' | 'warning') => {
-    setNotification({ message, type });
-    setTimeout(() => setNotification(null), 5000); // Auto hide after 5s
-  };
 
   // Toggle Auto Mode with Persistence
   const toggleAutoMode = () => {
@@ -2027,9 +2070,44 @@ function App() {
        We assume 'filled' instantly for UI purposes if API succeeded.
     */
 
-    // Add metadata with liquidation info for UI display
+    // Fetch REAL liquidation info from Binance after order execution
     const validSide: 'LONG' | 'SHORT' = newSignal.type === 'BUY' ? 'LONG' : 'SHORT';
-    const liqInfo = liquidationCalculator.validateTrade(entryPrice, stopLoss, leverage, validSide);
+    let liqInfo;
+    
+    try {
+        // Fetch actual position from Binance to get real liquidation price
+        const tradeSymbol = newSignal.symbol.replace('/', '').replace(/USD$/, 'USDT');
+        const positions = await binanceTradingService.getPositions(tradeSymbol);
+        const activePosition = positions.find(p => parseFloat(p.positionAmt) !== 0);
+        
+        if (activePosition && activePosition.liquidationPrice) {
+            const realLiqPrice = parseFloat(activePosition.liquidationPrice);
+            const slDistance = Math.abs(entryPrice - stopLoss);
+            const liqDistance = Math.abs(entryPrice - realLiqPrice);
+            const safetyMargin = entryPrice > 0 ? ((liqDistance - slDistance) / entryPrice) * 100 : 0;
+            
+            let riskLevel: 'SAFE' | 'MODERATE' | 'HIGH' | 'EXTREME';
+            if (safetyMargin > 5) riskLevel = 'SAFE';
+            else if (safetyMargin > 2) riskLevel = 'MODERATE';
+            else if (safetyMargin > 0) riskLevel = 'HIGH';
+            else riskLevel = 'EXTREME';
+            
+            liqInfo = {
+                liquidationPrice: realLiqPrice,
+                marginRatio: (1 / leverage) * 100,
+                safetyMargin: Number(safetyMargin.toFixed(2)),
+                riskLevel: riskLevel
+            };
+            console.log('[Trade] ✅ Using REAL liquidation from Binance:', realLiqPrice);
+        } else {
+            // Fallback to calculation if position not found yet
+            liqInfo = liquidationCalculator.validateTrade(entryPrice, stopLoss, leverage, validSide);
+            console.log('[Trade] ⚠️ Position not found, using calculated liquidation');
+        }
+    } catch (e) {
+        console.warn('[Trade] Failed to fetch real liquidation, using calculation:', e);
+        liqInfo = liquidationCalculator.validateTrade(entryPrice, stopLoss, leverage, validSide);
+    }
 
     const signalWithQty = { 
       ...newSignal, 
