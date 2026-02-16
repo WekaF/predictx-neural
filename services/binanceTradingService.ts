@@ -31,43 +31,31 @@ function getApiBase(): string {
     const isProduction = import.meta.env.PROD;
     const railwayBackendUrl = import.meta.env.VITE_BACKEND_URL; // Set in Vercel env vars
     
-    try {
-        const settings = localStorage.getItem('neurotrade_settings');
-        const useTestnet = settings ? JSON.parse(settings).useTestnet : true;
-        
-        if (useTestnet) {
-            console.log('[Binance Trading] 🧪 Using TESTNET mode');
-            
-            // In production, use Railway backend proxy
-            if (isProduction) {
-                if (railwayBackendUrl) {
-                    console.log('[Binance Trading] 📡 Production: Using Railway Backend at', railwayBackendUrl);
-                    return `${railwayBackendUrl}/ai-api/proxy`;
-                } else {
-                    console.warn('[Binance Trading] ⚠️ VITE_BACKEND_URL not set! Falling back to direct API (may have CORS issues)');
-                    return 'https://testnet.binancefuture.com';
-                }
-            }
-            
-            // In development, use local backend proxy
-            return '/ai-api/proxy';
-        }
-    } catch (e) {
-        console.warn('[Binance Trading] Failed to read testnet setting, using production');
+    // DEVELOPMENT MODE: Always use local backend proxy
+    if (isDev) {
+        console.log('[Binance Trading] 🔧 Development: Using local backend proxy');
+        return '/ai-api/proxy';
     }
     
-    // Production mode: Use Railway backend for production API too
+    // PRODUCTION MODE: Use Railway backend
     if (isProduction) {
         if (railwayBackendUrl) {
             console.log('[Binance Trading] 📡 Production: Using Railway Backend at', railwayBackendUrl);
             return `${railwayBackendUrl}/ai-api/proxy`;
         } else {
-            console.warn('[Binance Trading] ⚠️ VITE_BACKEND_URL not set! Falling back to direct API (may have CORS issues)');
-            return 'https://fapi.binance.com';
+            console.warn('[Binance Trading] ⚠️ VITE_BACKEND_URL not set! Please deploy backend to Railway or enable Paper Trading.');
+            // Fallback: Try direct API (will likely fail with CORS)
+            try {
+                const settings = localStorage.getItem('neurotrade_settings');
+                const useTestnet = settings ? JSON.parse(settings).useTestnet : true;
+                return useTestnet ? 'https://testnet.binancefuture.com' : 'https://fapi.binance.com';
+            } catch {
+                return 'https://fapi.binance.com';
+            }
         }
     }
     
-    // Development: Use local backend proxy
+    // Fallback (should not reach here)
     return '/ai-api/proxy';
 }
 

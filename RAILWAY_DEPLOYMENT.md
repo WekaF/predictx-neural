@@ -38,14 +38,20 @@ Railway will auto-detect the backend, but to be sure:
 2. Click **"+ New Variable"**
 3. Add the following (one by one):
 
+**IMPORTANT: Do NOT use quotes around the values in Railway!**
+
 ```
-VITE_BINANCE_API_KEY=your_production_api_key_here
-VITE_BINANCE_SECRET_KEY=your_production_secret_key_here
-VITE_BINANCE_API_KEY_TESTNET=your_testnet_api_key_here
-VITE_BINANCE_API_SECRET_TESTNET=your_testnet_secret_key_here
+VITE_BINANCE_API_KEY=EiSshYqMAqS095otRLQN76S5cKSoBcn25Ebb21ITCVxk3quckwxQJLdddqxEExBS
+VITE_BINANCE_SECRET_KEY=dpNDgnE3ZfscTMKpBuru9vguzmsNY8xw8J1NGLD8VLS78WQyEKRdrNS6C7irwIJ3
+VITE_BINANCE_API_KEY_TESTNET=WaBJscL1raLkhUB2KcyyiTxNguObcqeWYELLeTxkXvVZbJpygUxYQuvgbl9HQEjK
+VITE_BINANCE_API_SECRET_TESTNET=E0FGnI6a4NV5e16w5vrYgmrn2I2Asw57qS9lHLFZ1B9JgVvEEKMJ91rfCvIDYqeJ
 ```
 
-**Important:** Replace the values with your actual API keys from Binance.
+**Example:**
+- ❌ Wrong: `VITE_BINANCE_API_KEY="your_key_here"` (has quotes)
+- ✅ Correct: `VITE_BINANCE_API_KEY=your_key_here` (no quotes)
+
+**Note:** Replace the values above with your actual API keys from Binance.
 
 ### 2.4 Get Deployment URL
 1. After deployment completes (2-3 minutes)
