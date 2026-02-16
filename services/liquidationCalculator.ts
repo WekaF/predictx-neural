@@ -27,12 +27,13 @@ export class LiquidationCalculator {
     side: 'LONG' | 'SHORT',
     maintenanceMarginRate: number = 0.004
   ): number {
+    const lev = Math.max(1, leverage); // Ensure leverage is at least 1x
     if (side === 'LONG') {
       // Long liquidation = Entry * (1 - 1/leverage + MMR)
-      return entryPrice * (1 - (1 / leverage) + maintenanceMarginRate);
+      return entryPrice * (1 - (1 / lev) + maintenanceMarginRate);
     } else {
       // Short liquidation = Entry * (1 + 1/leverage - MMR)
-      return entryPrice * (1 + (1 / leverage) - maintenanceMarginRate);
+      return entryPrice * (1 + (1 / lev) - maintenanceMarginRate);
     }
   }
 
@@ -75,12 +76,15 @@ export class LiquidationCalculator {
     leverage: number,
     side: 'LONG' | 'SHORT'
   ): LiquidationInfo {
-    const liqPrice = this.calculateLiquidationPrice(entryPrice, leverage, side);
+    const lev = Math.max(1, leverage);
+    const liqPrice = this.calculateLiquidationPrice(entryPrice, lev, side);
     
     // Calculate safety margin (distance from SL to liquidation)
     const slDistance = Math.abs(entryPrice - stopLoss);
     const liqDistance = Math.abs(entryPrice - liqPrice);
-    const safetyMargin = ((liqDistance - slDistance) / entryPrice) * 100;
+    
+    // Prevent division by zero
+    const safetyMargin = entryPrice > 0 ? ((liqDistance - slDistance) / entryPrice) * 100 : 0;
     
     let riskLevel: 'SAFE' | 'MODERATE' | 'HIGH' | 'EXTREME';
     let warningMessage: string | undefined;
@@ -100,7 +104,7 @@ export class LiquidationCalculator {
     
     return {
       liquidationPrice: Number(liqPrice.toFixed(2)),
-      marginRatio: (1 / leverage) * 100,
+      marginRatio: (1 / lev) * 100,
       safetyMargin: Number(safetyMargin.toFixed(2)),
       riskLevel,
       warningMessage

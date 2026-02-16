@@ -396,6 +396,81 @@ function App() {
     return () => clearInterval(interval);
   }, [activeSignal, candles, selectedAsset.symbol]); // Depend on symbol to re-run guard
 
+  // --- STATE RECONCIILIATION (SYNC WITH BINANCE) ---
+  // Prevents "Double Entry" by checking if we already have a position on exchange
+  const syncStateWithBinance = useCallback(async () => {
+    if (!selectedAsset || selectedAsset.type !== 'CRYPTO') return;
+    
+    // Skip if we already have a confirmed active signal ensuring it matches formatted symbol
+    // But we should verify if the signal is actually alive on exchange?
+    // Let's basic check first: If NO signal locally, check exchange.
+    if (activeSignal) return; 
+
+    try {
+        const symbol = selectedAsset.symbol.replace('/', '').replace(/USD$/, 'USDT');
+        // console.log(`[Sync] Checking remote positions for ${symbol}...`);
+        
+        const positions = await binanceTradingService.getPositions(symbol);
+        const activePosition = positions.find(p => parseFloat(p.positionAmt) !== 0);
+
+        if (activePosition) {
+            console.log(`[Sync] ⚠️ Found ORPHANED position on Binance! Restoring...`, activePosition);
+            
+            const size = parseFloat(activePosition.positionAmt);
+            const entryPrice = parseFloat(activePosition.entryPrice);
+            const side = size > 0 ? 'BUY' : 'SELL';
+            
+            // Attempt to find open orders to infer TP/SL
+            const openOrders = await binanceTradingService.getOpenOrders(symbol);
+            const tpOrder = openOrders.find(o => o.type === 'TAKE_PROFIT_MARKET' || (o.type === 'LIMIT' && o.reduceOnly));
+            const slOrder = openOrders.find(o => o.type === 'STOP_MARKET' || o.type === 'STOP_LOSS_MARKET');
+            
+            const tp = tpOrder ? parseFloat(tpOrder.stopPrice || tpOrder.price) : 0;
+            const sl = slOrder ? parseFloat(slOrder.stopPrice || slOrder.price) : 0;
+
+            const restoredSignal: TradeSignal = {
+                id: 'restored-' + Date.now(),
+                type: side,
+                symbol: selectedAsset.symbol, // Use display symbol "BTC/USDT"
+                entryPrice: entryPrice,
+                quantity: Math.abs(size),
+                stopLoss: sl,
+                takeProfit: tp,
+                outputToken: 'USDT',
+                confidence: 0, // Unknown
+                reasoning: 'Restored from Active Exchange Position',
+                outcome: 'PENDING',
+                timestamp: Date.now(),
+                execution: {
+                    status: 'FILLED',
+                    execution_status: 'FILLED',
+                    entryPrice: entryPrice,
+                    quantity: Math.abs(size),
+                    filled: Math.abs(size),
+                    side: side,
+                    leverage: parseInt(activePosition.leverage), // Get from position
+                    mode: 'live', // Ensure we know it's live
+                    tp: tp,
+                    sl: sl
+                }
+            };
+            
+            setActiveSignal(restoredSignal);
+            storageService.saveActiveSignal(restoredSignal, selectedAsset.symbol);
+            showNotification(`♻️ Restored active trade for ${selectedAsset.symbol}`, 'info');
+        }
+    } catch (e) {
+        console.warn('[Sync] Failed to sync with Binance:', e);
+    }
+  }, [selectedAsset, activeSignal]);
+
+  // Run Sync on mount and interval
+  useEffect(() => {
+     syncStateWithBinance();
+     const id = setInterval(syncStateWithBinance, 10000); // Check every 10s
+     return () => clearInterval(id);
+  }, [syncStateWithBinance]);
+
   // Reusable balance fetcher
   const fetchBalance = useCallback(async () => {
       try {

@@ -278,7 +278,25 @@ async function authenticatedRequest(
 
         if (!response.ok) {
             const errorText = await response.text();
-            throw new Error(`Binance API Error: ${response.status} - ${errorText}`);
+            // Try to parse JSON error if possible
+            try {
+                const jsonError = JSON.parse(errorText);
+                throw new Error(jsonError.msg || jsonError.message || `Binance API Error: ${response.status}`);
+            } catch (e) {
+                // If not JSON, it might be HTML or plain text
+                throw new Error(`Binance API Error: ${response.status} - ${errorText.substring(0, 200)}`);
+            }
+        }
+
+        // Validate Content-Type for JSON
+        const contentType = response.headers.get('content-type');
+        if (contentType && !contentType.includes('application/json')) {
+             const text = await response.text();
+             // Check if it's the index.html (React App)
+             if (text.includes('<!DOCTYPE html>') || text.includes('<div id="root">')) {
+                 throw new Error(`API Connection Failed: Endpoint not found (served HTML). URL: ${endpoint}`);
+             }
+             throw new Error(`Invalid API Response (Not JSON): ${text.substring(0, 100)}`);
         }
 
         return await response.json();
