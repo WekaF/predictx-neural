@@ -17,14 +17,14 @@ export default defineConfig(({ mode }) => {
           rewrite: (path) => path.replace(/^\/api\/binance/, '')
         },
         '/api/testnet': {
-          target: 'https://demo-fapi.binance.com', // Updated to demo-fapi per user request
+          target: 'https://testnet.binancefuture.com',
           changeOrigin: true,
           secure: false,
           rewrite: (path) => path.replace(/^\/api\/testnet/, ''),
           headers: {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Origin': 'https://demo-fapi.binance.com',
-            'Referer': 'https://demo-fapi.binance.com/'
+            'Origin': 'https://testnet.binancefuture.com',
+            'Referer': 'https://testnet.binancefuture.com/'
           }
         },
         // Binance Futures Proxy

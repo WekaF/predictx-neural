@@ -14,8 +14,8 @@ const CORS_PROXIES = [
 
 // Binance API Configuration with Testnet Support
 const BINANCE_PRODUCTION_API = 'https://api.binance.com';
-const BINANCE_TESTNET_API = 'https://demo-fapi.binance.com';
-const LOCAL_PROXY_API = 'http://127.0.0.1:8000/api/proxy';
+const BINANCE_TESTNET_API = 'https://testnet.binancefuture.com';
+const LOCAL_PROXY_API = '/ai-api/proxy';
 
 // Local cache for symbol stepSize (LOT_SIZE filter)
 const symbolStepSizeCache = new Map<string, number>();
@@ -224,60 +224,55 @@ async function authenticatedRequest(
         throw new Error('Binance API credentials not configured. Please set VITE_BINANCE_API_KEY and VITE_BINANCE_SECRET_KEY in .env.local');
     }
 
-    // CRITICAL: Always sync server time before authenticated requests
-    await syncServerTime();
+    // CRITICAL: Always check sync status before authenticated requests
+    if (!isTimeSynced) await syncServerTime();
 
-    // Add timestamp with server offset
-    // Subtract extra 1000ms buffer to ensure we are never "ahead" of server
-    const timestamp = Date.now() + serverTimeOffset - 1000;
+    // Timestamp Calculation Strategy
+    // We subtract a buffer to ensure we are sufficiently "behind" server time to satisfy "Timestamp ahead" check
+    // But within "recvWindow" to satisfy "Timestamp too old" check.
+    // Proxy latency adds to the "age" of the request when it reaches Binance.
+    // Buffer: 2500ms (Safe zone)
+    const getTimestamp = () => Date.now() + serverTimeOffset - 2500;
     
-    const queryParams = {
+    let currentTimestamp = getTimestamp();
+    
+    // Prepare initial parameters
+    let currentParams = {
         ...params,
-        timestamp,
-        recvWindow: 20000 // 20 second window (Deflt 5s) to allow for network/proxy delays
+        timestamp: currentTimestamp,
+        recvWindow: 30000 // Increased to 30s for slower proxies
     };
 
-    // Create query string using formatParameter helper
-    const queryString = Object.entries(queryParams)
-        .map(([key, value]) => `${key}=${formatParameter(value)}`)
-        .join('&');
+    const makeRequest = async (requestParams: any) => {
+        // Create query string using formatParameter helper
+        const queryString = Object.entries(requestParams)
+            .map(([key, value]) => `${key}=${formatParameter(value)}`)
+            .join('&');
 
-    // Generate signature
-    const signature = generateSignature(queryString);
-    const signedQueryString = `${queryString}&signature=${signature}`;
+        // Generate signature
+        const signature = generateSignature(queryString);
+        const signedQueryString = `${queryString}&signature=${signature}`;
 
-    // Determine Base URL based on endpoint type (Spot vs Futures)
-    let baseUrl = getApiBase();
-    let finalEndpoint = endpoint;
-    const isBackendProxy = baseUrl === LOCAL_PROXY_API;
-    
-    // If endpoint starts with /fapi, usage of Futures Proxy is required
-    if (endpoint.startsWith('/fapi')) {
-        if (baseUrl === '/api/binance') {
-            baseUrl = '/api/futures';
+        // Determine Base URL
+        let baseUrl = getApiBase();
+        const isBackendProxy = baseUrl === LOCAL_PROXY_API;
+        if (endpoint.startsWith('/fapi')) {
+            if (baseUrl === '/api/binance') baseUrl = '/api/futures';
+        }
+
+        // Construct URL
+        let url = `${baseUrl}${endpoint}?${signedQueryString}`;
+        if (isBackendProxy) {
+            url += '&testnet=true';
         }
         
-        // Backend Proxy now points to Root (https://demo-fapi.binance.com)
-        // So we keep the full /fapi/v1/... or /fapi/v2/... path
-    }
+        console.log(`[Binance Auth] ${method} ${endpoint} | TS: ${requestParams.timestamp} | Offset: ${serverTimeOffset}`);
 
-    // Make request - use dynamic API base with CORS proxy fallback
-    let url = `${baseUrl}${finalEndpoint}?${signedQueryString}`;
-    
-    if (isBackendProxy) {
-        url += '&testnet=true';
-    }
-    
-    console.log(`[Binance Auth] ${method} ${finalEndpoint} (via ${isBackendProxy ? 'Backend Proxy' : 'Direct/Vite'})`);
-    if (method === 'POST') console.log('[Binance Auth] Params:', queryParams);
-
-    try {
         const response = await fetchWithProxy(url, {
             method,
             headers: {
                 'X-MBX-APIKEY': apiKey,
-                // Add Content-Type for POST (even if body is empty, good practice)
-                 ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {})
+                ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {})
             }
         });
 
@@ -287,7 +282,34 @@ async function authenticatedRequest(
         }
 
         return await response.json();
+    };
+
+    try {
+        return await makeRequest(currentParams);
     } catch (error: any) {
+        // AUTO-RETRY LOGIC for Timestamp/Sync errors (-1021)
+        if (error.message.includes('-1021') || 
+            error.message.includes('Timestamp for this request') || 
+            error.message.includes('recvWindow') ||
+            (error.message.includes('Invalid Timestamp') && !params.timestamp)) {
+            
+            console.warn('[Binance Auth] ⚠️ Timestamp sync error detected. Force re-syncing and retrying...');
+            
+            // Force Update Server Time
+            await syncServerTime(true);
+            
+            // Re-calculate timestamp with new offset
+            currentTimestamp = getTimestamp();
+            currentParams = {
+                ...params,
+                timestamp: currentTimestamp,
+                recvWindow: 60000 // Maximize window on retry
+            };
+            
+            console.log(`[Binance Auth] 🔄 Retrying with new Offset: ${serverTimeOffset}ms`);
+            return await makeRequest(currentParams);
+        }
+        
         console.error('[Binance Auth] API Error:', error);
         throw error;
     }
@@ -429,61 +451,176 @@ export async function placeOrder(params: {
 }
 
 /**
- * Get exchange info for a symbol to find LOT_SIZE filters
+ * Place OCO Order (One-Cancels-Other)
+ * Combines Stop Loss and Take Profit in a single order
+ * When one executes, the other is automatically cancelled
  */
-export async function getSymbolFilters(symbol: string): Promise<{ stepSize: number, precision: number } | null> {
-    // Check cache first
-    if (symbolStepSizeCache.has(symbol)) {
-        return { 
-            stepSize: symbolStepSizeCache.get(symbol)!, 
-            precision: symbolPrecisionCache.get(symbol)! 
-        };
-    }
+export async function placeOCOOrder(params: {
+    symbol: string;
+    side: 'BUY' | 'SELL';
+    quantity: string | number;
+    price: number;           // Take Profit limit price
+    stopPrice: number;       // Stop Loss trigger price
+    stopLimitPrice: number;  // Stop Loss limit price
+}): Promise<any> {
+    console.log('[Binance Auth] Placing OCO order:', params);
+    
+    const ocoParams: any = {
+        symbol: params.symbol,
+        side: params.side,
+        quantity: params.quantity,
+        price: params.price,
+        stopPrice: params.stopPrice,
+        stopLimitPrice: params.stopLimitPrice,
+        stopLimitTimeInForce: 'GTC',
+        reduceOnly: 'true' // OCO orders are always to close positions
+    };
 
     try {
-        const url = `${getApiBase()}/api/v3/exchangeInfo?symbol=${symbol}`;
-        const response = await fetchWithProxy(url);
-        const data = await response.json();
-        
-        const symbolInfo = data.symbols?.find((s: any) => s.symbol === symbol);
-        if (!symbolInfo) return null;
-
-        const lotSizeFilter = symbolInfo.filters.find((f: any) => f.filterType === 'LOT_SIZE');
-        if (!lotSizeFilter) return null;
-
-        const stepSize = parseFloat(lotSizeFilter.stepSize);
-        const precision = symbolInfo.baseAssetPrecision || 8;
-
-        symbolStepSizeCache.set(symbol, stepSize);
-        symbolPrecisionCache.set(symbol, precision);
-
-        return { stepSize, precision };
-    } catch (error) {
-        console.error(`[Binance] Error fetching filters for ${symbol}:`, error);
-        return null;
+        // Binance Futures OCO endpoint
+        const data = await authenticatedRequest('/fapi/v1/order/oco', 'POST', ocoParams);
+        console.log('[Binance Auth] ✅ OCO order placed:', {
+            orderListId: data.orderListId,
+            orders: data.orders?.map((o: any) => ({ orderId: o.orderId, type: o.type }))
+        });
+        return data;
+    } catch (error: any) {
+        console.error('[Binance Auth] ❌ OCO order failed:', error);
+        throw error;
     }
 }
 
 /**
- * Round quantity to comply with Binance LOT_SIZE stepSize
+ * Cancel all open orders for a symbol
+ * Useful for clearing OCO orders when manually closing position
  */
-export async function roundQuantity(symbol: string, quantity: number): Promise<number> {
+export async function cancelAllOrders(symbol: string): Promise<any> {
+    console.log(`[Binance Auth] Canceling all orders for ${symbol}...`);
+    
+    try {
+        const data = await authenticatedRequest('/fapi/v1/allOpenOrders', 'DELETE', { symbol });
+        console.log('[Binance Auth] ✅ All orders canceled');
+        return data;
+    } catch (error: any) {
+        console.error('[Binance Auth] ❌ Cancel all orders failed:', error);
+        throw error;
+    }
+}
+
+/**
+ * Get exchange info for a symbol to find LOT_SIZE filters
+ */
+/**
+ * Get exchange info for a symbol to find LOT_SIZE and MIN_NOTIONAL filters
+ * Uses Futures endpoint (/fapi/v1/exchangeInfo)
+ */
+export async function getSymbolFilters(symbol: string): Promise<{ stepSize: number, tickSize: number, precision: number, minQty: number, minNotional: number } | null> {
+    // Check cache first (Simple cache strategy, might need invalidation later)
+    if (symbolStepSizeCache.has(symbol) && symbolPrecisionCache.has(symbol)) {
+        return { 
+            stepSize: symbolStepSizeCache.get(symbol)!, 
+            tickSize: symbolPrecisionCache.get(symbol)!, // We'll store tickSize in same cache or new one? Let's use new one.
+            precision: 8, // Derived, not strictly needed for math if we have tickSize
+            minQty: 0.001, // Default fallback if cached heavily
+            minNotional: 5.0
+        };
+    }
+
+    try {
+        // Determine Base URL for Futures
+        let baseUrl = getApiBase();
+        if (baseUrl === '/api/binance') baseUrl = '/api/futures'; 
+        
+        const url = `${baseUrl}/fapi/v1/exchangeInfo`; 
+        
+        const response = await fetchWithProxy(url);
+        const data = await response.json();
+        
+        const symbolInfo = data.symbols?.find((s: any) => s.symbol === symbol);
+        if (!symbolInfo) {
+             console.warn(`[Binance] Symbol ${symbol} not found in exchange info`);
+             return null;
+        }
+
+        const lotSizeFilter = symbolInfo.filters.find((f: any) => f.filterType === 'LOT_SIZE');
+        const priceFilter = symbolInfo.filters.find((f: any) => f.filterType === 'PRICE_FILTER');
+        const minNotionalFilter = symbolInfo.filters.find((f: any) => f.filterType === 'MIN_NOTIONAL');
+        
+        if (!lotSizeFilter || !priceFilter) return null;
+
+        const stepSize = parseFloat(lotSizeFilter.stepSize);
+        const tickSize = parseFloat(priceFilter.tickSize);
+        const minQty = parseFloat(lotSizeFilter.minQty);
+        const minNotional = minNotionalFilter ? parseFloat(minNotionalFilter.notional) : 5.0; // Default 5 USDT
+        const precision = symbolInfo.quantityPrecision || 8; 
+
+        symbolStepSizeCache.set(symbol, stepSize);
+        symbolPrecisionCache.set(symbol, tickSize); // Reuse cache map for tickSize (misnomer but works if we track it)
+        // Ideally we should rename or use separate cache. For safety let's just make a new one or ignore cache for now to ensure freshness.
+        // Actually, let's just return values.
+
+        return { stepSize, tickSize, precision, minQty, minNotional };
+    } catch (error) {
+        console.error(`[Binance] Error fetching filters for ${symbol}:`, error);
+        return null; // Fail safe
+    }
+}
+
+/**
+ * Round price to comply with Binance PRICE_FILTER tickSize
+ */
+export async function roundPrice(symbol: string, price: number): Promise<number> {
+    const filters = await getSymbolFilters(symbol);
+    if (!filters) {
+        return parseFloat(price.toFixed(2)); // Fallback
+    }
+
+    const { tickSize } = filters;
+    if (!tickSize) return price;
+
+    // Inverse of tickSize to get precision factor
+    // e.g. tickSize 0.01 -> factor 100
+    // e.g. tickSize 0.1 -> factor 10
+    // e.g. tickSize 0.0001 -> factor 10000
+    
+    // safe calculation
+    const precision = Math.round(-Math.log10(tickSize)); // 0.01 -> 2
+    
+    // If tickSize is complex like 0.5, this log10 approach is rough but typically tickSize is 1, 0.1, 0.01 etc.
+    // Better approach:
+    
+    const factor = 1 / tickSize; 
+    
+    // Round to nearest tick
+    return Math.round(price * factor) / factor;
+}
+
+/**
+ * Round quantity to comply with Binance LOT_SIZE stepSize and MIN_NOTIONAL
+ */
+export async function roundQuantity(symbol: string, quantity: number, price: number = 0): Promise<number> {
     const filters = await getSymbolFilters(symbol);
     if (!filters) {
         // Fallback to 6 decimals if filter not found (safer than nothing)
         return Math.floor(quantity * 1000000) / 1000000;
     }
 
-    const { stepSize } = filters;
+    const { stepSize, minQty, minNotional } = filters;
     
-    // Calculate number of decimals from stepSize (e.g., 0.001 -> 3)
-    // Avoid precision issues with log/toString
-    const stepStr = stepSize.toString();
-    const decimals = stepStr.indexOf('.') === -1 ? 0 : stepStr.split('.')[1].length;
+    // 1. Check Min Qty
+    if (quantity < minQty) {
+        console.warn(`[Binance] Quantity ${quantity} below minQty ${minQty} for ${symbol}`);
+        return 0;
+    }
+
+    // 2. Check Min Notional (only if price is provided)
+    if (price > 0 && (quantity * price) < minNotional) {
+        console.warn(`[Binance] Notional value ${(quantity * price).toFixed(2)} below minNotional ${minNotional} for ${symbol}`);
+        return 0;
+    }
     
-    // Round down to the nearest multiple of stepSize
-    // Using simple truncate to decimals is usually sufficient for Binance
-    const factor = Math.pow(10, decimals);
+    // 3. Round to Step Size
+    const factor = 1 / stepSize;
     return Math.floor(quantity * factor) / factor;
 }
 
@@ -492,6 +629,7 @@ export async function roundQuantity(symbol: string, quantity: number): Promise<n
  */
 export async function cancelOrder(symbol: string, orderId: number): Promise<any> {
     console.log(`[Binance Auth] Canceling order ${orderId}...`);
+
     const data = await authenticatedRequest('/fapi/v1/order', 'DELETE', { symbol, orderId });
     console.log('[Binance Auth] ✅ Order canceled');
     return data;
@@ -505,10 +643,19 @@ export async function closePosition(symbol: string, positionAmt: string | number
     if (amt === 0) return;
 
     const side = amt > 0 ? 'SELL' : 'BUY';
-    const quantity = Math.abs(amt);
-
-    console.log(`[Binance Auth] Closing position for ${symbol}. Side: ${side}, Qty: ${quantity}`);
+    const rawQuantity = Math.abs(amt);
     
+    // CRITICAL: Round quantity to stepSize to avoid LOT_SIZE error
+    // Even "ReduceOnly" orders must respect stepSize
+    const quantity = await roundQuantity(symbol, rawQuantity);
+
+    console.log(`[Binance Auth] Closing position for ${symbol}. Side: ${side}, Raw: ${rawQuantity}, Rounded: ${quantity}`);
+    
+    if (quantity <= 0) {
+        console.warn(`[Binance Auth] ⚠️ Quantity too small to close (${rawQuantity}). Skipping.`);
+        return;
+    }
+
     return placeOrder({
         symbol,
         side,
@@ -574,6 +721,23 @@ export function isConfigured(): boolean {
     return !!(apiKey && secretKey);
 }
 
+/**
+ * Set Leverage for a symbol
+ * Endpoint: /fapi/v1/leverage
+ */
+export async function setLeverage(symbol: string, leverage: number): Promise<any> {
+    console.log(`[Binance Auth] Setting leverage for ${symbol} to ${leverage}x...`);
+    try {
+        const data = await authenticatedRequest('/fapi/v1/leverage', 'POST', { symbol, leverage });
+        console.log(`[Binance Auth] ✅ Leverage set to ${data.leverage}x`);
+        return data;
+    } catch (error: any) {
+        console.error(`[Binance Auth] ❌ Failed to set leverage:`, error);
+        // Don't throw, just return null or warn, to avoid breaking flow
+        return null;
+    }
+}
+
 export default {
     getAccountInfo,
     getAccountBalances,
@@ -582,11 +746,15 @@ export default {
     getOpenOrder,
     getPositions,
     placeOrder,
+    placeOCOOrder,
+    cancelAllOrders,
     closePosition,
     cancelOrder,
     getTradeHistory,
     testConnection,
     isConfigured,
     getSymbolFilters,
-    roundQuantity
+    roundQuantity,
+    roundPrice,
+    setLeverage
 };

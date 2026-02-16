@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Activity, Zap, TrendingUp, TrendingDown, RefreshCw, ShieldCheck, DollarSign, BrainCircuit, Target, BookOpen, FlaskConical, LayoutDashboard, ChevronDown, Layers, Globe, Radio, PenTool, AlertCircle, CheckCircle2, List, Bell, Edit3, Settings as SettingsIcon, Coins, AlertTriangle, CheckCircle, XCircle, BarChart3, Trash2, Settings, Brain, UploadCloud, Clock } from 'lucide-react';
+import { Activity, Zap, TrendingUp, TrendingDown, RefreshCw, ShieldCheck, DollarSign, BrainCircuit, Target, BookOpen, FlaskConical, LayoutDashboard, ChevronDown, Layers, Globe, Radio, PenTool, AlertCircle, CheckCircle2, List, Bell, Edit3, Settings as SettingsIcon, Coins, AlertTriangle, CheckCircle, XCircle, BarChart3, Trash2, Settings, Brain, UploadCloud, Clock, PauseCircle, PlayCircle } from 'lucide-react';
 import { FuturesDashboard } from './components/FuturesDashboard';
 import { TradingJournal } from './components/TradingJournal';
 import { TradingLog } from './types';
@@ -38,6 +38,7 @@ import { sendWebhookNotification } from './services/webhookService';
 import { NotificationService } from './services/notificationService';
 import * as binanceService from './services/binanceService';
 import * as forexService from './services/forexService';
+import { smcService } from './services/smcService';
 import { Candle, TechnicalIndicators, TradeSignal, TrainingData, NewsItem, Alert, ExecutedTrade, Asset } from './types';
 import { generateUUID } from './utils/uuid';
 import { Analytics } from "@vercel/analytics/react"
@@ -249,6 +250,151 @@ function App() {
     };
     loadTradeHistory();
   }, []);
+
+  // --- DYNAMIC TRADE MANAGER (SMC LOGIC) ---
+  // Monitors active trades for Break Even, Trailing SL, and Limit Order Fills
+  useEffect(() => {
+    if (!activeSignal || !activeSignal.execution) return;
+
+    // CRITICAL GUARD: activeSignal must match current chart symbol
+    // If not, we cannot manage it with current candles.
+    if (activeSignal.symbol !== selectedAsset.symbol) {
+         return;
+    }
+    
+    // Also check if candles are valid
+    if (!candles || candles.length === 0) return;
+
+    const manageTrade = async () => {
+      try {
+        const { symbol, execution } = activeSignal;
+        const tradeSymbol = symbol.replace('/', '').replace(/USD$/, 'USDT');
+        const currentPrice = candles[candles.length - 1]?.close;
+        
+        if (!currentPrice) return;
+
+        // 1. HANDLE PENDING LIMIT ORDERS
+        if (execution.status === 'PENDING_LIMIT') {
+             // Check if Order is Filled
+             const orderId = execution.orderId;
+             if (!orderId) return;
+
+             const orderStatus = await binanceTradingService.getOpenOrder(tradeSymbol, orderId);
+             
+             if (orderStatus.status === 'FILLED') {
+                 console.log('[Trade Manager] 🚀 Limit Order FILLED! Placing OCO...');
+                 
+                 // Limit Fill -> Active Trade. Now place OCO.
+                 try {
+                    const rawStopPrice = execution.sl;
+                    const rawStopLimitPrice = execution.side === 'BUY' 
+                        ? rawStopPrice * 0.995 
+                        : rawStopPrice * 1.005;
+                    const rawTakeProfitPrice = execution.tp;
+                    
+                    const [stopPrice, stopLimitPrice, takeProfitPrice] = await Promise.all([
+                        binanceTradingService.roundPrice(tradeSymbol, rawStopPrice),
+                        binanceTradingService.roundPrice(tradeSymbol, rawStopLimitPrice),
+                        binanceTradingService.roundPrice(tradeSymbol, rawTakeProfitPrice)
+                    ]);
+
+                    const ocoOrder = await binanceTradingService.placeOCOOrder({
+                        symbol: tradeSymbol,
+                        side: execution.side === 'BUY' ? 'SELL' : 'BUY',
+                        quantity: execution.quantity, // Quantity from execution
+                        price: takeProfitPrice,
+                        stopPrice: stopPrice,
+                        stopLimitPrice: stopLimitPrice
+                    });
+
+                    // Update State to FILLED
+                    const updatedSignal = {
+                        ...activeSignal,
+                        execution: {
+                            ...execution,
+                            status: 'FILLED',
+                            execution_status: 'FILLED', // Sync both fields
+                            ocoId: ocoOrder.orderListId
+                        }
+                    };
+                    setActiveSignal(updatedSignal);
+                    storageService.saveActiveSignal(updatedSignal, symbol);
+                    showNotification("✅ Limit Order Filled! OCO Safety Placed.", "success");
+
+                 } catch (ocoErr) {
+                     console.error('[Trade Manager] Failed to place OCO after fill:', ocoErr);
+                     showNotification("⚠️ Limit Filled but OCO Failed! Manual Close Required!", "error");
+                 }
+             } else if (orderStatus.status === 'CANCELED' || orderStatus.status === 'EXPIRED') {
+                 console.log('[Trade Manager] Limit Order Canceled/Expired.');
+                 setActiveSignal(null); // Clear signal
+                 storageService.clearActiveSignal(symbol);
+             }
+        }
+
+        // 2. HANDLE ACTIVE TRADES (Break Even & Trailing)
+        if (execution.status === 'FILLED' && execution.mode !== 'paper') { // Only manage real trades
+             const entryPrice = execution.entryPrice || activeSignal.entryPrice; // Ensure we have entry price
+             if (!entryPrice) return;
+
+             // Calculate PnL %
+             let pnlPercent = 0;
+             if (execution.side === 'BUY') {
+                 pnlPercent = ((currentPrice - entryPrice) / entryPrice) * 100 * execution.leverage;
+             } else {
+                 pnlPercent = ((entryPrice - currentPrice) / entryPrice) * 100 * execution.leverage;
+             }
+
+             // A. AUTO BREAK EVEN (+1.5% Profit)
+             // Check if SL is already at Entry (or better)
+             const isSLAtEntry = execution.side === 'BUY' ? execution.sl >= entryPrice : execution.sl <= entryPrice;
+             
+             if (pnlPercent >= 1.5 && !isSLAtEntry) {
+                 console.log('[Trade Manager] 🛡️ Moving SL to Break Even...');
+                 
+                 // Cancel old SL/OCO
+                 if (execution.ocoId) {
+                     await binanceTradingService.cancelAllOrders(tradeSymbol);
+                 }
+
+                 // Place New Stop Loss at Entry
+                 const newSL = await binanceTradingService.roundPrice(tradeSymbol, entryPrice);
+                 
+                 try {
+                     const tpPrice = await binanceTradingService.roundPrice(tradeSymbol, execution.tp);
+                     const slLimit = execution.side === 'BUY' ? newSL * 0.999 : newSL * 1.001;
+                     
+                     await binanceTradingService.placeOCOOrder({
+                         symbol: tradeSymbol,
+                         side: execution.side === 'BUY' ? 'SELL' : 'BUY',
+                         quantity: execution.quantity,
+                         price: tpPrice,
+                         stopPrice: newSL,
+                         stopLimitPrice: await binanceTradingService.roundPrice(tradeSymbol, slLimit)
+                     });
+                     
+                     // Update State
+                     const updatedSignal = {
+                         ...activeSignal,
+                         execution: { ...execution, sl: newSL, managementStatus: 'BE_SET' }
+                     };
+                     setActiveSignal(updatedSignal);
+                     storageService.saveActiveSignal(updatedSignal, symbol);
+                     showNotification("🛡️ Stop Loss moved to Break Even!", "success");
+                 } catch (err) {
+                     console.error('[Trade Manager] Failed to move SL:', err);
+                 }
+             }
+        }
+
+      } catch (err) {
+        console.error('[Trade Manager] Error:', err);
+      }
+    };
+
+    const interval = setInterval(manageTrade, 5000); // Check every 5s
+    return () => clearInterval(interval);
+  }, [activeSignal, candles, selectedAsset.symbol]); // Depend on symbol to re-run guard
 
   // Reusable balance fetcher
   const fetchBalance = useCallback(async () => {
@@ -870,6 +1016,11 @@ function App() {
     }
   }, [candles, activeSignal, balance, riskPercent, selectedAsset]); // Executing whenever candles update (which is often via WS)
 
+  // TRACK MANUAL OVERRIDE STATE (GUARD)
+  const [isManualOverride, setIsManualOverride] = useState(false);
+  const lastTradeTimeRef = useRef<number>(0); 
+  // const TRADE_COOLDOWN_MS = 60000; // REMOVED as per user request for explicit guard
+
   // Trigger Local ML Analysis
   const handleAnalyze = useCallback(async () => {
     console.log('[handleAnalyze] 🔍 Analysis triggered', {
@@ -879,8 +1030,16 @@ function App() {
       candlesCount: candles.length,
       hasPendingSignal: !!pendingSignal,
       hasActiveSignal: !!activeSignal,
-      activeSignalOutcome: activeSignal?.outcome
+      activeSignalOutcome: activeSignal?.outcome,
+      isManualOverride // Log guard state
     });
+
+    // CHECK MANUAL OVERRIDE GUARD
+    if (isManualOverride && autoMode) {
+        console.log('[handleAnalyze] ⏸️ PAUSED by Manual Override. Waiting for user resume.');
+        // Show subtle toast occasionally? Or rely on UI banner.
+        return; 
+    }
 
     if (!indicators || candles.length === 0) {
       console.log('[handleAnalyze] ⚠️ Early return: No indicators or candles', {
@@ -990,6 +1149,133 @@ function App() {
     };
   }, [autoMode, isAnalyzing, activeSignal]); // Removed handleAnalyze to prevent restart
 
+  // --- POSITION SYNC WITH BINANCE ---
+  // Periodically check if the active trade still exists on Binance
+  useEffect(() => {
+    let syncInterval: ReturnType<typeof setInterval>;
+
+    const syncActivePosition = async () => {
+      if (!activeSignal || activeSignal.outcome !== 'PENDING') {
+        return;
+      }
+
+      if (!binanceTradingService.isConfigured() || tradingMode === 'paper') {
+        return;
+      }
+
+      try {
+        const tradeSymbol = activeSignal.symbol.replace('/', '').replace(/USD$/, 'USDT');
+        console.log('[Position Sync] Checking Binance position for', tradeSymbol);
+        
+        const positions = await binanceTradingService.getPositions(tradeSymbol);
+        const activePos = positions.find(p => parseFloat(p.positionAmt) !== 0);
+
+        if (!activePos) {
+          // Position closed on Binance but still PENDING locally
+          console.warn('[Position Sync] ⚠️ Position closed on Binance. Determining outcome...');
+          
+          // Check which OCO order executed (if OCO was used)
+          let exitPrice = 0;
+          let outcome: 'WIN' | 'LOSS' = 'LOSS';
+          let closureReason = 'Auto-closed by Binance';
+          
+          if (activeSignal.execution?.orderId && typeof activeSignal.execution.orderId === 'object') {
+            try {
+              // Check remaining open orders
+              const openOrders = await binanceTradingService.getOpenOrders(tradeSymbol);
+              
+              const slOrderExists = openOrders.some(o => o.orderId === activeSignal.execution?.orderId?.stopLoss);
+              const tpOrderExists = openOrders.some(o => o.orderId === activeSignal.execution?.orderId?.takeProfit);
+              
+              console.log('[Position Sync] OCO Status:', { slOrderExists, tpOrderExists });
+              
+              if (!tpOrderExists && slOrderExists) {
+                // TP executed (TP order is gone, SL still exists)
+                exitPrice = activeSignal.takeProfit;
+                outcome = 'WIN';
+                closureReason = 'Take Profit Hit';
+                console.log('[Position Sync] ✅ Take Profit executed');
+              } else if (!slOrderExists && tpOrderExists) {
+                // SL executed (SL order is gone, TP still exists)
+                exitPrice = activeSignal.stopLoss;
+                outcome = 'LOSS';
+                closureReason = 'Stop Loss Hit';
+                console.log('[Position Sync] ❌ Stop Loss executed');
+              } else {
+                // Both gone or manual close - use current price
+                exitPrice = candles.length > 0 ? candles[candles.length - 1].close : activeSignal.entryPrice;
+                closureReason = 'Manual Close or Unknown';
+                console.log('[Position Sync] Manual close detected');
+              }
+            } catch (orderCheckError) {
+              console.warn('[Position Sync] Failed to check orders, using current price:', orderCheckError);
+              exitPrice = candles.length > 0 ? candles[candles.length - 1].close : activeSignal.entryPrice;
+            }
+          } else {
+            // No OCO - use current price
+            exitPrice = candles.length > 0 ? candles[candles.length - 1].close : activeSignal.entryPrice;
+          }
+          
+          // Calculate final PNL
+          const quantity = activeSignal.quantity || 0;
+          const finalPnl = activeSignal.type === 'BUY'
+            ? (exitPrice - activeSignal.entryPrice) * quantity
+            : (activeSignal.entryPrice - exitPrice) * quantity;
+          
+          // Override outcome based on PnL if not already determined
+          if (closureReason === 'Manual Close or Unknown') {
+            outcome = finalPnl >= 0 ? 'WIN' : 'LOSS';
+          }
+
+          // Update trade history
+          const closedTrade: EnhancedExecutedTrade = {
+            ...activeSignal,
+            exitTime: new Date().toISOString(),
+            exitPrice: exitPrice,
+            pnl: finalPnl,
+            outcome: outcome,
+            aiReasoning: activeSignal.reasoning ? `${activeSignal.reasoning} | ${closureReason}` : closureReason
+          };
+
+          setTradeHistory(prev => prev.map(t => t.id === activeSignal.id ? closedTrade : t));
+          storageService.saveTradingLog(closedTrade);
+          
+          // Clear active signal
+          storageService.saveActiveSignal(null, activeSignal.symbol);
+          setActiveSignal(null);
+          
+          showNotification(`${closureReason}: ${finalPnl >= 0 ? '+' : ''}$${finalPnl.toFixed(2)}`, finalPnl >= 0 ? 'success' : 'warning');
+        } else {
+          // Position still exists - optionally update quantity if it changed
+          const binanceQty = Math.abs(parseFloat(activePos.positionAmt));
+          if (activeSignal.quantity && Math.abs(binanceQty - activeSignal.quantity) > 0.001) {
+            console.log('[Position Sync] Quantity mismatch. Updating:', { local: activeSignal.quantity, binance: binanceQty });
+            const updatedSignal = { ...activeSignal, quantity: binanceQty };
+            setActiveSignal(updatedSignal);
+            storageService.saveActiveSignal(updatedSignal, activeSignal.symbol);
+          }
+        }
+      } catch (error: any) {
+        console.error('[Position Sync] Failed to sync position:', error);
+        // Don't show notification for sync errors to avoid spam
+      }
+    };
+
+    // Run sync every 10 seconds if there's an active signal
+    if (activeSignal && activeSignal.outcome === 'PENDING' && tradingMode === 'live') {
+      console.log('[Position Sync] Starting position sync loop (every 10s)');
+      syncActivePosition(); // Run immediately
+      syncInterval = setInterval(syncActivePosition, 10000);
+    }
+
+    return () => {
+      if (syncInterval) {
+        console.log('[Position Sync] Stopping position sync loop');
+        clearInterval(syncInterval);
+      }
+    };
+  }, [activeSignal, tradingMode, candles]);
+
   // --- QUICK TRAIN MODEL (500 Iterations) ---
   const handleQuickTrain = async () => {
     if (isTraining || candles.length < 150) {
@@ -1091,7 +1377,7 @@ function App() {
 
 
   // Execute Trade after Confirmation
-  const confirmTrade = (signalOverride?: TradeSignal) => {
+  const confirmTrade = async (signalOverride?: TradeSignal) => {
     const signal = signalOverride || pendingSignal;
     if (!signal) {
       console.log('[confirmTrade] ❌ No signal to confirm');
@@ -1106,19 +1392,264 @@ function App() {
     }
 
     console.log('[confirmTrade] 🚀 Executing trade:', signal);
+    
+    // Update Last Trade Time
+    lastTradeTimeRef.current = Date.now();
+    
+    // --- 1. SMC & ENTRY STRATEGY (CRITICAL: DETERMINE PRICE FIRST) ---
+    // User Requirement: "Predict dulu akan entry di angka berapa" (Predict entry price first)
+    // Do NOT default to Market Price immediately.
+    
+    let executionType: 'LIMIT' | 'MARKET' = 'MARKET';
+    let entryPrice = 0; // Initialize to 0, must be set by logic below
+    
+    // A. Check Signal's provided Entry Price (if AI predicted a specific level)
+    if (signal.entryPrice && signal.entryPrice > 0) {
+        entryPrice = signal.entryPrice;
+        executionType = 'LIMIT'; // Assume AI gave a limit level
+    }
 
+    // B. SMC Order Block Detection (Overwrites AI price if OB is found for better precision)
+    try {
+        const smcContext = smcService.getSMCContext(candles);
+        const activeOb = smcContext.active_ob;
+        
+        const isBullishSetup = signal.type === 'BUY' && activeOb?.type === 'BULLISH_OB';
+        const isBearishSetup = signal.type === 'SELL' && activeOb?.type === 'BEARISH_OB';
+        
+        if ((isBullishSetup || isBearishSetup) && activeOb) {
+            executionType = 'LIMIT';
+            entryPrice = smcService.getLimitEntryPrice(activeOb, 'AGGRESSIVE');
+            console.log(`[SMC] 🧠 Smart Entry: Found ${activeOb.type} at ${activeOb.top}-${activeOb.bottom}. Setting LIMIT at ${entryPrice}`);
+        } else if (entryPrice === 0) {
+            // Only fallback to Market if NO AI price AND NO OB found
+            // But user said "jangan lakukan ini" (don't default to market). 
+            // However, if we refuse to trade, we miss opportunities.
+            // Compromise: Use current close but mark as 'MARKET' explicitly.
+            entryPrice = candles[candles.length - 1].close;
+            console.log('[SMC] ⚠️ No valid Order Block or AI Entry found. Using Current Market Price.');
+        }
+    } catch (err) {
+        console.error("SMC Detection Error:", err);
+        // Fallback to safe current price if analysis fails
+        entryPrice = candles[candles.length - 1].close;
+    }
+
+    // C. Round Price for Limit Order
+    const tradeSymbol = signal.symbol.replace('/', '').replace(/USD$/, 'USDT');
+    if (executionType === 'LIMIT') {
+        entryPrice = await binanceTradingService.roundPrice(tradeSymbol, entryPrice);
+    }
+    
+    // Validate Entry Price
+    if (!entryPrice || entryPrice <= 0) {
+        showNotification("❌ Error: Could not determine valid Entry Price. Trade aborted.", "error");
+        return; 
+    }
+
+    // --- 1.5 CALCULATE DYNAMIC TP (FIBONACCI) ---
+    // User requested "Dynamic TP (Fibonacci)" to maximize profit based on market structure.
+    // If we have an active OB context, we use it to find the impulse leg and targets.
+    let finalTakeProfit = signal.takeProfit;
+    let fibTargetLevel = 'Manual/AI';
+    
+    try {
+        const smcContext = smcService.getSMCContext(candles);
+        if (smcContext.active_ob) {
+             const fibTargets = smcService.getFibonacciTargets(smcContext.active_ob, candles);
+             
+             // Strategy:
+             // If Current TP is arbitrary (AI predicted), we check if Fib Exp 1.618 is a better structural target.
+             // We prioritize Fib 1.618 (TP2) for max profit if it aligns with direction.
+             
+             const isBuy = signal.type === 'BUY';
+             // Validate if Fib Target is reachable and rational (above entry for buy, below for sell)
+             const isValidBuyTP = isBuy && fibTargets.tp2 > entryPrice;
+             const isValidSellTP = !isBuy && fibTargets.tp2 < entryPrice && fibTargets.tp2 > 0;
+             
+             if (isValidBuyTP || isValidSellTP) {
+                 const newTP = await binanceTradingService.roundPrice(tradeSymbol, fibTargets.tp2);
+                 console.log(`[SMC] 🎯 Dynamic TP update: ${finalTakeProfit} -> ${newTP} (Fib 1.618)`);
+                 finalTakeProfit = newTP;
+                 fibTargetLevel = 'Fib 1.618';
+                 showNotification(`🎯 TP set to Fibonacci 1.618 Extension: ${newTP}`, 'info');
+             }
+        }
+    } catch (e) {
+        console.warn('[SMC] Failed to calc Fib TP:', e);
+    }
+
+    // --- 2. CALCULATE QUANTITY (Based on Predicted Price) ---
+    let quantityAsset = 0;
+    try {
+        console.log(`[Position Sizing] Calculating for ${signal.type} @ ${entryPrice} (SL: ${signal.stopLoss})`);
+        
+        // FUTURESRISKMANAGER returns Quantity in Base Asset (e.g. BTC)
+        const rawQuantity = futuresRiskManager.calculatePositionSize(
+          balance, entryPrice, signal.stopLoss, leverage
+        );
+        
+        // Pass entryPrice for MinNotional check
+        quantityAsset = await binanceTradingService.roundQuantity(tradeSymbol, rawQuantity, entryPrice);
+        
+        // Fallback: If Quantity is 0 (too small) but we have balance, bump to Min Notional (~$6)
+        if (quantityAsset === 0 && balance >= 6) {
+             console.warn(`[Position Sizing] Calculated Qty ${rawQuantity} too small. Bumping to 6 USDT (Min Notional).`);
+             quantityAsset = await binanceTradingService.roundQuantity(tradeSymbol, 6.0 / entryPrice, entryPrice);
+        }
+        
+        console.log(`[Position Sizing] Confirmed Quantity: ${quantityAsset} @ ${entryPrice}`);
+        
+        if (quantityAsset <= 0) {
+             // This is likely where the user saw "Failed to calculate..."
+             // It means even with min notional catch, it's 0.
+             showNotification(`Calculated quantity is too small. Check balance or risk settings.`, "error");
+             return;
+        }
+    } catch (e) {
+        console.error("Position sizing error:", e);
+        showNotification("Failed to calculate position size. Check logs.", "error");
+        return;
+    }
+
+    // --- 3. EXECUTE ON BINANCE (Strict Mode, with Testnet Exception) ---
+    let binanceOrderId: any = null;
+    let executionStatus: 'FILLED' | 'PENDING_LIMIT' = 'FILLED';
+    
+    const settings = storageService.getSettings();
+    const isTestnet = settings?.useTestnet || false;
+    
+    // Allow execution if Live Mode OR (Paper Mode AND Testnet execution enabled)
+    const shouldExecute = binanceTradingService.isConfigured() && (tradingMode === 'live' || (tradingMode === 'paper' && isTestnet));
+    
+    if (shouldExecute) {
+        try {
+            console.log(`[Binance] Placing ${isTestnet ? 'TESTNET' : 'LIVE'} ${signal.type} ${executionType} order for ${quantityAsset} ${tradeSymbol}...`);
+            
+            // Step 0: Set Leverage
+            await binanceTradingService.setLeverage(tradeSymbol, leverage);
+            
+            // Step 1: Place Entry Order (Limit or Market)
+            const orderRes = await binanceTradingService.placeOrder({
+                symbol: tradeSymbol,
+                side: signal.type as 'BUY' | 'SELL',
+                type: executionType,
+                quantity: quantityAsset,
+                price: executionType === 'LIMIT' ? entryPrice : undefined,
+                timeInForce: 'GTC'
+            });
+            
+            if (!orderRes || !orderRes.orderId) {
+                throw new Error("Order response missing orderId");
+            }
+
+            const entryOrderId = orderRes.orderId;
+            console.log(`[Binance] ✅ Entry order placed: ${entryOrderId}`);
+            
+            if (executionType === 'LIMIT') {
+                // For Limit Orders, we DO NOT place OCO yet. We wait for fill.
+                // We just store the order ID and status.
+                binanceOrderId = entryOrderId;
+                executionStatus = 'PENDING_LIMIT';
+                showNotification(`✅ Limit Order Placed on Binance (${isTestnet ? 'Testnet' : 'Live'}) @ ${entryPrice}`, "success");
+            } else {
+                // For Market Orders, we place OCO immediately as before
+                executionStatus = 'FILLED';
+                
+                // Step 2: Place OCO Order (Stop Loss + Take Profit)
+                try {
+                    console.log('[OCO] Placing protective orders...');
+                    
+                    const rawStopPrice = signal.stopLoss;
+                    const rawStopLimitPrice = signal.type === 'BUY' 
+                        ? rawStopPrice * 0.995  // 0.5% below stop
+                        : rawStopPrice * 1.005; // 0.5% above stop
+                    const rawTakeProfitPrice = finalTakeProfit;
+                    
+                    // CRITICAL: Round prices to tickSize
+                    const [stopPrice, stopLimitPrice, takeProfitPrice] = await Promise.all([
+                        binanceTradingService.roundPrice(tradeSymbol, rawStopPrice),
+                        binanceTradingService.roundPrice(tradeSymbol, rawStopLimitPrice),
+                        binanceTradingService.roundPrice(tradeSymbol, rawTakeProfitPrice)
+                    ]);
+                    
+                    const ocoOrder = await binanceTradingService.placeOCOOrder({
+                        symbol: tradeSymbol,
+                        side: signal.type === 'BUY' ? 'SELL' : 'BUY',
+                        quantity: quantityAsset,
+                        price: takeProfitPrice,
+                        stopPrice: stopPrice,
+                        stopLimitPrice: stopLimitPrice
+                    });
+                    
+                    console.log('[OCO] ✅ Protective orders placed:', ocoOrder.orderListId);
+                    
+                    binanceOrderId = {
+                        entry: entryOrderId,
+                        oco: ocoOrder.orderListId,
+                        stopLoss: ocoOrder.orders?.find((o: any) => o.type.includes('STOP'))?.orderId,
+                        takeProfit: ocoOrder.orders?.find((o: any) => o.type === 'LIMIT_MAKER')?.orderId
+                    };
+                    
+                    showNotification(`✅ Trade Opened on Binance (${isTestnet ? 'Testnet' : 'Live'})!`, "success");
+                    
+                } catch (ocoError: any) {
+                    console.error('[OCO] ❌ Failed to place protective orders:', ocoError);
+                    // Rollback logic for Market Orders...
+                    console.warn('[ROLLBACK] Closing entry position due to OCO failure...');
+                    try {
+                        await binanceTradingService.closePosition(tradeSymbol, signal.type === 'BUY' ? quantityAsset : -quantityAsset);
+                        showNotification('❌ Trade Cancelled: Failed to place Stop Loss/Take Profit. Position closed.', 'error');
+                        return;
+                    } catch (rbError) {
+                         console.error('[ROLLBACK] Failed:', rbError);
+                         return;
+                    }
+                }
+            }
+            
+        } catch (error: any) {
+            console.error("Binance Execution Failed:", error);
+            
+            // ERROR HANDLING & FALLBACK
+            if (tradingMode === 'paper') {
+                showNotification("⚠️ Testnet Order Failed: " + (error.message || "Unknown error") + ". Falling back to Paper Trade.", "warning");
+                binanceOrderId = null;
+                executionStatus = 'FILLED'; // Fallback paper trades are always instant filled for now
+            } else {
+                showNotification("❌ Binance Order Failed: " + error.message, "error");
+                return; 
+            }
+        }
+    } else if (tradingMode === 'live' && !binanceTradingService.isConfigured()) {
+         showNotification("API Keys not configured for Live execution", "warning");
+         return; 
+    }
+
+    // --- 4. UPDATE LOCAL STATE ---
     const signalToPersist = { 
+    // ... rest of logic checks out for using signalToPersist variable 
       ...signal, 
       outcome: 'PENDING',
+      quantity: quantityAsset, // Store strict quantity
       execution: {
         status: 'FILLED',
         side: signal.type,
         leverage: leverage,
-        mode: tradingMode
+        margin: balance * (riskPercent / 100),
+        size: quantityAsset,
+        tp: finalTakeProfit,
+        sl: signal.stopLoss,
+        execution_status: executionStatus, // 'PENDING_LIMIT' or 'FILLED'
+        // Determine mode: If we have a binanceOrderId, it was a real execution (Testnet or Live). Otherwise, it's Paper.
+        mode: binanceOrderId ? (isTestnet ? 'testnet' : 'live') : 'paper',
+        orderId: binanceOrderId,
+        tags: [...(signal.tags || []), fibTargetLevel] // Add tag for Fib TP
       }
     };
+    
     setActiveSignal(signalToPersist);
-    storageService.saveActiveSignal(signalToPersist, signal.symbol); // Persist for refresh
+    storageService.saveActiveSignal(signalToPersist, signal.symbol); 
     setPendingSignal(null);
 
     // Send push notification
@@ -1145,8 +1676,8 @@ function App() {
         entryPrice: signal.entryPrice,
         exitPrice: 0, // Will be updated when trade closes
         stopLoss: signal.stopLoss,
-        takeProfit: signal.takeProfit,
-        quantity: 0, // Will be calculated when trade closes
+        takeProfit: finalTakeProfit,
+        quantity: quantityAsset, // Store confirmed quantity
         pnl: 0, // Will be calculated when trade closes
         outcome: 'PENDING',
         source: signal.patternDetected === "Manual Entry" ? "MANUAL" : "AI",
@@ -1186,6 +1717,9 @@ function App() {
 
     showNotification(`Trade executed: ${signal.type} ${signal.symbol} at $${signal.entryPrice.toFixed(2)}`, 'success');
     console.log('[confirmTrade] ✅ Trade execution complete');
+    
+    // Optional: Trigger a custom event to notify other components (like OpenOrders) to refresh?
+    // For now, OpenOrders polls every 5s.
   };
 
   // Manual Close Trade Handler
@@ -1210,9 +1744,6 @@ function App() {
     // LIVE TRADING EXECUTION
     if (tradingMode === 'live') {
         try {
-            // Determine side to close (Opposite of entry)
-            const side = trade.type === 'BUY' ? 'SELL' : 'BUY';
-            
             // Sanitize symbol (Fix potential BTCUSDTT double-suffix issue)
             let cleanSymbol = trade.symbol.replace('/', '').replace(/USD$/, 'USDT');
             if (cleanSymbol.endsWith('USDTT')) {
@@ -1220,22 +1751,29 @@ function App() {
                 console.log(`[Manual Close] Fixed corrupted symbol: ${trade.symbol} -> ${cleanSymbol}`);
             }
 
-            // Execute Market Close Order
-            console.log(`[Manual Close] Executing LIVE ${side} order for ${cleanSymbol}`);
-            await binanceTradingService.placeOrder({
-                symbol: cleanSymbol,
-                side: side,
-                type: 'MARKET',
-                quantity: trade.quantity,
-                reduceOnly: true // Important: Closing position only
-            });
+            // CHECK IF POSITION EXISTS ON BINANCE BEFORE CLOSING
+            // This prevents "Closing" a phantom trade from opening a NEW opposite position
+            const positions = await binanceTradingService.getPositions(cleanSymbol);
+            const activePos = positions.find(p => parseFloat(p.positionAmt) !== 0);
             
-            showNotification(`✅ Position closed on Binance`, 'success');
+            // If no active position found on Binance, DO NOT execute a close order
+            if (!activePos) {
+                 console.warn(`[Manual Close] No active position found on Binance for ${cleanSymbol}. Closing local record only.`);
+                 showNotification(`⚠️ No open position on Binance. Closing local record only.`, 'warning');
+            } else {
+                 // Determine side to close (Opposite of entry)
+                 const side = trade.type === 'BUY' ? 'SELL' : 'BUY';
+                 
+                 // Execute Market Close Order using strict closePosition
+                 console.log(`[Manual Close] Executing LIVE ${side} order for ${cleanSymbol}`);
+                 await binanceTradingService.closePosition(cleanSymbol, activePos.positionAmt);
+                 
+                 showNotification(`✅ Position closed on Binance`, 'success');
+            }
         } catch (error: any) {
             console.error('[Manual Close] Failed to close position on Binance:', error);
             showNotification(`Failed to close on Binance: ${error.message}`, 'error');
-            // Optional: Return here if we want to prevent local update on failure
-            // return; 
+            // We proceed to update local state so user isn't stuck with a "Pending" trade that won't close
         }
     }
     
@@ -1272,6 +1810,15 @@ function App() {
     
     const pnlText = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
     showNotification(`Trade closed manually at $${currentPrice.toFixed(2)}. PNL: ${pnlText}`, pnl >= 0 ? 'success' : 'warning');
+    
+    // Update Last Trade Time
+    lastTradeTimeRef.current = Date.now();
+    
+    // ACTIVATE MANUAL OVERRIDE GUARD
+    if (tradingMode === 'live' || autoMode) {
+        setIsManualOverride(true);
+        showNotification("ℹ️ AI Auto-Trading PAUSED. Click 'Resume' to continue.", "info");
+    }
   }, [tradeHistory, candles, balance, riskPercent, activeSignal, updateBalance, tradingMode]);
 
   const rejectTrade = () => {
@@ -1280,7 +1827,15 @@ function App() {
   };
 
   // Handle Manual Trade
-  const handleManualTrade = async (type: 'BUY' | 'SELL', entryPrice: number, stopLoss: number, takeProfit: number) => {
+  const handleManualTrade = async (
+      type: 'BUY' | 'SELL', 
+      entryPrice: number, 
+      stopLoss: number, 
+      takeProfit: number,
+      orderType: 'MARKET' | 'LIMIT' | 'STOP' = 'MARKET',
+      amountUsd: number = 0,
+      stopPrice: number = 0
+  ) => {
     // Explicitly validate type for Binance
     const validatedType = type === 'BUY' ? 'BUY' : type === 'SELL' ? 'SELL' : null;
     if (!validatedType) {
@@ -1295,83 +1850,112 @@ function App() {
       entryPrice: entryPrice,
       stopLoss: stopLoss,
       takeProfit: takeProfit,
-      reasoning: 'Manual trade entry',
-      confidence: 50,
+      reasoning: `Manual ${orderType} trade`,
+      confidence: 100, // Manual is always 100% confidence
       timestamp: Date.now(),
       outcome: 'PENDING'
     };
 
-    // Calculate Quantity (Asset Units) - UPGRADED TO FUTURES RISK MANAGER
-    const entry = entryPrice || 1; // Prevent div by zero
+    // Calculate Quantity from USDT Amount (User Input)
+    // Fallback to Risk Manager calculation if Amount is 0
+    // Calculate Raw Quantity (Units)
+    let rawQuantity = 0;
     
-    // OLD METHOD (Simple leverage-based):
-    // const positionSizeUsd = balance * leverage * (riskPercent / 100);
+    if (amountUsd > 0) {
+        // User entered USDT Amount -> Convert to Units
+        rawQuantity = amountUsd / entryPrice;
+    } else {
+        // Auto: Risk Manager returns Units (Base Asset)
+        rawQuantity = futuresRiskManager.calculatePositionSize(
+            balance, entryPrice, stopLoss, leverage
+        );
+    }
     
-    // NEW METHOD (Stop-loss-aware position sizing):
-    // This ensures we risk exactly riskPercent% of balance regardless of SL distance
-    const positionSizeUsd = futuresRiskManager.calculatePositionSize(
-      balance,
-      entryPrice,
-      stopLoss,
-      leverage
-    );
-    
-    console.log(`[Position Sizing] Balance: $${balance}, Entry: $${entryPrice}, SL: $${stopLoss}, Leverage: ${leverage}x`);
-    console.log(`[Position Sizing] Calculated Position: $${positionSizeUsd.toFixed(2)}`);
-    
+    console.log(`[Manual Trade] ${orderType} ${type} Raw Qty: ${rawQuantity}`);
+
     // Dynamically round quantity based on Binance LOT_SIZE stepSize
-    // FIX: Use regex to replace USD at the end only, preventing BTCUSDTT
     const tradeSymbol = selectedAsset.symbol.replace('/', '').replace(/USD$/, 'USDT');
-    const quantityAsset = await binanceTradingService.roundQuantity(tradeSymbol, positionSizeUsd / entry);
     
-    console.log(`[Position Sizing] Quantity: ${quantityAsset} ${selectedAsset.symbol.split('/')[0]}`);
+    // Pass entryPrice to enforce MinNotional (e.g. $5 minimum)
+    let quantityAsset = await binanceTradingService.roundQuantity(tradeSymbol, rawQuantity, entryPrice);
     
-    // Safety check: Don't allow 0 or extremely small quantity
+    // Fallback: If Quantity is 0 (too small) but we have balance, bump to Min Notional (~$6)
+    if (quantityAsset === 0 && balance >= 6) {
+         console.warn(`[Manual Trade] Qty too small. Bumping to 6 USDT.`);
+         if (amountUsd > 0 && amountUsd < 5) {
+             showNotification(`Requested ${amountUsd} USDT is below min order. Adjusting to 6 USDT.`, "warning");
+         }
+         quantityAsset = await binanceTradingService.roundQuantity(tradeSymbol, 6.0 / entryPrice, entryPrice);
+    }
+    
+    console.log(`[Manual Trade] Final Rounded Qty: ${quantityAsset}`);
+    
     if (quantityAsset <= 0) {
-        showNotification(`Insufficient balance ($${balance.toFixed(2)}) or risk to open position.`, "error");
-        return;
+         showNotification(`Amount too small for valid quantity (Min ~5 USDT).`, "error");
+         return;
     }
-    
-    // Validate liquidation risk
-    const side: 'LONG' | 'SHORT' = validatedType === 'BUY' ? 'LONG' : 'SHORT';
-    const liqInfo = liquidationCalculator.validateTrade(entryPrice, stopLoss, leverage, side);
-    
-    if (liqInfo.riskLevel === 'EXTREME') {
-      showNotification(`⚠️ Liquidation Risk: ${liqInfo.warningMessage}`, "error");
-      console.error('[Liquidation Risk] Trade blocked:', liqInfo);
-      return;
-    }
-    
-    if (liqInfo.riskLevel === 'HIGH') {
-      showNotification(`⚠️ High Liquidation Risk: ${liqInfo.warningMessage}`, "warning");
-    }
-    
-    console.log(`[Liquidation] Price: $${liqInfo.liquidationPrice}, Risk: ${liqInfo.riskLevel}, Safety: ${liqInfo.safetyMargin.toFixed(1)}%`);
     
     // Execute on Binance (if configured/Testnet)
+    let binanceOrderId = null;
     if (binanceTradingService.isConfigured()) {
         try {
-            // Format symbol (remove /) and fix USD -> USDT safely
             const tradeSymbol = newSignal.symbol.replace('/', '').replace(/USD$/, 'USDT');
             
-            // Execute Market Order
-            await binanceTradingService.placeOrder({
+            // Map parameters for Binance Order
+            // FUTURE SPECIFIC: STOP_MARKET is used for stop loss triggers without limit price
+            // STOP typically maps to STOP_MARKET for simplicity in this UI
+            const finalOrderType = orderType === 'STOP' ? 'STOP_MARKET' : orderType;
+            
+            const orderParams: any = {
                 symbol: tradeSymbol,
                 side: newSignal.type as 'BUY' | 'SELL',
-                type: 'MARKET',
-                quantity: quantityAsset 
-            });
-            showNotification("Order executed on Binance!", "success");
+                type: finalOrderType,
+                quantity: quantityAsset
+            };
+
+            // Add conditional params
+            if (orderType === 'LIMIT') {
+                orderParams.price = entryPrice;
+                orderParams.timeInForce = 'GTC';
+            } else if (orderType === 'STOP') {
+                orderParams.stopPrice = stopPrice || entryPrice; // The trigger price
+                // For STOP_MARKET, 'price' is NOT sent.
+            }
+
+            console.log(`[Binance] Placing ${finalOrderType} order:`, orderParams);
+            
+            const orderRes = await binanceTradingService.placeOrder(orderParams);
+            binanceOrderId = orderRes.orderId;
+            showNotification(`Order Executed! ID: ${binanceOrderId}`, "success");
+            
+            // If NOT Market, we don't set Active Signal locally (it's pending in OrderBook)
+            if (orderType !== 'MARKET') {
+                 showNotification("Order placed in Waiting List (Open Orders).", "info");
+                 setShowManualModal(false);
+                 return; 
+            }
+
         } catch (error: any) {
             console.error("Binance Execution Failed:", error);
             showNotification("Binance Order Failed: " + error.message, "error");
-            // Return to prevent local state update if backend fails
             return;
         }
     }
 
+    
+    // Validate liquidation risk (For Display Only since order is sent)
+    // const side: 'LONG' | 'SHORT' = validatedType === 'BUY' ? 'LONG' : 'SHORT';
+    // const liqInfo = liquidationCalculator.validateTrade(entryPrice, stopLoss, leverage, side);
+    
+    /* 
+       MARKET ORDER LOGIC (Only runs if type is MARKET)
+       We assume 'filled' instantly for UI purposes if API succeeded.
+    */
 
     // Add metadata with liquidation info for UI display
+    const validSide: 'LONG' | 'SHORT' = newSignal.type === 'BUY' ? 'LONG' : 'SHORT';
+    const liqInfo = liquidationCalculator.validateTrade(entryPrice, stopLoss, leverage, validSide);
+
     const signalWithQty = { 
       ...newSignal, 
       quantity: quantityAsset,
@@ -1379,7 +1963,13 @@ function App() {
         status: 'FILLED',
         side: newSignal.type,
         leverage: leverage,
-        mode: tradingMode
+        margin: balance * (riskPercent / 100),
+        size: quantityAsset,
+        tp: takeProfit,
+        sl: stopLoss,
+        execution_status: 'FILLED',
+        mode: tradingMode,
+        orderId: binanceOrderId
       },
       meta: {
         liquidation_info: liqInfo,
@@ -1391,6 +1981,7 @@ function App() {
     setShowManualModal(false);
 
     // Send push notification for manual trade
+    const positionSizeUsd = balance * leverage * (riskPercent / 100);
     NotificationService.sendTradeNotification({
       symbol: newSignal.symbol,
       type: newSignal.type as 'BUY' | 'SELL',
@@ -2199,14 +2790,42 @@ function App() {
               {/* MIDDLE COLUMN: Signal & Alerts */}
               <div className={`lg:col-span-1 space-y-3 md:space-y-4 flex-col lg:overflow-y-auto ${terminalTab === 'trade' ? 'flex' : 'hidden lg:flex'}`}>
                 {/* Active Signal Card */}
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-lg relative overflow-hidden group shrink-0">
-                  <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/5 rounded-full blur-3xl group-hover:bg-blue-500/10 transition-all"></div>
+                <div className={`bg-slate-900 border ${isManualOverride ? 'border-amber-500/50' : 'border-slate-800'} rounded-xl p-4 shadow-lg relative overflow-hidden group shrink-0`}>
+                  <div className={`absolute top-0 right-0 w-32 h-32 ${isManualOverride ? 'bg-amber-500/5 group-hover:bg-amber-500/10' : 'bg-blue-500/5 group-hover:bg-blue-500/10'} rounded-full blur-3xl transition-all`}></div>
 
-                  <h2 className="text-slate-400 text-xs font-bold tracking-wider mb-4 flex items-center gap-2 relative z-10">
-                    <Target className="w-4 h-4 text-blue-400" /> ACTIVE TRADE
+                  <h2 className={`text-slate-400 text-xs font-bold tracking-wider mb-4 flex items-center gap-2 relative z-10 ${isManualOverride ? 'text-amber-400' : ''}`}>
+                    {isManualOverride ? (
+                        <>
+                            <PauseCircle className="w-4 h-4 text-amber-500" /> AI PAUSED (MANUAL CLOSE)
+                        </>
+                    ) : (
+                        <>
+                            <Target className="w-4 h-4 text-blue-400" /> ACTIVE TRADE
+                        </>
+                    )}
                   </h2>
 
-                  {activeSignal && activeSignal.outcome === 'PENDING' && activeSignal.symbol === selectedAsset.symbol ? (
+                  {/* MANUAL OVERRIDE WARNING & RESUME BUTTON */}
+                  {isManualOverride ? (
+                    <div className="relative z-10 flex flex-col items-center gap-4 py-2">
+                        <div className="text-center space-y-1">
+                            <p className="text-sm font-bold text-slate-200">Auto-Trading is Paused</p>
+                            <p className="text-xs text-slate-500">You manually closed a trade. AI is waiting for your command to resume.</p>
+                        </div>
+                        
+                        <button 
+                            onClick={() => {
+                                setIsManualOverride(false);
+                                showNotification("✅ AI Auto-Trading Resumed", "success");
+                            }}
+                            className="w-full py-3 bg-amber-500 hover:bg-amber-600 text-black font-bold rounded-lg transition-colors flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20"
+                        >
+                            <PlayCircle className="w-5 h-5" />
+                            RESUME AUTO-TRADING
+                        </button>
+                    </div>
+                  ) : (
+                    activeSignal && activeSignal.outcome === 'PENDING' && activeSignal.symbol === selectedAsset.symbol ? (
                     <div className="space-y-4 relative z-10">
                       <div className="flex justify-between items-end">
                         <span className={`text-3xl font-black tracking-tight ${activeSignal.type === 'BUY' ? 'text-emerald-400' : activeSignal.type === 'SELL' ? 'text-rose-400' : 'text-yellow-400'}`}>
@@ -2259,7 +2878,7 @@ function App() {
                               </div>
                               <div className="text-right">
                                 <div className="text-xs font-mono text-slate-200">
-                                  ${activeSignal.meta.liquidation_info.liquidationPrice.toLocaleString()}
+                                  ${activeSignal.meta.liquidation_info.liquidationPrice != null ? activeSignal.meta.liquidation_info.liquidationPrice.toLocaleString() : '-'}
                                 </div>
                                 <div className={`text-[9px] font-bold ${
                                   activeSignal.meta.liquidation_info.riskLevel === 'SAFE' ? 'text-emerald-400' :
@@ -2357,15 +2976,83 @@ function App() {
                             onClick={async () => {
                                 if (!activeSignal) return;
                                 try {
-                                    const tradeSymbol = activeSignal.symbol.replace('/', '').replace('USD', 'USDT');
+                                    // Fix symbol: Remove slash. If it ends in USD but NOT USDT, append T.
+                                    let tradeSymbol = activeSignal.symbol.replace('/', '');
+                                    if (tradeSymbol.endsWith('USD') && !tradeSymbol.endsWith('USDT')) {
+                                        tradeSymbol += 'T';
+                                    }
+                                    
+                                    // STEP 1: Cancel OCO orders if they exist
+                                    if (activeSignal.execution?.orderId && typeof activeSignal.execution.orderId === 'object') {
+                                        try {
+                                            console.log('[Manual Close] Cancelling OCO orders...');
+                                            await binanceTradingService.cancelAllOrders(tradeSymbol);
+                                            console.log('[Manual Close] ✅ OCO orders cancelled');
+                                        } catch (cancelError: any) {
+                                            console.warn('[Manual Close] Failed to cancel OCO:', cancelError);
+                                            // Continue anyway - market close will override
+                                        }
+                                    }
+                                    
                                     const closeSide = activeSignal.type === 'BUY' ? 'SELL' : 'BUY';
                                     
-                                    // Dynamically round quantity based on Binance LOT_SIZE stepSize
-                                    const roundedQty = await binanceTradingService.roundQuantity(tradeSymbol, activeSignal.quantity || 0);
+                                    // Ensure we have a valid quantity
+                                    let qty = activeSignal.quantity || 0;
+                                    if (qty === 0 && activeSignal.execution?.size) {
+                                         qty = activeSignal.execution.size;
+                                    }
+
+                                    // NEW: Fallback to fetch ACTUAL position from Binance if local is 0
+                                    let actualSide = closeSide;
                                     
+                                    if (qty === 0) {
+                                        try {
+                                             // showNotification("Syncing position with Binance...", "info");
+                                             const positions = await binanceTradingService.getPositions(tradeSymbol);
+                                             const pos = positions.find(p => p.symbol === tradeSymbol && parseFloat(p.positionAmt) !== 0);
+                                             
+                                             if (pos) {
+                                                 const amt = parseFloat(pos.positionAmt);
+                                                 qty = Math.abs(amt);
+                                                 // Determine close side: If Long (pos > 0), we SELL. If Short (pos < 0), we BUY.
+                                                 actualSide = amt > 0 ? 'SELL' : 'BUY';
+                                                 console.log(`[Close] Found active position on Binance: ${qty} (${actualSide})`);
+                                             } else {
+                                                 const confirmClear = window.confirm(
+                                                     "No open position found on Binance for this symbol.\n\nClick OK to clear this 'stuck' signal locally."
+                                                 );
+                                                 if (confirmClear) {
+                                                     handleExternalTradeClosed(activeSignal.id, 0, 0, 0); 
+                                                     showNotification("Local signal cleared.", "success");
+                                                 }
+                                                 return;
+                                             }
+                                        } catch (e: any) {
+                                            console.error("[Close] Failed to fetch position:", e);
+                                            showNotification("Error syncing position: " + (e.message || e), "error");
+                                            return;
+                                        }
+                                    }
+                                    
+                                    // Dynamically round quantity based on Binance LOT_SIZE stepSize
+                                    const roundedQty = await binanceTradingService.roundQuantity(tradeSymbol, qty);
+                                    
+                                    if (Number(roundedQty) === 0) {
+                                        showNotification("Cannot close: Quantity is 0", "error");
+                                        return;
+                                    }
+
+                                    console.log("[Close] Attempting to close", {
+                                        original: activeSignal.symbol,
+                                        tradeSymbol,
+                                        qty: qty,
+                                        roundedQty,
+                                        side: actualSide
+                                    });
+
                                     await binanceTradingService.placeOrder({
                                         symbol: tradeSymbol,
-                                        side: closeSide,
+                                        side: actualSide as 'BUY' | 'SELL',
                                         type: 'MARKET',
                                         quantity: roundedQty
                                     });
@@ -2438,7 +3125,7 @@ function App() {
                         </button>
                       </div>
                     </div>
-                  )}
+                  ))}
                 </div>
 
                 {/* Tier 7: AI Engine Status */}

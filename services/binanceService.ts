@@ -210,10 +210,10 @@ export async function fetchTopAssets(): Promise<Asset[]> {
         console.log('[Binance] 🔄 Fetching Exchange Info & Ticker Data...');
         
         // 1. Get Exchange Info (to filter for TRADING status and USDT margin)
-        // Proxy: /api/proxy/exchangeInfo
+        // Proxy: /api/proxy/fapi/v1/exchangeInfo
         const isTestnet = getApiConfig().apiBase.includes('testnet');
         const querySuffix = isTestnet ? '?testnet=true' : '';
-        const exchangeInfoUrl = `${LOCAL_PROXY_API}/exchangeInfo${querySuffix}`;
+        const exchangeInfoUrl = `${LOCAL_PROXY_API}/fapi/v1/exchangeInfo${querySuffix}`;
         const exchangeInfoRes = await fetchWithTimeout(exchangeInfoUrl, {}, 10000);
         
         if (!exchangeInfoRes.ok) throw new Error('Failed to fetch exchange info');

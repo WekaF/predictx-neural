@@ -46,7 +46,12 @@ export const smcService = {
 
     /**
      * Identifies Order Blocks based on Break of Structure (BOS)
+     * Aliased as detectOrderBlocks for clarity
      */
+    detectOrderBlocks(candles: Candle[]): OrderBlock[] {
+        return this.findSMCStructures(candles);
+    },
+
     findSMCStructures(candles: Candle[]): OrderBlock[] {
         const { highs, lows } = this.detectSwingPoints(candles);
         const orderBlocks: OrderBlock[] = [];
@@ -105,6 +110,64 @@ export const smcService = {
     },
 
     /**
+     * Calculate optimal Limit Order Entry Price from an Order Block
+     * For Bullish OB: Entry is at the Top (Proximal Line) or 50% retracement
+     * For Bearish OB: Entry is at the Bottom (Proximal Line) or 50% retracement
+     */
+    getLimitEntryPrice(ob: OrderBlock, aggression: 'AGGRESSIVE' | 'CONSERVATIVE' = 'AGGRESSIVE'): number {
+        if (ob.type === 'BULLISH_OB') {
+            // Aggressive: Top of OB
+            // Conservative: 50% of OB (Midpoint)
+            if (aggression === 'AGGRESSIVE') return ob.top;
+            return (ob.top + ob.bottom) / 2;
+        } else {
+            // Bearish OB
+            // Aggressive: Bottom of OB
+            // Conservative: 50% of OB
+            if (aggression === 'AGGRESSIVE') return ob.bottom;
+            return (ob.top + ob.bottom) / 2;
+        }
+    },
+
+    /**
+     * Calculate Fibonacci Extension Targets based on the Impulse Leg formed by the Order Block
+     */
+    getFibonacciTargets(ob: OrderBlock, candles: Candle[]): { tp1: number, tp2: number, tp3: number } {
+        // 1. Find the highest/lowest point occurring AFTER the Order Block
+        // The OB index is where the OB candle formed. The move happened after.
+        const relevantCandles = candles.slice(ob.index + 1);
+        
+        if (relevantCandles.length === 0) {
+            // Fallback if OB is the very last candle (unlikely for entry)
+            return { tp1: 0, tp2: 0, tp3: 0 };
+        }
+
+        if (ob.type === 'BULLISH_OB') {
+            // Impulse Leg: Low (OB) -> High (Peak after OB)
+            const low = ob.bottom;
+            const high = Math.max(...relevantCandles.map(c => c.high));
+            const range = high - low;
+
+            return {
+                tp1: high, // Liquidity Run (Swing High)
+                tp2: high + (range * 0.618), // 1.618 Extension
+                tp3: high + (range * 1.0)    // 2.0 Extension (1:2 R:R usually)
+            };
+        } else {
+            // Impulse Leg: High (OB) -> Low (Trough after OB)
+            const high = ob.top;
+            const low = Math.min(...relevantCandles.map(c => c.low));
+            const range = high - low;
+
+            return {
+                tp1: low, // Liquidity Run (Swing Low)
+                tp2: low - (range * 0.618), // 1.618 Extension
+                tp3: low - (range * 1.0)    // 2.0 Extension
+            };
+        }
+    },
+
+    /**
      * Get SMC Context for current market state
      */
     getSMCContext(candles: Candle[]): SMCContext {
@@ -124,20 +187,25 @@ export const smcService = {
         const bullishObs = obs.filter(ob => ob.type === 'BULLISH_OB');
         if (bullishObs.length > 0) {
             const latestOb = bullishObs[bullishObs.length - 1]; // Most recent
-            // Check if price is within OB or slightly above (retest zone)
-            if (close >= latestOb.bottom && close <= latestOb.top * 1.01) {
-                score = 0.8; // Bullish Conviction
+            // Check if price is approaching OB (within 1.5% range) or inside
+            // Expanded range to catch "Near OB" for Limit Order placement
+            const distance = (close - latestOb.top) / latestOb.top;
+            
+            if (close >= latestOb.bottom && distance <= 0.015) {
+                score = 0.8; // Bullish Conviction (Buy Limit Zone)
                 activeOb = latestOb;
             }
         }
 
-        // Check for Bearish OB Retest (wins if more recent? simplistic logic for now)
+        // Check for Bearish OB Retest
         const bearishObs = obs.filter(ob => ob.type === 'BEARISH_OB');
         if (bearishObs.length > 0) {
             const latestOb = bearishObs[bearishObs.length - 1];
             if (!activeOb || latestOb.index > activeOb.index) { // Priority to most recent
-                if (close <= latestOb.top && close >= latestOb.bottom * 0.99) {
-                    score = 0.2; // Bearish Conviction
+                const distance = (latestOb.bottom - close) / latestOb.bottom;
+                
+                if (close <= latestOb.top && distance <= 0.015) {
+                    score = 0.2; // Bearish Conviction (Sell Limit Zone)
                     activeOb = latestOb;
                 }
             }

@@ -41,6 +41,13 @@ export interface TradeSignal {
     tp: number;
     sl: number;
     execution_status: string;
+    mode?: 'paper' | 'live';
+    orderId?: number | {
+      entry?: number;
+      oco?: number;
+      stopLoss?: number;
+      takeProfit?: number;
+    };
   };
   marketContext?: MarketContext;
   quantity?: number; // Added for real execution tracking

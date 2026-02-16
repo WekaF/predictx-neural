@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { RefreshCw, Trash2, ExternalLink, AlertCircle, Layers, List } from 'lucide-react';
+import { RefreshCw, Trash2, ExternalLink, AlertCircle, Layers, List, XCircle } from 'lucide-react';
 import binanceTradingService from '../services/binanceTradingService';
 
 interface OpenOrder {
@@ -199,6 +199,9 @@ export const OpenOrders: React.FC<OpenOrdersProps> = ({ onTradeClosed }) => {
                          <td className="px-4 py-2">
                              <div className="font-bold text-slate-300">{pos.symbol}</div>
                              <div className="text-[10px] text-slate-500 flex items-center gap-1">
+                                 <span className={`font-bold px-1 rounded ${isLong ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
+                                     {isLong ? 'LONG' : 'SHORT'}
+                                 </span>
                                  <span className="bg-slate-800 px-1 rounded">{pos.leverage}x</span>
                                  <span>{pos.marginType === 'isolated' ? 'Isolated' : 'Cross'}</span>
                              </div>
@@ -226,10 +229,11 @@ export const OpenOrders: React.FC<OpenOrdersProps> = ({ onTradeClosed }) => {
                          <td className="px-4 py-2 text-center">
                             <button 
                                 onClick={() => handleClosePosition(pos.symbol, pos.positionAmt)}
-                                className="p-1 hover:bg-rose-500/20 text-slate-500 hover:text-rose-400 rounded transition-colors"
+                                className="flex items-center justify-center gap-1 px-2 py-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 rounded transition-colors text-[10px] font-bold"
                                 title="Close Position (Market)"
                             >
-                                <Trash2 className="w-3.5 h-3.5" />
+                                <XCircle className="w-3.5 h-3.5" />
+                                Close
                             </button>
                          </td>
                        </tr>

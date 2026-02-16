@@ -232,7 +232,7 @@ BINANCE_API_BASE = "https://fapi.binance.com"
 
 # Futures Testnet Endpoints
 BINANCE_WS_TESTNET = "wss://stream.binancefuture.com/ws"
-BINANCE_API_TESTNET = "https://demo-fapi.binance.com"
+BINANCE_API_TESTNET = "https://testnet.binancefuture.com"
 
 @app.websocket("/ws/proxy/{stream}")
 async def websocket_proxy(websocket: WebSocket, stream: str):
@@ -298,10 +298,19 @@ async def proxy_request(path: str, request: Request):
     
     url = f"{base_url}/{path}"
     
-    # Forward query parameters (remove testnet flag)
-    params = dict(request.query_params)
-    if 'testnet' in params:
-        del params['testnet']
+    # Use raw query string to preserve parameter order for signature verification!
+    query_string = request.scope["query_string"].decode("utf-8")
+    
+    # Remove testnet param from query string safely
+    # It could be "?testnet=true", "&testnet=true", "testnet=true&"
+    params_str = query_string.replace('testnet=true', '').replace('testnet=false', '')
+    
+    # Clean up double && or trailing/leading ?/&
+    params_str = params_str.replace('&&', '&').strip('&')
+    
+    # Append to URL directly
+    if params_str:
+        url += f"?{params_str}"
         
     # Get Body for POST (if any)
     # Note: Binance mostly uses query params for signed requests, even POST.
@@ -322,7 +331,7 @@ async def proxy_request(path: str, request: Request):
     
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.request(request.method, url, params=params, json=body, headers=headers) as resp:
+            async with session.request(request.method, url, params=None, json=body, headers=headers) as resp:
                 # Read content
                 content = await resp.read()
                 

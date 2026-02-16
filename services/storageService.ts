@@ -522,6 +522,10 @@ export const storageService = {
     }
   },
 
+  clearActiveSignal: (symbol?: string) => {
+    storageService.saveActiveSignal(null, symbol);
+  },
+
   // --- Trading Journal (NEW) ---
   getTradingLogs: (): any[] => {
     try {
