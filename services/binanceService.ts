@@ -232,7 +232,7 @@ export async function fetchTopAssets(): Promise<Asset[]> {
 
         // 2. Get 24hr Ticker (for Volume sorting)
         // Proxy: /api/proxy/ticker/24hr
-        const tickerUrl = `${LOCAL_PROXY_API}/ticker/24hr${querySuffix}`;
+        const tickerUrl = `${LOCAL_PROXY_API}/fapi/v1/ticker/24hr${querySuffix}`;
         const tickerRes = await fetchWithTimeout(tickerUrl, {}, 10000);
         
         if (!tickerRes.ok) throw new Error('Failed to fetch ticker data');
@@ -326,7 +326,7 @@ export async function getHistoricalKlines(
         const isTestnet = getApiConfig().apiBase.includes('testnet');
         if (isTestnet) query += `&testnet=true`;
         
-        const proxyUrl = `${LOCAL_PROXY_API}/klines?${query}`;
+        const proxyUrl = `${LOCAL_PROXY_API}/fapi/v1/klines?${query}`;
         
         console.log(`[Binance] Fetching from Proxy: ${proxyUrl}`);
         const response = await fetchWithTimeout(proxyUrl, {}, 10000);
@@ -516,7 +516,7 @@ export const getOrderBook = async (symbol: string, limit: number = 10) => {
         // Proxy: /api/proxy/depth?symbol=BTCUSDT&limit=10
         const isTestnet = getApiConfig().apiBase.includes('testnet');
         const querySuffix = isTestnet ? '&testnet=true' : '';
-        const proxyUrl = `${LOCAL_PROXY_API}/depth?symbol=${binanceSymbol}&limit=${limit}${querySuffix}`;
+        const proxyUrl = `${LOCAL_PROXY_API}/fapi/v1/depth?symbol=${binanceSymbol}&limit=${limit}${querySuffix}`;
         const response = await fetchWithTimeout(proxyUrl, {}, 5000);
         
         if (!response.ok) throw new Error('Failed to fetch order book');

@@ -15,6 +15,7 @@ const CORS_PROXIES = [
 // Binance API Configuration with Testnet Support
 const BINANCE_PRODUCTION_API = 'https://api.binance.com';
 const BINANCE_TESTNET_API = 'https://demo-fapi.binance.com';
+const LOCAL_PROXY_API = 'http://127.0.0.1:8000/api/proxy';
 
 // Local cache for symbol stepSize (LOT_SIZE filter)
 const symbolStepSizeCache = new Map<string, number>();
@@ -32,11 +33,8 @@ function getApiBase(): string {
         const useTestnet = settings ? JSON.parse(settings).useTestnet : true;
         
         if (useTestnet) {
-            console.log('[Binance Trading] 🧪 Using s mode');
-            // Use relative path if likely in a Vercel-like environment with rewrites
-            // In dev (Vite), /api/testnet is handled by vite.config.ts
-            // In prod, it should be handled by vercel.json or similar
-            return '/api/testnet';
+            console.log('[Binance Trading] 🧪 Using TESTNET mode via Backend Proxy');
+            return LOCAL_PROXY_API;
         }
     } catch (e) {
         console.warn('[Binance Trading] Failed to read testnet setting, using production');
@@ -94,19 +92,18 @@ function generateSignature(queryString: string): string {
  * Helper to fetch with CORS proxy fallback
  */
 async function fetchWithProxy(url: string, options: RequestInit = {}): Promise<Response> {
-    // 0. If using local proxy (Vite), just fetch directly
+    // 0. If using local proxy (Vite), try first but allow fallback
     if (url.startsWith('/')) {
         console.log(`[Binance] Fetching via local proxy: ${url}`);
-        const response = await fetch(url, options);
-        if (!response.ok) {
+        try {
+            const response = await fetch(url, options);
+            if (response.ok) return response;
+            
             const text = await response.text();
-            if (response.status === 403) {
-                console.error('[Binance Proxy] 403 Forbidden. Likely Geo-block.', text);
-                throw new Error(`🚫 Access Denied (403). Binance Futures API is blocked in your region. \n\n➡️ SOLUTION: Please ENABLE A VPN (e.g., to Singapore/Japan) and try again.`);
-            }
-            throw new Error(`Local Proxy Error: ${response.status} - ${text}`);
+            console.warn(`[Binance] Local Proxy failed (${response.status}): ${text.substring(0, 100)}... Switching to CORS proxies.`);
+        } catch (e) {
+            console.warn(`[Binance] Local Proxy network error. Switching to CORS proxies.`, e);
         }
-        return response;
     }
 
     // 1. Try direct request first (for production or non-proxy envs)
@@ -176,19 +173,40 @@ function formatParameter(val: any): string {
 /**
  * Get Binance server time to sync timestamps
  */
+// ...
 let serverTimeOffset = 0;
-async function syncServerTime(): Promise<void> {
+let isTimeSynced = false;
+
+/**
+ * Get Binance server time to sync timestamps
+ */
+export async function syncServerTime(force = false): Promise<void> {
+    if (isTimeSynced && !force) return;
+
     try {
-        const url = `${getApiBase()}/api/v3/time`;
+        console.log('[Binance Auth] ⏳ Syncing server time...');
+        
+        let baseUrl = getApiBase();
+        // If production/fallback logic touches this, map correctly
+        if (baseUrl === '/api/binance') baseUrl = '/api/futures'; 
+
+        // Use Futures time endpoint (Root + /fapi/v1/time)
+        const url = `${baseUrl}/fapi/v1/time`;
+        
         const response = await fetchWithProxy(url);
         const data = await response.json();
         const serverTime = data.serverTime;
         const localTime = Date.now();
+        
+        // Calculate offset
         serverTimeOffset = serverTime - localTime;
-        console.log(`[Binance Auth] ⏰ Time synced. Offset: ${serverTimeOffset}ms`);
+        isTimeSynced = true;
+        
+        console.log(`[Binance Auth] ⏰ Time synced. Offset: ${serverTimeOffset}ms (Server: ${serverTime}, Local: ${localTime})`);
     } catch (error) {
         console.error('[Binance Auth] ❌ Could not sync server time:', error);
-        // Don't swallow error, let it propagate or keep previous offset
+        // Fallback: subtract 1000ms to be safe against "ahead" errors
+        if (!isTimeSynced) serverTimeOffset = -1000;
     }
 }
 
@@ -210,11 +228,13 @@ async function authenticatedRequest(
     await syncServerTime();
 
     // Add timestamp with server offset
-    const timestamp = Date.now() + serverTimeOffset;
+    // Subtract extra 1000ms buffer to ensure we are never "ahead" of server
+    const timestamp = Date.now() + serverTimeOffset - 1000;
+    
     const queryParams = {
         ...params,
         timestamp,
-        recvWindow: 60000 // 60 second window to account for network delays
+        recvWindow: 20000 // 20 second window (Deflt 5s) to allow for network/proxy delays
     };
 
     // Create query string using formatParameter helper
@@ -228,29 +248,36 @@ async function authenticatedRequest(
 
     // Determine Base URL based on endpoint type (Spot vs Futures)
     let baseUrl = getApiBase();
+    let finalEndpoint = endpoint;
+    const isBackendProxy = baseUrl === LOCAL_PROXY_API;
     
     // If endpoint starts with /fapi, usage of Futures Proxy is required
     if (endpoint.startsWith('/fapi')) {
-        const isTestnet = getApiCredentials().apiKey.includes('test'); // Hacky check or reuse isTestnet logic
-        // Better: Check settings again or pass isTestnet param
-        // For now, let's assume if getApiBase returns /api/testnet, it stays /api/testnet (but we need to ensure testnet target is correct)
-        
         if (baseUrl === '/api/binance') {
             baseUrl = '/api/futures';
         }
+        
+        // Backend Proxy now points to Root (https://demo-fapi.binance.com)
+        // So we keep the full /fapi/v1/... or /fapi/v2/... path
     }
 
     // Make request - use dynamic API base with CORS proxy fallback
-    const url = `${baseUrl}${endpoint}?${signedQueryString}`;
+    let url = `${baseUrl}${finalEndpoint}?${signedQueryString}`;
     
-    console.log(`[Binance Auth] ${method} ${endpoint}`);
-    if (method === 'POST') console.log('[Binance Auth] Body Params:', queryParams);
+    if (isBackendProxy) {
+        url += '&testnet=true';
+    }
+    
+    console.log(`[Binance Auth] ${method} ${finalEndpoint} (via ${isBackendProxy ? 'Backend Proxy' : 'Direct/Vite'})`);
+    if (method === 'POST') console.log('[Binance Auth] Params:', queryParams);
 
     try {
-        const response = await fetchWithProxy(baseUrl, {
+        const response = await fetchWithProxy(url, {
             method,
             headers: {
-                'X-MBX-APIKEY': apiKey
+                'X-MBX-APIKEY': apiKey,
+                // Add Content-Type for POST (even if body is empty, good practice)
+                 ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {})
             }
         });
 
@@ -279,9 +306,34 @@ export async function getAccountInfo(): Promise<any> {
 /**
  * Get account balances
  */
+/**
+ * Get account balances
+ * Handles both Spot (balances) and Futures (assets) response structures
+ */
 export async function getAccountBalances(): Promise<any[]> {
     const accountInfo = await getAccountInfo();
-    return accountInfo.balances.filter((b: any) => parseFloat(b.free) > 0 || parseFloat(b.locked) > 0);
+    
+    // Handle Futures API (uses 'assets')
+    if (accountInfo.assets && Array.isArray(accountInfo.assets)) {
+        console.log('[Binance Auth] Detected Futures Account assets');
+        return accountInfo.assets
+            .filter((a: any) => parseFloat(a.walletBalance) > 0 || parseFloat(a.marginBalance) > 0)
+            .map((a: any) => ({
+                asset: a.asset,
+                free: a.availableBalance, // Available for trade
+                locked: (parseFloat(a.walletBalance) - parseFloat(a.availableBalance)).toFixed(8),
+                marginBalance: a.marginBalance, // Total Equity (Wallet + Unrealized PNL)
+                unrealizedPNL: a.unrealizedProfit
+            }));
+    }
+
+    // Handle Spot API (uses 'balances')
+    if (accountInfo.balances && Array.isArray(accountInfo.balances)) {
+        return accountInfo.balances.filter((b: any) => parseFloat(b.free) > 0 || parseFloat(b.locked) > 0);
+    }
+    
+    console.warn('[Binance Auth] No balances or assets found in account info');
+    return [];
 }
 
 /**
@@ -303,6 +355,35 @@ export async function getAllOrders(symbol: string, limit: number = 500): Promise
     const data = await authenticatedRequest('/fapi/v1/allOrders', 'GET', { symbol, limit });
     console.log(`[Binance Auth] ✅ Found ${data.length} orders`);
     return data;
+}
+
+/**
+ * Get a specific open order (as requested by user)
+ * Endpoint: /fapi/v1/openOrder
+ */
+export async function getOpenOrder(symbol: string, orderId: number): Promise<any> {
+    console.log(`[Binance Auth] Fetching order ${orderId} for ${symbol}...`);
+    const data = await authenticatedRequest('/fapi/v1/openOrder', 'GET', { symbol, orderId });
+    console.log(`[Binance Auth] ✅ Order status: ${data.status}`);
+    return data;
+}
+
+/**
+ * Get current open positions (Risk)
+ * Endpoint: /fapi/v2/positionRisk
+ */
+export async function getPositions(symbol?: string): Promise<any[]> {
+    console.log('[Binance Auth] Fetching positions...');
+    const params = symbol ? { symbol } : {};
+    const data = await authenticatedRequest('/fapi/v2/positionRisk', 'GET', params);
+    
+    // Filter out empty positions
+    const activePositions = Array.isArray(data) 
+        ? data.filter((p: any) => parseFloat(p.positionAmt) !== 0)
+        : [];
+        
+    console.log(`[Binance Auth] ✅ Found ${activePositions.length} active positions`);
+    return activePositions;
 }
 
 /**
@@ -417,18 +498,57 @@ export async function cancelOrder(symbol: string, orderId: number): Promise<any>
 }
 
 /**
+ * Close an entire position (Market Close)
+ */
+export async function closePosition(symbol: string, positionAmt: string | number): Promise<any> {
+    const amt = parseFloat(positionAmt.toString());
+    if (amt === 0) return;
+
+    const side = amt > 0 ? 'SELL' : 'BUY';
+    const quantity = Math.abs(amt);
+
+    console.log(`[Binance Auth] Closing position for ${symbol}. Side: ${side}, Qty: ${quantity}`);
+    
+    return placeOrder({
+        symbol,
+        side,
+        type: 'MARKET',
+        quantity,
+        reduceOnly: true
+    });
+}
+
+/**
  * Get trade history
  */
 export async function getTradeHistory(symbol: string, limit: number = 500): Promise<any[]> {
     // Sanitize symbol: 
-    // 1. Replace /USD with USDT (e.g. BTC/USD -> BTCUSDT)
-    // 2. Remove / (e.g. BTC/USDT -> BTCUSDT)
-    const formattedSymbol = symbol.replace('/USD', 'USDT').replace('/', '');
+    // 1. Remove slash
+    let formattedSymbol = symbol.replace('/', '');
     
-    console.log(`[Binance Auth] Fetching trade history for ${formattedSymbol}...`);
-    const data = await authenticatedRequest('/fapi/v1/userTrades', 'GET', { symbol: formattedSymbol, limit });
-    console.log(`[Binance Auth] ✅ Found ${data ? data.length : 0} trades`);
-    return data;
+    // 2. Ensure it ends with a valid quote currency for Futures (USDT mostly)
+    // If it's just "BTC", append "USDT".
+    if (!formattedSymbol.endsWith('USDT') && !formattedSymbol.endsWith('USDC') && !formattedSymbol.endsWith('BUSD')) {
+        formattedSymbol += 'USDT';
+    }
+    
+    console.log(`[Binance Auth] Fetching trade history for ${formattedSymbol} (Original: ${symbol})...`);
+    
+    try {
+        const data = await authenticatedRequest('/fapi/v1/userTrades', 'GET', { symbol: formattedSymbol, limit });
+        
+        if (Array.isArray(data)) {
+            // Sort by time descending (newest first) so data[0] is the LATEST trade
+            data.sort((a: any, b: any) => b.time - a.time);
+        }
+        
+        console.log(`[Binance Auth] ✅ Found ${data ? data.length : 0} trades`);
+        return data;
+    } catch (error: any) {
+         console.error(`[Binance Auth] ❌ Fetch trade history failed for ${formattedSymbol}:`, error);
+         // Return empty array instead of throwing to prevent crashing the app
+         return [];
+    }
 }
 
 /**
@@ -459,7 +579,10 @@ export default {
     getAccountBalances,
     getOpenOrders,
     getAllOrders,
+    getOpenOrder,
+    getPositions,
     placeOrder,
+    closePosition,
     cancelOrder,
     getTradeHistory,
     testConnection,

@@ -18,15 +18,13 @@ export default defineConfig(({ mode }) => {
         },
         '/api/testnet': {
           target: 'https://demo-fapi.binance.com', // Updated to demo-fapi per user request
-          // Wait, binance.vision is Spot Testnet. Future Testnet is testnet.binancefuture.com
-          // But let's stick to what the user presumably wants.
-          // If they want Futures, they need Futures proxy.
-          // Let's add specific Futures proxy.
-
           changeOrigin: true,
+          secure: false,
           rewrite: (path) => path.replace(/^\/api\/testnet/, ''),
           headers: {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Origin': 'https://demo-fapi.binance.com',
+            'Referer': 'https://demo-fapi.binance.com/'
           }
         },
         // Binance Futures Proxy

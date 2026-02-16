@@ -159,24 +159,27 @@ def train_model(symbol: str = "BTC-USD", epochs: int = 20):
     return result
 
 # --- Scheduler Integration ---
-from services.scheduler import training_scheduler
+# from services.scheduler import training_scheduler
 
 @app.on_event("startup")
 def startup_event():
     # Start the scheduler when the app starts
-    training_scheduler.start()
+    # training_scheduler.start()
+    pass
 
 @app.get("/api/training/schedule/status")
 def get_schedule_status():
-    return training_scheduler.get_status()
+    # return training_scheduler.get_status()
+    return {"running": False, "job_scheduled": False, "next_run": None}
 
 @app.post("/api/training/schedule")
 def set_schedule(interval_hours: int = 24):
-    return training_scheduler.schedule_training(interval_hours)
+    # return training_scheduler.schedule_training(interval_hours)
+    return {"status": "disabled", "message": "Scheduler temporarily disabled due to import error"}
 
 @app.post("/api/training/schedule/stop")
 def stop_schedule():
-    training_scheduler.remove_training_job()
+    # training_scheduler.remove_training_job()
     return {"status": "stopped"}
 
 # --- Futures-Specific Endpoints ---
@@ -225,11 +228,11 @@ import asyncio
 import json
 
 BINANCE_WS_BASE = "wss://fstream.binance.com/ws"
-BINANCE_API_BASE = "https://fapi.binance.com/fapi/v1"
+BINANCE_API_BASE = "https://fapi.binance.com"
 
 # Futures Testnet Endpoints
 BINANCE_WS_TESTNET = "wss://stream.binancefuture.com/ws"
-BINANCE_API_TESTNET = "https://demo-fapi.binance.com/fapi/v1"
+BINANCE_API_TESTNET = "https://demo-fapi.binance.com"
 
 @app.websocket("/ws/proxy/{stream}")
 async def websocket_proxy(websocket: WebSocket, stream: str):
@@ -282,10 +285,12 @@ async def websocket_proxy(websocket: WebSocket, stream: str):
         except:
             pass
 
-@app.get("/api/proxy/{path:path}")
-async def proxy_get_request(path: str, request: Request):
+from fastapi import Response
+
+@app.api_route("/api/proxy/{path:path}", methods=["GET", "POST", "DELETE"])
+async def proxy_request(path: str, request: Request):
     """
-    Generic GET Proxy for Binance Futures API
+    Generic Proxy for Binance Futures API (GET/POST/DELETE)
     Pass ?testnet=true to use Futures Testnet.
     """
     is_testnet = request.query_params.get('testnet') == 'true'
@@ -297,16 +302,33 @@ async def proxy_get_request(path: str, request: Request):
     params = dict(request.query_params)
     if 'testnet' in params:
         del params['testnet']
+        
+    # Get Body for POST (if any)
+    # Note: Binance mostly uses query params for signed requests, even POST.
+    # But if body used, forward it.
+    body = None
+    if request.method == "POST":
+        try:
+           body = await request.json()
+        except:
+           pass
+
+    # Forward necessary headers (API Key + Content-Type)
+    headers = {}
+    if 'x-mbx-apikey' in request.headers:
+        headers['X-MBX-APIKEY'] = request.headers['x-mbx-apikey']
+    if 'content-type' in request.headers:
+        headers['Content-Type'] = request.headers['content-type']
     
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.get(url, params=params) as resp:
-                if resp.status == 200:
-                    return await resp.json()
-                else:
-                    error_text = await resp.text()
-                    print(f"[Proxy] Error {resp.status} (Testnet: {is_testnet}): {error_text}")
-                    raise HTTPException(status_code=resp.status, detail=f"Binance API Error: {error_text}")
+            async with session.request(request.method, url, params=params, json=body, headers=headers) as resp:
+                # Read content
+                content = await resp.read()
+                
+                # Forward response exactly as is (status + body)
+                return Response(content=content, status_code=resp.status, media_type="application/json")
+                
         except Exception as e:
             print(f"[Proxy] Exception: {e}")
             raise HTTPException(status_code=500, detail=str(e))

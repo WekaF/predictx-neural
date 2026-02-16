@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Activity, Zap, TrendingUp, TrendingDown, RefreshCw, ShieldCheck, DollarSign, BrainCircuit, Target, BookOpen, FlaskConical, LayoutDashboard, ChevronDown, Layers, Globe, Radio, PenTool, AlertCircle, CheckCircle2, List, Bell, Edit3, Settings as SettingsIcon, Coins, AlertTriangle, CheckCircle, XCircle, BarChart3, Trash2, Settings, Brain, UploadCloud } from 'lucide-react';
+import { Activity, Zap, TrendingUp, TrendingDown, RefreshCw, ShieldCheck, DollarSign, BrainCircuit, Target, BookOpen, FlaskConical, LayoutDashboard, ChevronDown, Layers, Globe, Radio, PenTool, AlertCircle, CheckCircle2, List, Bell, Edit3, Settings as SettingsIcon, Coins, AlertTriangle, CheckCircle, XCircle, BarChart3, Trash2, Settings, Brain, UploadCloud, Clock } from 'lucide-react';
 import { FuturesDashboard } from './components/FuturesDashboard';
 import { TradingJournal } from './components/TradingJournal';
 import { TradingLog } from './types';
@@ -43,7 +43,7 @@ import { generateUUID } from './utils/uuid';
 import { Analytics } from "@vercel/analytics/react"
 import { futuresRiskManager } from './services/futuresRiskManager';
 import { liquidationCalculator } from './services/liquidationCalculator';
-
+import { OrderList, BinanceOrder } from './components/OrderList';
 
 
 
@@ -146,12 +146,15 @@ function App() {
   };
  // Confirmed & Active
   const [tradeHistory, setTradeHistory] = useState<EnhancedExecutedTrade[]>([]);
+  const [orderHistory, setOrderHistory] = useState<BinanceOrder[]>([]);
+  const [activeHistoryTab, setActiveHistoryTab] = useState<'trades' | 'orders'>('trades');
 
   // UI States
   const [showManualModal, setShowManualModal] = useState(false);
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [isSyncingHistory, setIsSyncingHistory] = useState(false);
+  const [isSyncingOrders, setIsSyncingOrders] = useState(false);
   const [showStrategyGuide, setShowStrategyGuide] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [editingFeedback, setEditingFeedback] = useState<TrainingData | null>(null);
@@ -206,7 +209,7 @@ function App() {
     const savedData = storageService.getTrainingData();
     if (savedData.length > 0) {
       setTrainingHistory(savedData);
-      console.log(`[App] ✅ Loaded ${savedData.length} training records from local storage`);
+      console.log(`[App] Loaded ${savedData.length} training records from local storage`);
     }
 
     // 1b. Load Trade History (Local + Cloud Sync)
@@ -247,61 +250,50 @@ function App() {
     loadTradeHistory();
   }, []);
 
-  // Load balance when selectedAsset changes
-  useEffect(() => {
-    const loadBinanceBalance = async () => {
+  // Reusable balance fetcher
+  const fetchBalance = useCallback(async () => {
       try {
-        console.log(`[App] 💰 Fetching balance for ${selectedAsset.symbol}...`);
+        // console.log(`[App] 💰 Fetching balance for ${selectedAsset.symbol}...`);
         const balances = await getAccountBalances();
-        console.log('[App] Raw balances count:', balances.length);
         
         // For Futures trading, we typically want the USDT (or USDC) balance as margin/wallet balance
-        // Let's check for USDT first, then USDC, then fallback to base asset if needed
         const quoteCurrency = 'USDT';
         const marginBalance = balances.find(b => b.asset === quoteCurrency) || 
                             balances.find(b => b.asset === 'USDC');
         
-        console.log('[App] Found margin balance object:', marginBalance);
+        // Use marginBalance (Equity) if available to show PNL fluctuations, otherwise free (Available)
+        const equity = marginBalance?.marginBalance ? parseFloat(marginBalance.marginBalance) : 0;
+        const available = parseFloat(marginBalance?.free || '0');
         
-        if (marginBalance) {
-             console.log(`[App] ${marginBalance.asset} Free: ${marginBalance.free}, Locked: ${marginBalance.locked}`);
-        }
-
-        const foundBalance = parseFloat(marginBalance?.free || '0');
+        const displayBalance = equity > 0 ? equity : available;
         
-        if (foundBalance > 0) {
-            updateBalance(foundBalance);
-            console.log(`[App] ✅ Wallet Balance (${marginBalance?.asset}): ${foundBalance.toFixed(2)}`);
-        } else {
-            console.log(`[App] ⚠️ No ${quoteCurrency} balance found, using local/virtual balance.`);
+        if (displayBalance > 0) {
+            updateBalance(displayBalance);
+            // console.log(`[App] ✅ Balance Update: ${displayBalance.toFixed(2)}`);
         }
       } catch (error) {
-        console.error('[App] ❌ Failed to load Binance balance:', error);
-        console.log('[App] Using balance 0 (could not connect to Binance)');
-        // updateBalance(0); // Don't clear local balance just because fetch failed
+        // console.error('[App] ❌ Failed to load Binance balance:', error);
       }
-    };
+  }, [selectedAsset, updateBalance]);
 
-
-    loadBinanceBalance();
+  // Load balance when selectedAsset changes or on mount
+  useEffect(() => {
+    fetchBalance();
     
-    // Restore Active Signal if any for the CURRENTLY selected asset
+    // Poll for balance updates (Real-time Equity/PNL) every 3 seconds
+    const intervalId = setInterval(fetchBalance, 3000);
+
+    // Restore Active Signal if any
     const savedSignal = storageService.getActiveSignal(selectedAsset.symbol);
     if (savedSignal && savedSignal.symbol === selectedAsset.symbol) {
       console.log('[App] ♻️ Restored active signal for:', selectedAsset.symbol);
       setActiveSignal(savedSignal);
       
-      // Override UI settings to match the open entry as requested by user
-      if (savedSignal.execution?.leverage) {
-        setLeverage(savedSignal.execution.leverage);
-      }
-      if (savedSignal.execution?.mode) {
-        setTradingMode(savedSignal.execution.mode);
-      }
-    } else {
-      setActiveSignal(null); // Clear state if no active signal for this asset
+      // Override UI settings
+      if (savedSignal.execution?.leverage) setLeverage(savedSignal.execution.leverage);
+      if (savedSignal.execution?.mode) setTradingMode(savedSignal.execution.mode);
     }
-
+    
     // Restore Last Analysis (Engine Scan) if any for this asset
     const savedAnalysis = storageService.getLastAnalysis(selectedAsset.symbol);
     if (savedAnalysis) {
@@ -310,7 +302,51 @@ function App() {
     } else {
       setLastAnalysis(null);
     }
-  }, [selectedAsset]); // Re-fetch when asset changes
+
+    return () => clearInterval(intervalId);
+  }, [selectedAsset, fetchBalance]);
+
+  // Handle manual/external trade close from OpenOrders component
+  const handleExternalTradeClosed = useCallback(async (trade: any) => {
+      console.log('[App] 📥 External trade closed:', trade);
+      
+      const pnl = parseFloat(trade.realizedPnl || '0');
+      const outcome = pnl > 0 ? 'WIN' : 'LOSS';
+      
+      const newTrade: EnhancedExecutedTrade = {
+          id: trade.orderId ? String(trade.orderId) : generateUUID(),
+          symbol: trade.symbol,
+          entryTime: new Date(trade.time).toISOString(),
+          exitTime: new Date(trade.time).toISOString(),
+          type: trade.side === 'BUY' ? 'BUY' : 'SELL', // This is the closing side
+          entryPrice: 0, // Unknown without context
+          exitPrice: parseFloat(trade.price),
+          quantity: parseFloat(trade.qty),
+          pnl: pnl,
+          outcome: outcome,
+          source: 'MANUAL',
+          marketContext: null,
+          aiConfidence: 0,
+          aiReasoning: 'Manual Close via Dashboard',
+          tags: ['MANUAL_CLOSE'],
+          stopLoss: 0,
+          takeProfit: 0
+      };
+      
+      // Save and update state
+      await storageService.saveTradingLog(newTrade);
+      setTradeHistory(prev => [newTrade, ...prev]);
+      
+      // Show notification
+      setNotification({
+          message: `Trade Closed via App: ${trade.symbol} (${outcome}) ${pnl > 0 ? '+' : ''}${pnl.toFixed(2)} USDT`,
+          type: outcome === 'WIN' ? 'success' : 'error'
+      });
+
+      // SYNC BALANCE IMMEDIATELY
+      await fetchBalance();
+      
+  }, [fetchBalance]);
 
   // Initialize PWA and other app setup
   useEffect(() => {
@@ -585,6 +621,8 @@ function App() {
     }, 15000);
     return () => clearInterval(newsInterval);
   }, []);
+
+
 
   // Real-time Indicators & TP/SL Monitoring
   useEffect(() => {
@@ -1487,24 +1525,24 @@ function App() {
 
   const riskAmount = balance * (riskPercent / 100);
 
-  const handleSyncHistory = async () => {
+  const handleSyncHistory = useCallback(async () => {
     if (!binanceTradingService.isConfigured()) {
-      showNotification("Binance API credentials missing. Configure in settings.", "error");
+      // showNotification("Binance API credentials missing.", "error"); // Too noisy for auto-sync
       return;
     }
 
     setIsSyncingHistory(true);
     try {
-      showNotification(`Fetching trade history for ${selectedAsset.symbol}...`, "info");
+      console.log(`[App] Syncing history for ${selectedAsset.symbol}...`);
       const binanceTrades = await binanceTradingService.getTradeHistory(selectedAsset.symbol);
       
-      if (binanceTrades.length === 0) {
-        showNotification("No account history found for this symbol.", "warning");
+      if (!Array.isArray(binanceTrades) || binanceTrades.length === 0) {
+        console.log("[App] No trade history found for symbol.");
         setIsSyncingHistory(false);
         return;
       }
 
-      showNotification(`Found ${binanceTrades.length} trades. Enriching with market data...`, "info");
+      // showNotification(`Found ${binanceTrades.length} trades.`, "info"); // Too noisy
 
       // Convert to EnhancedExecutedTrade
       const mappedTrades: EnhancedExecutedTrade[] = binanceTrades.map(t => ({
@@ -1512,7 +1550,7 @@ function App() {
         symbol: t.symbol,
         entryTime: new Date(t.time).toISOString(),
         exitTime: new Date(t.time).toISOString(), // Approximate
-        type: t.isBuyer ? 'BUY' : 'SELL',
+        type: t.side ? t.side : (t.buyer ? 'BUY' : 'SELL'), // Handle both side and buyer fields
         entryPrice: parseFloat(t.price),
         exitPrice: parseFloat(t.price), // It's a single execution
         stopLoss: 0,
@@ -1531,40 +1569,76 @@ function App() {
         }
       }));
 
-      // Enrich with context (Market Reconstruction)
-      const enrichedTrades: EnhancedExecutedTrade[] = [];
-      for (const trade of mappedTrades) {
-         // Check if already exists to avoid re-enriching cost
-         const exists = tradeHistory.find(h => h.id === trade.id);
-         if (exists && exists.marketContext) {
-           enrichedTrades.push(exists);
-         } else {
-           const enriched = await enrichTradeWithContext(trade);
-           enrichedTrades.push(enriched);
-         }
-      }
+      // Enrich with context (Market Reconstruction) - SKIP for bulk import to save API calls, just basic map
+      // ... logic skipped for performance, assuming manual 'Sync' usually for just viewing ...
+      // actually let's just dedupe and save
 
       // Deduplicate and merge by ID
-      const existingMap = new Map<string, EnhancedExecutedTrade>(tradeHistory.map(t => [t.id, t]));
-      enrichedTrades.forEach(t => existingMap.set(t.id, t));
+      // NOTE: We do NOT use existing tradeHistory state in dependency array to avoid infinite loops if not careful.
+      // Instead we use functional update or ref if needed. 
+      // But since we want to Merge, we can read current state inside setState if possible?
+      // Or just trust storageService as source of truth?
       
-      const uniqueSorted = (Array.from(existingMap.values()) as EnhancedExecutedTrade[]).sort((a, b) => 
-        new Date(b.entryTime).getTime() - new Date(a.entryTime).getTime()
-      );
+      setTradeHistory(prev => {
+          const existingMap = new Map<string, EnhancedExecutedTrade>(prev.map(t => [t.id, t]));
+          mappedTrades.forEach(t => existingMap.set(t.id, t));
+          
+          const uniqueSorted = (Array.from(existingMap.values()) as EnhancedExecutedTrade[]).sort((a, b) => 
+            new Date(b.entryTime).getTime() - new Date(a.entryTime).getTime()
+          );
+          
+          return uniqueSorted;
+      });
 
-      setTradeHistory(uniqueSorted);
-      
       // Save new trades to storage
-      enrichedTrades.forEach(t => storageService.saveTradingLog(t));
+      // Only iterate mappedTrades
+      mappedTrades.forEach(t => storageService.saveTradingLog(t));
       
-      showNotification(`Successfully synced ${enrichedTrades.length} trades!`, "success");
+      console.log(`[App] Successfully synced details for ${mappedTrades.length} trades.`);
     } catch (error: any) {
       console.error("Sync error:", error);
-      showNotification(`Failed to sync history: ${error.message}`, "error");
     } finally {
       setIsSyncingHistory(false);
     }
+  }, [selectedAsset]); // Re-create when asset changes
+
+  // Handle Sync Orders
+  const handleSyncOrders = useCallback(async () => {
+    if (!binanceTradingService.isConfigured()) return;
+
+    setIsSyncingOrders(true);
+    try {
+      console.log(`[App] Syncing orders for ${selectedAsset.symbol}...`);
+      const orders = await binanceTradingService.getAllOrders(selectedAsset.symbol);
+      
+      if (Array.isArray(orders)) {
+          setOrderHistory(orders);
+          console.log(`[App] Loaded ${orders.length} orders.`);
+      }
+    } catch (error: any) {
+      console.error("Sync orders error:", error);
+    } finally {
+      setIsSyncingOrders(false);
+    }
+  }, [selectedAsset]);
+
+  // Unified Refresh Handler
+  const handleRefreshHistory = () => {
+    if (activeHistoryTab === 'trades') handleSyncHistory();
+    else handleSyncOrders();
   };
+
+  // Auto-sync history when asset changes or Tab changes
+  useEffect(() => {
+    if (binanceTradingService.isConfigured()) {
+        const timer = setTimeout(() => {
+            if (activeHistoryTab === 'trades') handleSyncHistory();
+            else handleSyncOrders();
+        }, 1000);
+        return () => clearTimeout(timer);
+    }
+  }, [handleSyncHistory, handleSyncOrders, activeHistoryTab]); // Depend on Tab and Sync functions, which depend on Asset
+
 
   return (
     <div className="h-screen flex flex-col md:flex-row text-slate-200 overflow-hidden relative">
@@ -2083,17 +2157,41 @@ function App() {
 
                 {/* Active Orders Panel */}
                 <div className="mb-4">
-                  <OpenOrders />
+                  <OpenOrders onTradeClosed={handleExternalTradeClosed} />
                 </div>
 
-                {/* Trade History Panel */}
+                {/* Trade & Order History Panel */}
                 <div className="bg-slate-900 border border-slate-800 rounded-xl shadow-xl flex flex-col h-64 sm:h-96 overflow-hidden shrink-0">
-                  <div className="px-3 md:px-4 py-2 border-b border-slate-800 flex items-center gap-2">
-                    <List className="w-4 h-4 text-slate-400" />
-                    <span className="text-xs font-bold text-slate-400">SESSION TRADE HISTORY</span>
+                  <div className="px-3 md:px-4 py-2 border-b border-slate-800 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-4">
+                        <button 
+                            onClick={() => setActiveHistoryTab('trades')}
+                            className={`flex items-center gap-2 text-xs font-bold transition-colors pb-2 -mb-2 border-b-2 ${activeHistoryTab === 'trades' ? 'text-blue-400 border-blue-400' : 'text-slate-400 border-transparent hover:text-slate-200'}`}
+                        >
+                            <List className="w-4 h-4" /> TRADES
+                        </button>
+                        <button 
+                            onClick={() => setActiveHistoryTab('orders')}
+                            className={`flex items-center gap-2 text-xs font-bold transition-colors pb-2 -mb-2 border-b-2 ${activeHistoryTab === 'orders' ? 'text-amber-400 border-amber-400' : 'text-slate-400 border-transparent hover:text-slate-200'}`}
+                        >
+                            <Clock className="w-4 h-4" /> ORDERS
+                        </button>
+                    </div>
+                    <button 
+                        onClick={handleRefreshHistory}
+                        disabled={isSyncingHistory || isSyncingOrders}
+                        className="p-1 hover:bg-slate-800 rounded text-slate-500 hover:text-blue-400 transition-colors"
+                        title="Sync History"
+                    >
+                        <RefreshCw className={`w-3.5 h-3.5 ${isSyncingHistory || isSyncingOrders ? 'animate-spin' : ''}`} />
+                    </button>
                   </div>
                   <div className="flex-1 overflow-y-auto">
-                    <TradeList trades={tradeHistory} onCloseTrade={handleManualCloseTrade} />
+                    {activeHistoryTab === 'trades' ? (
+                        <TradeList trades={tradeHistory.filter(t => t.source === 'BINANCE_IMPORT')} onCloseTrade={handleManualCloseTrade} />
+                    ) : (
+                        <OrderList orders={orderHistory} isLoading={isSyncingOrders} />
+                    )}
                   </div>
                 </div>
               </div>

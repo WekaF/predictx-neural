@@ -6,6 +6,10 @@
   "framework": "vite",
   "rewrites": [
     {
+      "source": "/api/testnet/:path*",
+      "destination": "https://demo-fapi.binance.com/:path*"
+    },
+    {
       "source": "/api/futures/:path*",
       "destination": "https://fapi.binance.com/:path*"
     },
