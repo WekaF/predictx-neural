@@ -41,7 +41,8 @@ function getApiBase(): string {
     if (isProduction) {
         if (railwayBackendUrl) {
             console.log('[Binance Trading] 📡 Production: Using Railway Backend at', railwayBackendUrl);
-            return `${railwayBackendUrl}/ai-api/proxy`;
+            // DIRECT BACKEND ACCESS: Use real /api prefix, not the /ai-api dev proxy prefix
+            return `${railwayBackendUrl}/api/proxy`;
         } else {
             console.warn('[Binance Trading] ⚠️ VITE_BACKEND_URL not set! Please deploy backend to Railway or enable Paper Trading.');
             // Fallback: Try direct API (will likely fail with CORS)
@@ -288,7 +289,8 @@ async function authenticatedRequest(
         let baseUrl = getApiBase();
         
         // Check if using ANY proxy (Local or Railway)
-        const isProxy = baseUrl.includes('/ai-api/proxy');
+        // Local uses /ai-api/proxy, Production uses /api/proxy
+        const isProxy = baseUrl.includes('/ai-api/proxy') || baseUrl.includes('/api/proxy');
 
         if (endpoint.startsWith('/fapi')) {
              // If direct Binance API (fallback), adjust base path if needed
