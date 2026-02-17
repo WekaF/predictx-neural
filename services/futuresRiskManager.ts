@@ -22,7 +22,8 @@ export class FuturesRiskManager {
     stopLoss: number,
     leverage: number
   ): number {
-    // Position size = (Account * Risk%) / (Entry - SL) * Leverage
+    // Position size = (Account * Risk%) / (Entry - SL)
+    // NOTE: Leverage is NOT a multiplier for risk-based sizing. It only determines max buying power.
     const riskAmount = accountBalance * this.maxAccountRisk;
     const stopDistance = Math.abs(entryPrice - stopLoss);
     
@@ -31,11 +32,25 @@ export class FuturesRiskManager {
       return 0.001; // Minimum position
     }
 
-    const positionSize = (riskAmount / stopDistance) * leverage;
+    // Units = Risk Amount / Loss per unit
+    let positionSize = riskAmount / stopDistance;
     
-    // Cap at max position size (e.g., 50% of balance)
-    const maxPosition = accountBalance * 0.5 * leverage;
-    return Math.min(positionSize, maxPosition);
+    // Check if this exceeds Max Buying Power
+    const maxBuyingPower = accountBalance * leverage * 0.95; // 95% of max to leave room for fees
+    const maxUnitsByLeverage = maxBuyingPower / entryPrice;
+    
+    // Cap at Max Buying Power
+    if (positionSize > maxUnitsByLeverage) {
+        console.warn(`[Risk Manager] Risk-based size (${positionSize}) exceeds max buying power (${maxUnitsByLeverage}). Capping.`);
+        positionSize = maxUnitsByLeverage;
+    }
+    
+    // Also cap at a reasonable % of balance (e.g. max 50% of balance used as margin)
+    // This prevents going "all in" on a single trade even if SL is tight
+    const maxMarginUsage = accountBalance * 0.5; // Max 50% of wallet per trade
+    const maxUnitsByMargin = (maxMarginUsage * leverage) / entryPrice;
+    
+    return Math.min(positionSize, maxUnitsByMargin);
   }
 
   /**

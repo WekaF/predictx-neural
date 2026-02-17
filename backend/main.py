@@ -335,9 +335,21 @@ async def proxy_request(path: str, request: Request):
                 # Read content
                 content = await resp.read()
                 
+                # Log error responses for debugging
+                if resp.status != 200:
+                    try:
+                        error_json = json.loads(content)
+                        print(f"[Proxy] ❌ Binance API Error {resp.status}: {error_json}")
+                        print(f"[Proxy] Request URL: {url}")
+                        print(f"[Proxy] Request Method: {request.method}")
+                        print(f"[Proxy] Request Headers: {headers}")
+                    except:
+                        print(f"[Proxy] ❌ Binance API Error {resp.status}: {content.decode('utf-8')}")
+                
                 # Forward response exactly as is (status + body)
                 return Response(content=content, status_code=resp.status, media_type="application/json")
                 
         except Exception as e:
             print(f"[Proxy] Exception: {e}")
             raise HTTPException(status_code=500, detail=str(e))
+

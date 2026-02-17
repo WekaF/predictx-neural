@@ -66,15 +66,24 @@ Should return: `{"status": "healthy"}`
 
 ## Step 3: Update Frontend to Use Railway Backend
 
-### 3.1 Add Environment Variable to Vercel
+### 3.1 Add Environment Variables to Vercel
 1. Go to Vercel Dashboard
 2. Select your `predictx` project
 3. Go to **Settings** → **Environment Variables**
-4. Add new variable:
-   - Name: `VITE_BACKEND_URL`
-   - Value: `https://your-backend-url.up.railway.app`
-   - Environment: **Production**
-5. Click **Save**
+4. Add the following variables (Use **Production** environment):
+
+   - `VITE_BACKEND_URL`: `https://your-backend-url.up.railway.app`
+   
+   **IMPORTANT: You MUST also add the API keys to Vercel because the frontend needs them to sign requests:**
+   
+   - `VITE_BINANCE_API_KEY`: (Your Production API Key)
+   - `VITE_BINANCE_SECRET_KEY`: (Your Production Secret Key)
+   - `VITE_BINANCE_API_KEY_TESTNET`: (Your Testnet API Key)
+   - `VITE_BINANCE_API_SECRET_TESTNET`: (Your Testnet Secret Key)
+
+   *Note: In a future update, we will move signing logic to the backend to secure the secret keys. for now, they are required on the frontend.*
+
+5. Click **Save** for each variable.
 
 ### 3.2 Update Frontend Code
 Edit `services/binanceTradingService.ts`:

@@ -404,6 +404,8 @@ function App() {
 
   // --- STATE RECONCILIATION (SYNC WITH BINANCE) ---
   // Prevents "Double Entry" and "Ghost Trades" by syncing with actual exchange state
+  const lastClearedSignalRef = useRef<string | null>(null); // Track last cleared signal to prevent duplicate notifications
+  
   const syncStateWithBinance = useCallback(async () => {
     if (!selectedAsset || selectedAsset.type !== 'CRYPTO') {
         console.log('[Sync] ⏭️ Skipping sync: Not a crypto asset');
@@ -496,13 +498,22 @@ function App() {
             setActiveSignal(restoredSignal);
             storageService.saveActiveSignal(restoredSignal, selectedAsset.symbol);
             showNotification(`♻️ Restored active ${side} position for ${selectedAsset.symbol}`, 'success');
+            
+            // Reset cleared signal tracker since we restored
+            lastClearedSignalRef.current = null;
         }
         // CASE 2: Binance has NO position, but local HAS signal → CLEAR (closed externally)
         else if (!activePosition && activeSignal && activeSignal.outcome === 'PENDING') {
-            console.log(`[Sync] 🧹 Position closed externally. Clearing local signal...`);
-            setActiveSignal(null);
-            storageService.clearActiveSignal(selectedAsset.symbol);
-            showNotification(`Position for ${selectedAsset.symbol} was closed externally`, 'info');
+            // Only notify if this is a NEW closure (not already notified)
+            if (lastClearedSignalRef.current !== activeSignal.id) {
+                console.log(`[Sync] 🧹 Position closed externally. Clearing local signal...`);
+                lastClearedSignalRef.current = activeSignal.id; // Mark as notified
+                setActiveSignal(null);
+                storageService.clearActiveSignal(selectedAsset.symbol);
+                showNotification(`Position for ${selectedAsset.symbol} was closed externally`, 'info');
+            } else {
+                console.log(`[Sync] ⏭️ Already notified about closure for signal ${activeSignal.id}, skipping notification`);
+            }
         }
         // CASE 3: Both match or both empty → OK, do nothing
         else {

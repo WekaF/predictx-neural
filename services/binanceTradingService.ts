@@ -71,6 +71,9 @@ function getApiCredentials(): { apiKey: string; secretKey: string } {
         }
     })();
 
+    // Helper to mask keys for logging
+    const mask = (s?: string) => s ? `${s.substring(0, 4)}...${s.substring(s.length - 4)}` : 'MISSING';
+
     if (isTestnet) {
         const testnetKey = typeof import.meta !== 'undefined' && import.meta.env 
             ? import.meta.env.VITE_BINANCE_API_KEY_TESTNET 
@@ -79,8 +82,12 @@ function getApiCredentials(): { apiKey: string; secretKey: string } {
             ? import.meta.env.VITE_BINANCE_API_SECRET_TESTNET
             : process.env.VITE_BINANCE_API_SECRET_TESTNET;
         
+        console.log(`[Binance Auth] Loading TESTNET credentials: Key=${mask(testnetKey)}, Secret=${mask(testnetSecret)}`);
+        
         if (testnetKey && testnetSecret) {
             return { apiKey: testnetKey, secretKey: testnetSecret };
+        } else {
+            console.warn('[Binance Auth] Testnet keys missing, falling back to production keys check...');
         }
     }
 
@@ -91,6 +98,8 @@ function getApiCredentials(): { apiKey: string; secretKey: string } {
     const prodSecret = typeof import.meta !== 'undefined' && import.meta.env
         ? import.meta.env.VITE_BINANCE_SECRET_KEY
         : process.env.VITE_BINANCE_SECRET_KEY;
+
+    console.log(`[Binance Auth] Loading PROD credentials: Key=${mask(prodKey)}, Secret=${mask(prodSecret)}`);
 
     return { apiKey: prodKey || '', secretKey: prodSecret || '' };
 }
@@ -277,14 +286,20 @@ async function authenticatedRequest(
 
         // Determine Base URL
         let baseUrl = getApiBase();
-        const isBackendProxy = baseUrl === LOCAL_PROXY_API;
+        
+        // Check if using ANY proxy (Local or Railway)
+        const isProxy = baseUrl.includes('/ai-api/proxy');
+
         if (endpoint.startsWith('/fapi')) {
+             // If direct Binance API (fallback), adjust base path if needed
             if (baseUrl === '/api/binance') baseUrl = '/api/futures';
         }
 
         // Construct URL
         let url = `${baseUrl}${endpoint}?${signedQueryString}`;
-        if (isBackendProxy) {
+        
+        // Append testnet flag for Proxy (both local and production Railway)
+        if (isProxy) {
             url += '&testnet=true';
         }
         
@@ -485,9 +500,32 @@ export async function placeOrder(params: {
         orderParams.timeInForce = params.timeInForce || 'GTC';
     }
 
-    const data = await authenticatedRequest('/fapi/v1/order', 'POST', orderParams);
-    console.log('[Binance Auth] ✅ Order placed:', data.orderId);
-    return data;
+    try {
+        const data = await authenticatedRequest('/fapi/v1/order', 'POST', orderParams);
+        console.log('[Binance Auth] ✅ Order placed:', data.orderId);
+        return data;
+    } catch (error: any) {
+        console.error('[Binance Auth] ❌ Order placement failed:', error);
+        
+        // Parse Binance error codes and provide user-friendly messages
+        const errorMsg = error.message || JSON.stringify(error);
+        
+        if (errorMsg.includes('-2019') || errorMsg.includes('Margin is insufficient')) {
+            throw new Error('❌ Insufficient balance. Please reduce position size or add funds to your testnet account at https://testnet.binancefuture.com');
+        }
+        if (errorMsg.includes('-1111') || errorMsg.includes('Precision')) {
+            throw new Error('❌ Invalid quantity or price precision. Please check symbol filters.');
+        }
+        if (errorMsg.includes('-1021') || errorMsg.includes('Timestamp')) {
+            throw new Error('❌ Request timestamp error. Please check your system time.');
+        }
+        if (errorMsg.includes('-4164') || errorMsg.includes('price is X% too')) {
+            throw new Error('❌ Order price is too far from current market price. Please adjust your entry price.');
+        }
+        
+        // Re-throw original error if not a known error code
+        throw error;
+    }
 }
 
 /**
