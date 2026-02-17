@@ -2025,7 +2025,9 @@ function App() {
     }
     
     // Execute on Binance (if configured/Testnet)
-    let binanceOrderId = null;
+    let binanceOrderId: any = null;
+    let strategyOrders = { entry: null, stopLoss: null, takeProfit: null };
+
     if (binanceTradingService.isConfigured()) {
         try {
             const tradeSymbol = newSignal.symbol.replace('/', '').replace(/USD$/, 'USDT');
@@ -2053,16 +2055,66 @@ function App() {
 
             console.log(`[Binance] Placing ${finalOrderType} order:`, orderParams);
             
+            // 1. Place ENTRY Order
             const orderRes = await binanceTradingService.placeOrder(orderParams);
-            binanceOrderId = orderRes.orderId;
-            showNotification(`Order Executed! ID: ${binanceOrderId}`, "success");
+            strategyOrders.entry = orderRes.orderId;
+            showNotification(`Entry Order Executed! ID: ${orderRes.orderId}`, "success");
             
             // If NOT Market, we don't set Active Signal locally (it's pending in OrderBook)
+            // UNLESS it is a Limit order that we want to track. But simple logic for now:
             if (orderType !== 'MARKET') {
                  showNotification("Order placed in Waiting List (Open Orders).", "info");
                  setShowManualModal(false);
                  return; 
             }
+
+            // 2. Place PROTECTION Orders (Hard SL/TP) immediately after fill
+            // Determine opposite side for closing
+            const closeSide = newSignal.type === 'BUY' ? 'SELL' : 'BUY';
+
+            // A) Place STOP LOSS (STOP_MARKET)
+            if (stopLoss > 0) {
+                try {
+                    console.log(`[Binance] Placing STOP_MARKET SL at ${stopLoss}`);
+                    const slRes = await binanceTradingService.placeOrder({
+                        symbol: tradeSymbol,
+                        side: closeSide,
+                        type: 'STOP_MARKET',
+                        stopPrice: stopLoss,
+                        quantity: quantityAsset, // Close full amount
+                        reduceOnly: true,
+                        timeInForce: 'GTC'
+                    });
+                    strategyOrders.stopLoss = slRes.orderId;
+                    showNotification("Attributes: Hard Stop Loss set on Binance", "info");
+                } catch (slError) {
+                    console.error("Failed to place SL:", slError);
+                    showNotification("WARNING: Failed to place Stop Loss on Binance!", "error");
+                }
+            }
+
+            // B) Place TAKE PROFIT (TAKE_PROFIT_MARKET)
+            if (takeProfit > 0) {
+                try {
+                     console.log(`[Binance] Placing TAKE_PROFIT_MARKET TP at ${takeProfit}`);
+                     const tpRes = await binanceTradingService.placeOrder({
+                        symbol: tradeSymbol,
+                        side: closeSide,
+                        type: 'TAKE_PROFIT_MARKET',
+                        stopPrice: takeProfit,
+                        quantity: quantityAsset, // Close full amount
+                        reduceOnly: true,
+                        timeInForce: 'GTC'
+                    });
+                    strategyOrders.takeProfit = tpRes.orderId;
+                    showNotification("Attributes: Hard Take Profit set on Binance", "info");
+                } catch (tpError) {
+                    console.error("Failed to place TP:", tpError);
+                    showNotification("WARNING: Failed to place Take Profit on Binance!", "error");
+                }
+            }
+
+            binanceOrderId = strategyOrders;
 
         } catch (error: any) {
             console.error("Binance Execution Failed:", error);

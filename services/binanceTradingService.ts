@@ -38,11 +38,16 @@ function getApiBase(): string {
     }
     
     // PRODUCTION MODE: Use Railway backend
+    // PRODUCTION MODE: Use Railway backend
     if (isProduction) {
         if (railwayBackendUrl) {
-            console.log('[Binance Trading] 📡 Production: Using Railway Backend at', railwayBackendUrl);
+            let backendUrl = railwayBackendUrl;
+            if (!backendUrl.startsWith('http')) {
+                backendUrl = `https://${backendUrl}`;
+            }
+            console.log('[Binance Trading] 📡 Production: Using Railway Backend at', backendUrl);
             // DIRECT BACKEND ACCESS: Use real /api prefix, not the /ai-api dev proxy prefix
-            return `${railwayBackendUrl}/api/proxy`;
+            return `${backendUrl}/api/proxy`;
         } else {
             console.warn('[Binance Trading] ⚠️ VITE_BACKEND_URL not set! Please deploy backend to Railway or enable Paper Trading.');
             // Fallback: Try direct API (will likely fail with CORS)
@@ -471,7 +476,7 @@ export async function getPositions(symbol?: string): Promise<any[]> {
 export async function placeOrder(params: {
     symbol: string;
     side: 'BUY' | 'SELL';
-    type: 'LIMIT' | 'MARKET' | 'STOP_LOSS' | 'STOP_LOSS_LIMIT' | 'TAKE_PROFIT' | 'TAKE_PROFIT_LIMIT';
+    type: 'LIMIT' | 'MARKET' | 'STOP_LOSS' | 'STOP_LOSS_LIMIT' | 'TAKE_PROFIT' | 'TAKE_PROFIT_LIMIT' | 'STOP_MARKET' | 'TAKE_PROFIT_MARKET';
     quantity: string | number;
     price?: string | number;
     stopPrice?: string | number;
@@ -496,10 +501,16 @@ export async function placeOrder(params: {
         orderParams.timeInForce = params.timeInForce || 'GTC';
     }
 
-    if (params.type === 'STOP_LOSS_LIMIT') {
+    // STOP_LOSS_LIMIT and TAKE_PROFIT_LIMIT need price AND stopPrice
+    if (params.type === 'STOP_LOSS_LIMIT' || params.type === 'TAKE_PROFIT_LIMIT') {
         orderParams.price = params.price;
         orderParams.stopPrice = params.stopPrice;
         orderParams.timeInForce = params.timeInForce || 'GTC';
+    }
+
+    // STOP_MARKET and TAKE_PROFIT_MARKET only need stopPrice
+    if (params.type === 'STOP_MARKET' || params.type === 'TAKE_PROFIT_MARKET' || params.type === 'STOP_LOSS' || params.type === 'TAKE_PROFIT') {
+        orderParams.stopPrice = params.stopPrice;
     }
 
     try {
