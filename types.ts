@@ -31,15 +31,18 @@ export interface TradeSignal {
   confluenceFactors?: string[]; // e.g. ["SMA200 Support", "RSI Divergence"]
   riskRewardRatio?: number;
   outcome?: 'WIN' | 'LOSS' | 'PENDING' | 'EXPIRED' | 'MANUAL_CLOSE';
+  outputToken?: string;
   newsSentiment?: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
   execution?: {
     status: string;
     side: string;
     leverage: number;
-    margin: number;
-    size: number;
+    margin?: number;
+    size?: number;
     tp: number;
     sl: number;
+    unrealizedProfit?: number;
+    unrealizedProfitPercent?: number;
     execution_status: string;
     mode?: 'paper' | 'live';
     orderId?: number | {

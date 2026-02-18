@@ -1,22 +1,15 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Activity, Zap, TrendingUp, TrendingDown, RefreshCw, ShieldCheck, DollarSign, BrainCircuit, Target, BookOpen, FlaskConical, LayoutDashboard, ChevronDown, Layers, Globe, Radio, PenTool, AlertCircle, CheckCircle2, List, Bell, Edit3, Settings as SettingsIcon, Coins, AlertTriangle, CheckCircle, XCircle, BarChart3, Trash2, Settings, Brain, UploadCloud, Clock, PauseCircle, PlayCircle } from 'lucide-react';
 import { FuturesDashboard } from './components/FuturesDashboard';
-import { TradingJournal } from './components/TradingJournal';
 import { TradingLog } from './types';
-import ModernCandleChart from './components/CandleChart';
-import BacktestPanel from './components/BacktestPanel';
+import { RealtimePriceDisplay } from './components/RealtimePriceDisplay';
 import TradeConfirmationModal from './components/TradeConfirmationModal';
 import ManualTradeModal from './components/ManualTradeModal';
-import StrategyGuideModal from './components/StrategyGuideModal';
 import TradeList from './components/TradeList';
 import AlertsPanel from './components/AlertsPanel';
 import FeedbackEditorModal from './components/FeedbackEditorModal';
 import SettingsModal from './components/SettingsModal';
-import { AnalyticsDashboard } from './components/AnalyticsDashboard';
-import { LeverageDashboard } from './components/LeverageDashboard';
-import { OrderBook } from './components/OrderBook';
-import { TrainingPanel } from './components/TrainingPanel';
-import { TrainingHistory } from './components/TrainingHistory';
+// import { OrderBook } from './components/OrderBook'; // Removed for performance
 import { HeaderControls } from './components/HeaderControls';
 import { calculateRSI, calculateFibonacci, analyzeTrend, calculateSMA, calculateEMA, findSupportResistance, calculateMACD, calculateStochastic, calculateMomentum, detectRSIDivergence, calculateSeriesRSI } from './utils/technical';
 import { getHistoricalKlines, getCurrentPrice } from './services/binanceService';
@@ -26,10 +19,6 @@ import { marketContextService } from './services/marketContextService';
 import { batchTrainingService, enrichTradeWithContext } from './services/batchTrainingService';
 import binanceTradingService from './services/binanceTradingService';
 import { hyperparameterOptimizer } from './services/hyperparameterOptimizer';
-import { TradeAnalyticsDashboard } from './components/TradeAnalyticsDashboard';
-import TrainingDashboard from './components/TrainingDashboard';
-import { BatchTrainingPanel } from './components/BatchTrainingPanel';
-import { HyperparameterOptimizer } from './components/HyperparameterOptimizer';
 import { OpenOrders } from './components/OpenOrders';
 import { EnhancedExecutedTrade } from './types/enhanced';
 import { generateMarketNews, calculateAggregateSentiment } from './services/newsService';
@@ -55,6 +44,31 @@ const INITIAL_ASSET: Asset = { symbol: 'BTC/USDT', name: 'Bitcoin', type: 'CRYPT
 function App() {  
   const [candles, setCandles] = useState<Candle[]>([]);
   const [indicators, setIndicators] = useState<TechnicalIndicators | null>(null);
+  
+  // High-frequency update buffering
+  const candleBuffer = useRef<{ candle: Candle, isClosed: boolean } | null>(null);
+  
+  useEffect(() => {
+    const throttleInterval = setInterval(() => {
+      if (candleBuffer.current) {
+        const { candle, isClosed } = candleBuffer.current;
+        setCandles(prev => {
+          if (isClosed) {
+            return [...prev.slice(-999), candle];
+          }
+          const updated = [...prev];
+          if (updated.length > 0) {
+            updated[updated.length - 1] = candle;
+          } else {
+            updated.push(candle);
+          }
+          return updated;
+        });
+        candleBuffer.current = null;
+      }
+    }, 500); // Max 2 renders per second for price updates
+    return () => clearInterval(throttleInterval);
+  }, []);
 
   // Asset State
   const [supportedAssets, setSupportedAssets] = useState<Asset[]>([INITIAL_ASSET]);
@@ -156,7 +170,6 @@ function App() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [isSyncingHistory, setIsSyncingHistory] = useState(false);
   const [isSyncingOrders, setIsSyncingOrders] = useState(false);
-  const [showStrategyGuide, setShowStrategyGuide] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [editingFeedback, setEditingFeedback] = useState<TrainingData | null>(null);
   const [terminalTab, setTerminalTab] = useState<'trade' | 'data'>('trade'); // Mobile Tab State
@@ -195,13 +208,11 @@ function App() {
   const [sentimentScore, setSentimentScore] = useState(0); // -1 to 1
 
   // Navigation & Config
-  const [currentView, setCurrentView] = useState<'terminal' | 'backtest' | 'analytics' | 'leverage' | 'journal' | 'training' | 'ai-intelligence'>('terminal');
+  // Simplified View State - effectively always 'terminal' now, but kept for compatibility with minor logic if needed
+  const [currentView, setCurrentView] = useState<'terminal'>('terminal');
   const [dbConnected, setDbConnected] = useState(false);
   const [aiReady, setAiReady] = useState(false);
 
-  // Mass Training State
-  const [isTraining, setIsTraining] = useState(false);
-  const [trainingProgress, setTrainingProgress] = useState(0);
   const [lastAnalysis, setLastAnalysis] = useState<TradeSignal | null>(null);
 
   // Load Persistence
@@ -210,7 +221,7 @@ function App() {
     const savedData = storageService.getTrainingData();
     if (savedData.length > 0) {
       setTrainingHistory(savedData);
-      console.log(`[App] Loaded ${savedData.length} training records from local storage`);
+      // console.log(`[App] Loaded ${savedData.length} training records from local storage`);
     }
 
     // 1b. Load Trade History (Local + Cloud Sync)
@@ -345,11 +356,16 @@ function App() {
                  pnlPercent = ((entryPrice - currentPrice) / entryPrice) * 100 * execution.leverage;
              }
 
-             // A. AUTO BREAK EVEN (+1.5% Profit)
+             // A. AUTO BREAK EVEN (+2.5% Profit) - Increased from 1.5% to avoid premature BE
              // Check if SL is already at Entry (or better)
              const isSLAtEntry = execution.side === 'BUY' ? execution.sl >= entryPrice : execution.sl <= entryPrice;
              
-             if (pnlPercent >= 1.5 && !isSLAtEntry) {
+             // Debug log for monitoring
+             if (pnlPercent > 1) {
+                 console.log(`[Trade Manager] PnL: ${pnlPercent.toFixed(2)}% | BE Threshold: 2.5% | BE Set: ${isSLAtEntry}`);
+             }
+             
+             if (pnlPercent >= 2.5 && !isSLAtEntry) {
                  console.log('[Trade Manager] 🛡️ Moving SL to Break Even...');
                  
                  // Cancel old SL/OCO
@@ -447,7 +463,7 @@ function App() {
             
             console.log(`[Sync] 🎯 TP: ${tp}, SL: ${sl}`);
 
-            // Calculate safety margin using REAL liquidation
+            // CALCULATE SAFETY MARGIN
             const slDistance = Math.abs(entryPrice - sl);
             const liqDistance = Math.abs(entryPrice - realLiquidationPrice);
             const safetyMargin = entryPrice > 0 ? ((liqDistance - slDistance) / entryPrice) * 100 : 0;
@@ -458,30 +474,33 @@ function App() {
             else if (safetyMargin > 0) riskLevel = 'HIGH';
             else riskLevel = 'EXTREME';
 
+            // HARDENING: Check if we have a local activeSignal with VALID SL/TP.
+            // If yes, we keep the local ones instead of the Binance 0s (Latency protection)
+            const resolvedTP = (tp === 0 && activeSignal?.takeProfit) ? activeSignal.takeProfit : tp;
+            const resolvedSL = (sl === 0 && activeSignal?.stopLoss) ? activeSignal.stopLoss : sl;
+
             const restoredSignal: TradeSignal = {
-                id: 'restored-' + Date.now(),
+                id: activeSignal?.id || 'restored-' + Date.now(),
                 type: side,
                 symbol: selectedAsset.symbol,
                 entryPrice: entryPrice,
                 quantity: Math.abs(size),
-                stopLoss: sl,
-                takeProfit: tp,
+                stopLoss: resolvedSL,
+                takeProfit: resolvedTP,
                 outputToken: 'USDT',
-                confidence: 0,
-                reasoning: 'Restored from Active Exchange Position',
+                confidence: activeSignal?.confidence || 0,
+                reasoning: activeSignal?.reasoning || 'Restored from Active Exchange Position',
                 outcome: 'PENDING',
-                timestamp: Date.now(),
+                timestamp: activeSignal?.timestamp || Date.now(),
                 execution: {
                     status: 'FILLED',
                     execution_status: 'FILLED',
-                    entryPrice: entryPrice,
-                    quantity: Math.abs(size),
-                    filled: Math.abs(size),
                     side: side,
                     leverage: lev,
                     mode: 'live',
-                    tp: tp,
-                    sl: sl
+                    tp: resolvedTP,
+                    sl: resolvedSL,
+                    unrealizedProfit: parseFloat(activePosition.unRealizedProfit)
                 },
                 meta: {
                     liquidation_info: {
@@ -494,15 +513,23 @@ function App() {
                 }
             };
             
-            console.log(`[Sync] ✅ Restoring signal:`, restoredSignal);
+            console.log(`[Sync] ✅ Signal synchronized:`, restoredSignal);
             setActiveSignal(restoredSignal);
             storageService.saveActiveSignal(restoredSignal, selectedAsset.symbol);
-            showNotification(`♻️ Restored active ${side} position for ${selectedAsset.symbol}`, 'success');
+            storageService.saveActiveSignalToSupabase(restoredSignal, selectedAsset.symbol); // SYNC TO CLOUD
+            
+            if (!activeSignal) {
+                showNotification(`♻️ Restored active ${side} position for ${selectedAsset.symbol}`, 'success');
+            }
             
             // Reset cleared signal tracker since we restored
             lastClearedSignalRef.current = null;
         }
         // CASE 2: Binance has NO position, but local HAS signal → CLEAR (closed externally)
+        // CRITICAL DEPRECATION: We rely on syncActivePosition loop (10s) to handle closures.
+        // This aggressive sync here fires immediately after trade confirmation, causing a race condition
+        // where it kills the trade before Binance reports it as open (latency).
+        /*
         else if (!activePosition && activeSignal && activeSignal.outcome === 'PENDING') {
             // Only notify if this is a NEW closure (not already notified)
             if (lastClearedSignalRef.current !== activeSignal.id) {
@@ -515,21 +542,34 @@ function App() {
                 console.log(`[Sync] ⏭️ Already notified about closure for signal ${activeSignal.id}, skipping notification`);
             }
         }
-        // CASE 3: Both match or both empty → OK, do nothing
+        */
+        // CASE 3: Both match → UPDATE DYNAMIC METRICS (PnL, etc.)
+        else if (activePosition && activeSignal && activeSignal.outcome === 'PENDING') {
+            console.log(`[Sync] 📈 Updating dynamic metrics for ${symbol}...`);
+            
+            const pnl = parseFloat(activePosition.unRealizedProfit);
+            
+            // Only update state if PnL has changed meaningfully or periodically
+            // This prevents excessive re-renders
+            setActiveSignal(prev => {
+                if (!prev || !prev.execution) return prev;
+                return {
+                    ...prev,
+                    execution: {
+                        ...prev.execution,
+                        unrealizedProfit: pnl,
+                        // Update other fields if they drifted (e.g. forced deleverage or liquidation price change)
+                    }
+                };
+            });
+        }
         else {
-            console.log(`[Sync] ✅ State is synchronized (both have position or both empty)`);
+            console.log(`[Sync] ✅ State is synchronized (both empty or match)`);
         }
     } catch (e) {
         console.error('[Sync] ❌ Failed to sync with Binance:', e);
     }
-  }, [selectedAsset, activeSignal]); // Removed showNotification to avoid circular dependency
-
-  // Run Sync on mount and interval
-  useEffect(() => {
-     syncStateWithBinance();
-     const id = setInterval(syncStateWithBinance, 10000); // Check every 10s
-     return () => clearInterval(id);
-  }, [syncStateWithBinance]);
+  }, [selectedAsset, activeSignal]); 
 
   // Reusable balance fetcher
   const fetchBalance = useCallback(async () => {
@@ -557,23 +597,55 @@ function App() {
       }
   }, [selectedAsset, updateBalance]);
 
+  // Manual Sync Wrapper
+  const handleManualSync = useCallback(async () => {
+      showNotification("🔄 Syncing with Binance...", "info");
+      await syncStateWithBinance();
+      // Also fetch balance
+      await fetchBalance();
+      showNotification("✅ Sync Complete", "success");
+  }, [syncStateWithBinance, fetchBalance]);
+
   // Load balance when selectedAsset changes or on mount
   useEffect(() => {
     fetchBalance();
     
-    // Poll for balance updates (Real-time Equity/PNL) every 3 seconds
-    const intervalId = setInterval(fetchBalance, 3000);
+    // Poll for balance updates (Real-time Equity/PNL) every 10 seconds (Throttled)
+    const intervalId = setInterval(fetchBalance, 10000);
 
-    // Restore Active Signal if any
-    const savedSignal = storageService.getActiveSignal(selectedAsset.symbol);
-    if (savedSignal && savedSignal.symbol === selectedAsset.symbol) {
-      console.log('[App] ♻️ Restored active signal for:', selectedAsset.symbol);
-      setActiveSignal(savedSignal);
-      
-      // Override UI settings
-      if (savedSignal.execution?.leverage) setLeverage(savedSignal.execution.leverage);
-      if (savedSignal.execution?.mode) setTradingMode(savedSignal.execution.mode);
-    }
+    // RESTORE STATE FROM BINANCE & CLOUD (Critical for Refresh/New Tab)
+    const restoreActiveState = async () => {
+        // 1. Try Local First
+        const savedSignal = storageService.getActiveSignal(selectedAsset.symbol);
+        if (savedSignal && savedSignal.symbol === selectedAsset.symbol) {
+            console.log('[App] ♻️ Restored active signal (LOCAL) for:', selectedAsset.symbol);
+            setActiveSignal(savedSignal);
+            if (savedSignal.execution?.leverage) setLeverage(savedSignal.execution.leverage);
+            if (savedSignal.execution?.mode) setTradingMode(savedSignal.execution.mode);
+        }
+
+        // 2. Sync from Cloud (Supabase) to handle device switches/incognito
+        try {
+            const cloudSignal = await storageService.fetchActiveSignalFromSupabase(selectedAsset.symbol);
+            if (cloudSignal && cloudSignal.id !== savedSignal?.id) {
+                console.log('[App] ♻️ Restored active signal (CLOUD) for:', selectedAsset.symbol);
+                setActiveSignal(cloudSignal);
+                storageService.saveActiveSignal(cloudSignal, selectedAsset.symbol); // Update local
+                if (cloudSignal.execution?.leverage) setLeverage(cloudSignal.execution.leverage);
+                if (cloudSignal.execution?.mode) setTradingMode(cloudSignal.execution.mode);
+            }
+        } catch (e) {
+            console.error('[App] Failed to fetch active signal from Supabase:', e);
+        }
+
+        // 3. Finally verify with Binance Actual State
+        if (tradingMode === 'live' || binanceTradingService.isConfigured()) {
+            console.log('[App] 🔄 Triggering final Binance/PnL Sync check...');
+            syncStateWithBinance();
+        }
+    };
+    
+    restoreActiveState();
     
     // Restore Last Analysis (Engine Scan) if any for this asset
     const savedAnalysis = storageService.getLastAnalysis(selectedAsset.symbol);
@@ -585,7 +657,7 @@ function App() {
     }
 
     return () => clearInterval(intervalId);
-  }, [selectedAsset, fetchBalance]);
+  }, [selectedAsset, fetchBalance, tradingMode, syncStateWithBinance]);
 
   // Handle manual/external trade close from OpenOrders component
   const handleExternalTradeClosed = useCallback(async (trade: any) => {
@@ -730,17 +802,8 @@ function App() {
           // 2. Connect WebSocket for real-time updates
           ws = binanceService.connectKlineStream(selectedAsset.symbol, selectedInterval, (candle, isClosed) => {
             if (!isActive) return;
-
-            setCandles(prev => {
-              // If candle is closed, add new candle
-              if (isClosed) {
-                return [...prev.slice(-999), candle]; // Keep last 1000 candles
-              }
-              // If candle is updating, replace last candle
-              const updated = [...prev];
-              updated[updated.length - 1] = candle;
-              return updated;
-            });
+            // Buffer the update instead of setting state immediately
+            candleBuffer.current = { candle, isClosed };
           });
 
           showNotification(`📡 Connected to Binance live data for ${selectedAsset.symbol}`, 'success');
@@ -1015,6 +1078,7 @@ function App() {
       setTradeHistory(prev => [expiredTrade, ...prev]);
       storageService.saveTradingLog(expiredTrade);
       storageService.saveActiveSignal(null, activeSignal.symbol);
+      storageService.saveActiveSignalToSupabase(null, activeSignal.symbol); // Clear from cloud
       setActiveSignal(prev => prev ? { ...prev, outcome: 'EXPIRED' } : null);
       
       showNotification(`Trade EXPIRED after ${AUTO_EXPIRE_HOURS}h. Closed at $${currentPrice.toFixed(2)}`, 'warning');
@@ -1141,6 +1205,7 @@ function App() {
 
       // Clear active signal from persistent storage once closed
       storageService.saveActiveSignal(null, activeSignal.symbol);
+      storageService.saveActiveSignalToSupabase(null, activeSignal.symbol); // Clear from cloud
       setActiveSignal(prev => prev ? { ...prev, outcome: closedOutcome! } : null);
     }
   }, [candles, activeSignal, balance, riskPercent, selectedAsset]); // Executing whenever candles update (which is often via WS)
@@ -1178,17 +1243,53 @@ function App() {
       return;
     }
 
-    // Don't analyze if we already have an OPEN active position or a PENDING confirmation
+    // Don't analyze if we already have a PENDING confirmation (waiting for user)
     if (pendingSignal) {
       console.log('[handleAnalyze] ⚠️ Early return: Pending signal exists', pendingSignal);
       return;
     }
-    if (activeSignal && activeSignal.outcome === 'PENDING') {
-      console.log('[handleAnalyze] ⚠️ Early return: Active signal is PENDING', activeSignal);
-      return;
+    
+    // ALLOW ANALYSIS even if Active Signal exists (User requested to see prediction)
+    // We just won't AUTO-EXECUTE if there's already a trade.
+
+    // 3. STRICT BINANCE STATE CHECK (The "Hit Terus" Fix)
+    // Even if local state says "No Signal", Binance might have an open position or pending order.
+    // We must respect the EXCHANGE state as the source of truth if Auto-Trading is ON.
+    if (autoMode && binanceTradingService.isConfigured() && tradingMode === 'live') {
+        try {
+            const cleanSymbol = selectedAsset.symbol.replace('/', '').replace(/USD$/, 'USDT');
+            
+            // A. Check for Open Positions
+            const positions = await binanceTradingService.getPositions(cleanSymbol);
+            const activePos = positions.find(p => parseFloat(p.positionAmt) !== 0);
+            
+            if (activePos) {
+                 console.warn(`[handleAnalyze] 🛑 BLOCKED: Active position exists on Binance (${activePos.positionAmt} ${cleanSymbol}).`);
+                 // Force sync local state if needed (optional, but handleSync handles this mostly)
+                 // Just return to prevent new trade
+                 if (!activeSignal) {
+                     showNotification("⚠️ Auto-Trade Paused: Active position detected on Binance.", "warning");
+                 }
+                 return;
+            }
+
+            // B. Check for Open Orders (Limit Orders, etc)
+            // User requirement: "jika masih ada open order harusnya auto trade off"
+            const openOrders = await binanceTradingService.getOpenOrders(cleanSymbol);
+            if (openOrders.length > 0) {
+                 console.warn(`[handleAnalyze] 🛑 BLOCKED: ${openOrders.length} Open Orders exist on Binance.`);
+                 showNotification("⚠️ Auto-Trade Paused: Open orders detected.", "warning");
+                 return;
+            }
+
+        } catch (checkError) {
+             console.error('[handleAnalyze] ⚠️ Failed to check Binance state. Aborting to be safe.', checkError);
+             // Fail safe: If we can't verify, DON'T TRADE.
+             return;
+        }
     }
 
-    console.log('[handleAnalyze] ✅ Proceeding with analysis...');
+    console.log('[handleAnalyze] ✅ Proceeding with analysis (Clean State Verified)...');
     setIsAnalyzing(true);
 
     // Uses the new Combined (Hybrid) ML service
@@ -1216,7 +1317,12 @@ function App() {
         willAutoExecute: autoMode || tradingMode === 'paper'
       });
 
-      if (autoMode || tradingMode === 'paper') {
+      const hasActiveTrade = activeSignal && activeSignal.outcome === 'PENDING';
+
+      if (hasActiveTrade) {
+          console.log('[handleAnalyze] ℹ️ Analysis updated, but trade execution skipped due to active position.');
+          showNotification("Prediction Updated (Execution Skipped: Active Trade)", "info");
+      } else if (autoMode || tradingMode === 'paper') {
         // --- AUTOMATIC EXECUTION (AUTO-SEND) ---
         console.log('[handleAnalyze] 🚀 AUTO-EXECUTING trade');
         confirmTrade(fullSignal);
@@ -1294,12 +1400,60 @@ function App() {
 
       try {
         const tradeSymbol = activeSignal.symbol.replace('/', '').replace(/USD$/, 'USDT');
-        console.log('[Position Sync] Checking Binance position for', tradeSymbol);
+        console.log(`[Position Sync] checking ${tradeSymbol} against activeSignal: ${activeSignal.symbol}`);
         
         const positions = await binanceTradingService.getPositions(tradeSymbol);
-        const activePos = positions.find(p => parseFloat(p.positionAmt) !== 0);
+        console.log('[Position Sync] Service returned positions:', positions);
+        
+        if (!Array.isArray(positions)) {
+             console.warn('[Position Sync] Invalid positions response (not array), skipping sync');
+             return;
+        }
 
-        if (!activePos) {
+        const activePos = positions.find(p => parseFloat(p.positionAmt) !== 0);
+        console.log('[Position Sync] Active Position found:', activePos);
+
+        // CHECK DIRECTION MISMATCH
+        if (activePos) {
+             const amt = parseFloat(activePos.positionAmt);
+             const isLong = amt > 0;
+             const isShort = amt < 0;
+             const signalIsLong = activeSignal.type === 'BUY';
+             const signalIsShort = activeSignal.type === 'SELL';
+
+             if ((signalIsLong && isShort) || (signalIsShort && isLong)) {
+                 console.warn(`[Position Sync] CRITICAL MISMATCH: Local ${activeSignal.type} but Binance has ${isLong ? 'LONG' : 'SHORT'} position.`);
+                 // This means the original trade is GONE/CLOSED and a new opposite one exists.
+                 // We must close the local trade to sync with reality.
+                 // We do NOT close the Binance position because it's valid (just different).
+                 
+                 // Force "activePos" to null to trigger the local close logic below
+                 // But we need to handle it carefully to not mess up PNL calculation for the *active* wrong position.
+                 // Actually, if direction flipped, the original trade is definitely closed.
+                 console.log('[Position Sync] Treating original trade as CLOSED due to direction flip.');
+                 
+                 // Fallthrough to the "if (!activePos)" block effectively by wrapping it? 
+                 // Or just set a flag to force close.
+                 // Let's modify the flow.
+             }
+        }
+        
+        // Revised Logic:
+        // Position is "Valid for this Signal" ONLY if it exists AND has correct direction.
+        const isValidPosition = activePos && (
+            (activeSignal.type === 'BUY' && parseFloat(activePos.positionAmt) > 0) ||
+            (activeSignal.type === 'SELL' && parseFloat(activePos.positionAmt) < 0)
+        );
+
+        if (!isValidPosition) {
+          // Double check: Did we get a valid empty list or error? 
+          // If we passed symbol to getPositions, empty list means no position.
+          // BUT, to prevent "flickering" closes, let's verify if candles are updating (connection alive).
+          if (candles.length === 0) {
+              console.warn('[Position Sync] Candles empty, assuming loading state. Skipping close.');
+              return;
+          }
+
           // Position closed on Binance but still PENDING locally
           console.warn('[Position Sync] ⚠️ Position closed on Binance. Determining outcome...');
           
@@ -1318,13 +1472,13 @@ function App() {
               
               console.log('[Position Sync] OCO Status:', { slOrderExists, tpOrderExists });
               
-              if (!tpOrderExists && slOrderExists) {
+              if (!tpOrderExists && slOrderExists && activeSignal.takeProfit > 0) {
                 // TP executed (TP order is gone, SL still exists)
                 exitPrice = activeSignal.takeProfit;
                 outcome = 'WIN';
                 closureReason = 'Take Profit Hit';
                 console.log('[Position Sync] ✅ Take Profit executed');
-              } else if (!slOrderExists && tpOrderExists) {
+              } else if (!slOrderExists && tpOrderExists && activeSignal.stopLoss > 0) {
                 // SL executed (SL order is gone, TP still exists)
                 exitPrice = activeSignal.stopLoss;
                 outcome = 'LOSS';
@@ -1332,9 +1486,12 @@ function App() {
                 console.log('[Position Sync] ❌ Stop Loss executed');
               } else {
                 // Both gone or manual close - use current price
-                exitPrice = candles.length > 0 ? candles[candles.length - 1].close : activeSignal.entryPrice;
+                // Fallback to entryPrice if candles not ready to avoid 0 check
+                const currentPrice = candles.length > 0 ? candles[candles.length - 1].close : activeSignal.entryPrice;
+                exitPrice = currentPrice > 0 ? currentPrice : activeSignal.entryPrice;
+                
                 closureReason = 'Manual Close or Unknown';
-                console.log('[Position Sync] Manual close detected');
+                console.log('[Position Sync] Manual close detected (Orders gone or not set)');
               }
             } catch (orderCheckError) {
               console.warn('[Position Sync] Failed to check orders, using current price:', orderCheckError);
@@ -1371,12 +1528,65 @@ function App() {
           
           // Clear active signal
           storageService.saveActiveSignal(null, activeSignal.symbol);
+          storageService.saveActiveSignalToSupabase(null, activeSignal.symbol); // Clear from cloud
           setActiveSignal(null);
           
           showNotification(`${closureReason}: ${finalPnl >= 0 ? '+' : ''}$${finalPnl.toFixed(2)}`, finalPnl >= 0 ? 'success' : 'warning');
         } else {
-          // Position still exists - optionally update quantity if it changed
-          const binanceQty = Math.abs(parseFloat(activePos.positionAmt));
+          // Position still exists - Check for Soft SL/TP Trigger
+          // This acts as a backup if Hard Orders fail or are not set
+          // CRITICAL: Use the valid position we found (which matches direction)
+          const validBinancePos = activePos; 
+          const binanceQty = Math.abs(parseFloat(validBinancePos.positionAmt));
+          const currentPrice = candles.length > 0 ? candles[candles.length - 1].close : 0;
+          
+          if (currentPrice > 0) {
+              let closeReason = '';
+              let shouldClose = false;
+
+              if (activeSignal.type === 'BUY') {
+                  if (activeSignal.stopLoss > 0 && currentPrice <= activeSignal.stopLoss) {
+                      shouldClose = true;
+                      closeReason = 'Soft Stop Loss';
+                  } else if (activeSignal.takeProfit > 0 && currentPrice >= activeSignal.takeProfit) {
+                      shouldClose = true;
+                      closeReason = 'Soft Take Profit';
+                  }
+              } else { // SELL
+                  if (activeSignal.stopLoss > 0 && currentPrice >= activeSignal.stopLoss) {
+                      shouldClose = true;
+                      closeReason = 'Soft Stop Loss';
+                  } else if (activeSignal.takeProfit > 0 && currentPrice <= activeSignal.takeProfit) {
+                      shouldClose = true;
+                      closeReason = 'Soft Take Profit';
+                  }
+              }
+
+              if (shouldClose) {
+                  console.warn(`[Position Sync] 🚨 ${closeReason} trigger detected at ${currentPrice}. Closing position...`);
+                  try {
+                      // Ensure we close the correct side
+                      const closeSide = activeSignal.type === 'BUY' ? 'SELL' : 'BUY';
+                      await binanceTradingService.placeOrder({
+                          symbol: tradeSymbol,
+                          side: closeSide,
+                          type: 'MARKET',
+                          quantity: binanceQty,
+                          reduceOnly: true
+                      });
+                      
+                      // Cancel any remaining open orders (Hard SL/TP that might be stuck)
+                      await binanceTradingService.cancelAllOrders(tradeSymbol);
+                      
+                      showNotification(`${closeReason} Executed!`, "warning");
+                      // The next sync loop will catch the closed position and finalize the trade history
+                  } catch (closeError) {
+                      console.error(`[Position Sync] Failed to execute ${closeReason}:`, closeError);
+                  }
+              }
+          }
+
+          // Update quantity if different (e.g. partial fill or manual partial close)
           if (activeSignal.quantity && Math.abs(binanceQty - activeSignal.quantity) > 0.001) {
             console.log('[Position Sync] Quantity mismatch. Updating:', { local: activeSignal.quantity, binance: binanceQty });
             const updatedSignal = { ...activeSignal, quantity: binanceQty };
@@ -1406,107 +1616,11 @@ function App() {
   }, [activeSignal, tradingMode, candles]);
 
   // --- QUICK TRAIN MODEL (500 Iterations) ---
-  const handleQuickTrain = async () => {
-    if (isTraining || candles.length < 150) {
-      if (candles.length < 150) showNotification("Need at least 150 candles for training", "warning");
-      return;
-    }
 
-    setIsTraining(true);
-    setTrainingProgress(0);
-    showNotification("🧠 Mass Training Started! This will take 1-2 minutes...", "info");
-
-    const TARGET_ITERATIONS = 500;
-    let trainedCount = 0;
-
-    try {
-      // Generate training samples from historical data
-      for (let i = 100; i < candles.length - 20 && trainedCount < TARGET_ITERATIONS; i += 2) {
-        const subset = candles.slice(i - 100, i);
-        const futureSlice = candles.slice(i, i + 20);
-
-        // Calculate indicators
-        const prices = subset.map(c => c.close);
-        const rsi = calculateRSI(prices);
-        const sma200 = calculateSMA(prices, 200);
-        const trend = analyzeTrend(subset, sma200);
-
-        const trainingIndicators: TechnicalIndicators = {
-          rsi,
-          trend,
-          fibLevels: { level0: 0, level236: 0, level382: 0, level500: 0, level618: 0, level100: 0 },
-          sma50: calculateSMA(prices, 50),
-          sma200,
-          sma20: calculateSMA(prices, 20),
-          ema20: calculateEMA(prices, 20),
-          ema12: calculateEMA(prices, 12),
-          ema26: calculateEMA(prices, 26),
-          nearestSupport: Math.min(...subset.slice(-20).map(c => c.low)),
-          nearestResistance: Math.max(...subset.slice(-20).map(c => c.high)),
-          volumeSma: calculateSMA(subset.map(c => c.volume), 20),
-          macd: { value: 0, signal: 0, histogram: 0 },
-          stochastic: { k: 50, d: 50 },
-          momentum: 0
-        };
-
-        // Determine outcome from future price action
-        const currentPrice = subset[subset.length - 1].close;
-        const futureHigh = Math.max(...futureSlice.map(c => c.high));
-        const futureLow = Math.min(...futureSlice.map(c => c.low));
-
-        const upMove = ((futureHigh - currentPrice) / currentPrice) * 100;
-        const downMove = ((currentPrice - futureLow) / currentPrice) * 100;
-
-        let outcome: 'WIN' | 'LOSS';
-        let type: 'BUY' | 'SELL';
-        let pnl: number;
-
-        if (upMove > downMove && upMove > 1) {
-          type = 'BUY';
-          outcome = 'WIN';
-          pnl = upMove * 100;
-        } else if (downMove > upMove && downMove > 1) {
-          type = 'SELL';
-          outcome = 'WIN';
-          pnl = downMove * 100;
-        } else if (upMove > 0.5) {
-          type = 'BUY';
-          outcome = 'LOSS';
-          pnl = -downMove * 100;
-        } else {
-          type = 'SELL';
-          outcome = 'LOSS';
-          pnl = -upMove * 100;
-        }
-
-        // Train the model
-        await trainModel(outcome, type, subset, trainingIndicators, 0.5, pnl, 100);
-
-        trainedCount++;
-        setTrainingProgress(Math.round((trainedCount / TARGET_ITERATIONS) * 100));
-
-        // Yield to browser every 50 iterations
-        if (trainedCount % 50 === 0) {
-          await new Promise(r => setTimeout(r, 10));
-        }
-      }
-
-      setIsTraining(false);
-      setTrainingProgress(100);
-      showNotification(`✅ Training Complete! Model trained with ${trainedCount} patterns. Confidence should be significantly higher now!`, "success");
-
-      // Refresh model to apply changes
-      refreshModel();
-    } catch (error) {
-      console.error("Training error:", error);
-      setIsTraining(false);
-      showNotification("❌ Training failed. Check console for details.", "error");
-    }
-  };
 
 
   // Execute Trade after Confirmation
-  const confirmTrade = async (signalOverride?: TradeSignal) => {
+  const confirmTrade = useCallback(async (signalOverride?: TradeSignal) => {
     const signal = signalOverride || pendingSignal;
     if (!signal) {
       console.log('[confirmTrade] ❌ No signal to confirm');
@@ -1606,6 +1720,37 @@ function App() {
         }
     } catch (e) {
         console.warn('[SMC] Failed to calc Fib TP:', e);
+    }
+
+
+    // --- 1.6 FALLBACK TP LOGIC (If AI/SMC failed to provide one) ---
+    // User expects "Auto TP" to always provide a target.
+    if (!finalTakeProfit || finalTakeProfit <= 0) {
+        console.log('[Auto TP] ⚠️ No TP provided. Calculating default (RR 1.5)...');
+        const rr = 1.5;
+        
+        if (signal.stopLoss > 0) {
+            // Calculate based on Risk Distance
+            const distance = Math.abs(entryPrice - signal.stopLoss);
+            if (signal.type === 'BUY') {
+                finalTakeProfit = entryPrice + (distance * rr);
+            } else {
+                finalTakeProfit = entryPrice - (distance * rr);
+            }
+        } else {
+            // Fallback to fixed percentage (1.5%) if no SL
+            const percent = 0.015;
+            if (signal.type === 'BUY') {
+                finalTakeProfit = entryPrice * (1 + percent);
+            } else {
+                finalTakeProfit = entryPrice * (1 - percent);
+            }
+        }
+        
+        // Round the calculated TP
+        finalTakeProfit = await binanceTradingService.roundPrice(tradeSymbol, finalTakeProfit);
+        console.log(`[Auto TP] 🎯 Default TP set to ${finalTakeProfit} (RR 1.5)`);
+        showNotification(`Auto TP set to ${finalTakeProfit} (RR 1.5)`, 'info');
     }
 
     // --- 2. CALCULATE QUANTITY (Based on Predicted Price) ---
@@ -1717,7 +1862,7 @@ function App() {
                         entry: entryOrderId,
                         oco: ocoOrder.orderListId,
                         stopLoss: ocoOrder.orders?.find((o: any) => o.type.includes('STOP'))?.orderId,
-                        takeProfit: ocoOrder.orders?.find((o: any) => o.type === 'LIMIT_MAKER')?.orderId
+                        takeProfit: ocoOrder.orders?.find((o: any) => o.type === 'TAKE_PROFIT_MARKET')?.orderId
                     };
                     
                     showNotification(`✅ Trade Opened on Binance (${isTestnet ? 'Testnet' : 'Live'})!`, "success");
@@ -1778,7 +1923,8 @@ function App() {
     };
     
     setActiveSignal(signalToPersist);
-    storageService.saveActiveSignal(signalToPersist, signal.symbol); 
+    storageService.saveActiveSignal(signalToPersist, signal.symbol);
+    storageService.saveActiveSignalToSupabase(signalToPersist, signal.symbol); // Sync to cloud 
     setPendingSignal(null);
 
     // Send push notification
@@ -1849,7 +1995,7 @@ function App() {
     
     // Optional: Trigger a custom event to notify other components (like OpenOrders) to refresh?
     // For now, OpenOrders polls every 5s.
-  };
+  }, [pendingSignal, activeSignal, tradingMode, candles, balance, riskPercent, leverage, indicators, sentimentScore]);
 
   // Manual Close Trade Handler
   const handleManualCloseTrade = useCallback(async (tradeId: string) => {
@@ -1870,41 +2016,55 @@ function App() {
     
     const currentPrice = candles[candles.length - 1].close;
     
-    // LIVE TRADING EXECUTION
-    if (tradingMode === 'live') {
-        try {
-            // Sanitize symbol (Fix potential BTCUSDTT double-suffix issue)
-            let cleanSymbol = trade.symbol.replace('/', '').replace(/USD$/, 'USDT');
-            if (cleanSymbol.endsWith('USDTT')) {
-                cleanSymbol = cleanSymbol.replace('USDTT', 'USDT');
-                console.log(`[Manual Close] Fixed corrupted symbol: ${trade.symbol} -> ${cleanSymbol}`);
-            }
 
-            // CHECK IF POSITION EXISTS ON BINANCE BEFORE CLOSING
-            // This prevents "Closing" a phantom trade from opening a NEW opposite position
-            const positions = await binanceTradingService.getPositions(cleanSymbol);
-            const activePos = positions.find(p => parseFloat(p.positionAmt) !== 0);
-            
-            // If no active position found on Binance, DO NOT execute a close order
-            if (!activePos) {
-                 console.warn(`[Manual Close] No active position found on Binance for ${cleanSymbol}. Closing local record only.`);
-                 showNotification(`⚠️ No open position on Binance. Closing local record only.`, 'warning');
-            } else {
-                 // Determine side to close (Opposite of entry)
-                 const side = trade.type === 'BUY' ? 'SELL' : 'BUY';
-                 
-                 // Execute Market Close Order using strict closePosition
-                 console.log(`[Manual Close] Executing LIVE ${side} order for ${cleanSymbol}`);
-                 await binanceTradingService.closePosition(cleanSymbol, activePos.positionAmt);
-                 
-                 showNotification(`✅ Position closed on Binance`, 'success');
+            // LIVE TRADING EXECUTION
+            if (tradingMode === 'live') {
+                try {
+                    // Sanitize symbol (Fix potential BTCUSDTT double-suffix issue)
+                    let cleanSymbol = trade.symbol.replace('/', '').replace(/USD$/, 'USDT');
+                    if (cleanSymbol.endsWith('USDTT')) {
+                        cleanSymbol = cleanSymbol.replace('USDTT', 'USDT');
+                        console.log(`[Manual Close] Fixed corrupted symbol: ${trade.symbol} -> ${cleanSymbol}`);
+                    }
+        
+                    // CHECK IF POSITION EXISTS ON BINANCE BEFORE CLOSING
+                    // This prevents "Closing" a phantom trade from opening a NEW opposite position
+                    const positions = await binanceTradingService.getPositions(cleanSymbol);
+                    const activePos = positions.find(p => parseFloat(p.positionAmt) !== 0);
+                    
+                    // If no active position found on Binance, DO NOT execute a close order
+                    if (!activePos) {
+                        console.warn(`[Manual Close] No active position found on Binance for ${cleanSymbol}. Closing local record only.`);
+                        showNotification(`⚠️ No open position on Binance. Closing local record only.`, 'warning');
+                    } else {
+                        // Determine side to close (Opposite of entry)
+                        const side = trade.type === 'BUY' ? 'SELL' : 'BUY';
+
+                         // 1. CANCEL ALL ORDERS FIRST (SL/TP)
+                         // This is important to clear out any pending stops
+                         try {
+                              console.log(`[Manual Close] Cancelling orders for ${cleanSymbol}...`);
+                              await binanceTradingService.cancelAllOrders(cleanSymbol);
+                              showNotification(`Executed: Cancel All Orders`, 'info');
+                         } catch (cancelError) {
+                              console.warn(`[Manual Close] Failed to cancel orders (non-critical):`, cancelError);
+                              // Proceed even if cancel fails, closing position is priority
+                         }
+                        
+                         // 2. Execute Market Close Order using strict closePosition
+                         console.log(`[Manual Close] Executing LIVE ${side} order for ${cleanSymbol}`);
+                         await binanceTradingService.closePosition(cleanSymbol, activePos.positionAmt);
+                        
+                         showNotification(`✅ Position closed on Binance`, 'success');
+                    }
+                } catch (error: any) {
+                    console.error('[Manual Close] Failed to close position on Binance:', error);
+                    showNotification(`Failed to close on Binance: ${error.message}`, 'error');
+                    // CRITICAL FIX: Do NOT update local state if Binance Close fails!
+                    // This prevents "Fake Close" where user thinks trade is closed but it's open.
+                    return;
+                }
             }
-        } catch (error: any) {
-            console.error('[Manual Close] Failed to close position on Binance:', error);
-            showNotification(`Failed to close on Binance: ${error.message}`, 'error');
-            // We proceed to update local state so user isn't stuck with a "Pending" trade that won't close
-        }
-    }
     
     // Calculate PNL
     const dist = Math.abs(trade.entryPrice - trade.stopLoss);
@@ -1934,6 +2094,7 @@ function App() {
     // If this is the active signal, clear it
     if (activeSignal?.id === tradeId) {
       storageService.saveActiveSignal(null, activeSignal.symbol);
+      storageService.saveActiveSignalToSupabase(null, activeSignal.symbol); // Clear from cloud
       setActiveSignal(null);
     }
     
@@ -2068,49 +2229,48 @@ function App() {
                  return; 
             }
 
-            // 2. Place PROTECTION Orders (Hard SL/TP) immediately after fill
-            // Determine opposite side for closing
-            const closeSide = newSignal.type === 'BUY' ? 'SELL' : 'BUY';
 
-            // A) Place STOP LOSS (STOP_MARKET)
-            if (stopLoss > 0) {
-                try {
-                    console.log(`[Binance] Placing STOP_MARKET SL at ${stopLoss}`);
-                    const slRes = await binanceTradingService.placeOrder({
-                        symbol: tradeSymbol,
-                        side: closeSide,
-                        type: 'STOP_MARKET',
-                        stopPrice: stopLoss,
-                        quantity: quantityAsset, // Close full amount
-                        reduceOnly: true,
-                        timeInForce: 'GTC'
-                    });
-                    strategyOrders.stopLoss = slRes.orderId;
-                    showNotification("Attributes: Hard Stop Loss set on Binance", "info");
-                } catch (slError) {
-                    console.error("Failed to place SL:", slError);
-                    showNotification("WARNING: Failed to place Stop Loss on Binance!", "error");
-                }
-            }
+            // 2. Place PROTECTION Orders (Hard SL/TP) using atomic helper
+            // We use the same helper as AI trades to ensure consistency
+            try {
+                console.log('[Manual Trade] Placing protective orders via placeOCOOrder...');
 
-            // B) Place TAKE PROFIT (TAKE_PROFIT_MARKET)
-            if (takeProfit > 0) {
+                const closeSide = newSignal.type === 'BUY' ? 'SELL' : 'BUY';
+                
+                // CRITICAL: Round prices to tickSize
+                const [stopPrice, takeProfitPrice] = await Promise.all([
+                    binanceTradingService.roundPrice(tradeSymbol, stopLoss),
+                    binanceTradingService.roundPrice(tradeSymbol, takeProfit)
+                ]);
+
+                const ocoOrder = await binanceTradingService.placeOCOOrder({
+                    symbol: tradeSymbol,
+                    side: closeSide,
+                    quantity: quantityAsset,
+                    price: takeProfitPrice,
+                    stopPrice: stopPrice,
+                    // stopLimitPrice: stopLimitPrice // Not used for MARKETS
+                });
+
+                strategyOrders.stopLoss = ocoOrder.orders?.find((o: any) => o.type.includes('STOP'))?.orderId;
+                strategyOrders.takeProfit = ocoOrder.orders?.find((o: any) => o.type === 'TAKE_PROFIT_MARKET')?.orderId;
+                
+                showNotification("✅ Hard SL/TP set on Binance", "success");
+
+            } catch (ocoError: any) {
+                console.error('[Manual Trade] ❌ Failed to place protective orders:', ocoError);
+                showNotification("CRITICAL: Failed to place SL/TP! Closing position...", "error");
+                
+                // EMERGENCY ROLLBACK: Close position immediately
                 try {
-                     console.log(`[Binance] Placing TAKE_PROFIT_MARKET TP at ${takeProfit}`);
-                     const tpRes = await binanceTradingService.placeOrder({
-                        symbol: tradeSymbol,
-                        side: closeSide,
-                        type: 'TAKE_PROFIT_MARKET',
-                        stopPrice: takeProfit,
-                        quantity: quantityAsset, // Close full amount
-                        reduceOnly: true,
-                        timeInForce: 'GTC'
-                    });
-                    strategyOrders.takeProfit = tpRes.orderId;
-                    showNotification("Attributes: Hard Take Profit set on Binance", "info");
-                } catch (tpError) {
-                    console.error("Failed to place TP:", tpError);
-                    showNotification("WARNING: Failed to place Take Profit on Binance!", "error");
+                    await binanceTradingService.closePosition(tradeSymbol, newSignal.type === 'BUY' ? quantityAsset : -quantityAsset);
+                    showNotification('⚠️ Position closed due to SL/TP failure.', 'warning');
+                    return; // Exit, trade cancelled
+                } catch (rbError) {
+                    console.error('[Manual Trade] ☠️ ROLLBACK FAILED:', rbError);
+                    showNotification('☠️ CRITICAL: Failed to close position! MANUALLY CLOSE NOW!', 'error');
+                    // We still return, but user is in dangerous state
+                    return;
                 }
             }
 
@@ -2194,6 +2354,7 @@ function App() {
     };
     setActiveSignal(signalWithQty);
     storageService.saveActiveSignal(signalWithQty, signalWithQty.symbol); // Persist state
+    storageService.saveActiveSignalToSupabase(signalWithQty, signalWithQty.symbol); // Sync to cloud
     setShowManualModal(false);
 
     // Send push notification for manual trade
@@ -2483,9 +2644,7 @@ function App() {
         />
       )}
 
-      {showStrategyGuide && (
-        <StrategyGuideModal onClose={() => setShowStrategyGuide(false)} />
-      )}
+
 
       {showSettings && (
         <SettingsModal onClose={() => setShowSettings(false)} />
@@ -2512,65 +2671,6 @@ function App() {
           >
             <LayoutDashboard className="w-5 h-5" />
           </button>
-          <button
-            onClick={() => setCurrentView('backtest')}
-            className={`p-3 rounded-lg transition-colors flex justify-center ${currentView === 'backtest' ? 'bg-slate-800 text-blue-400' : 'text-slate-400 hover:bg-slate-800 hover:text-blue-400'}`}
-            title="Backtest Lab"
-          >
-            <FlaskConical className="w-5 h-5" />
-          </button>
-
-          <button
-            onClick={() => setCurrentView('analytics')}
-            className={`p-3 rounded-lg transition-colors flex justify-center ${currentView === 'analytics' ? 'bg-slate-800 text-purple-400' : 'text-slate-400 hover:bg-slate-800 hover:text-purple-400'}`}
-            title="AI Analytics"
-          >
-            <Activity className="w-5 h-5" />
-          </button>
-
-          <button
-              onClick={() => setCurrentView('training')}
-              className={`p-3 rounded-xl transition-all duration-300 group relative ${currentView === 'training' ? 'bg-pink-500/10 text-pink-400' : 'text-slate-400 hover:bg-white/5'}`}
-              title="AI Training"
-            >
-              <BrainCircuit className="w-5 h-5 group-hover:scale-110 transition-transform" />
-              {currentView === 'training' && <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 bg-pink-500 rounded-r-full shadow-[0_0_10px_rgba(236,72,153,0.5)]"></div>}
-            </button>
-
-            <button
-              onClick={() => setCurrentView('ai-intelligence')}
-              className={`p-3 rounded-xl transition-all duration-300 group relative ${currentView === 'ai-intelligence' ? 'bg-blue-500/10 text-blue-400' : 'text-slate-400 hover:bg-white/5'}`}
-              title="AI Intelligence"
-            >
-              <Brain className="w-5 h-5 group-hover:scale-110 transition-transform" />
-              {currentView === 'ai-intelligence' && <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 bg-blue-500 rounded-r-full shadow-[0_0_10px_rgba(59,130,246,0.5)]"></div>}
-            </button>
-            
-
-
-          <button
-            onClick={() => setCurrentView('leverage')}
-            className={`p-3 rounded-lg transition-colors flex justify-center ${currentView === 'leverage' ? 'bg-slate-800 text-amber-400' : 'text-slate-400 hover:bg-slate-800 hover:text-amber-400'}`}
-            title="Leverage Trading (10x)"
-          >
-            <Coins className="w-5 h-5" />
-          </button>
-
-          <button
-            onClick={() => setCurrentView('journal')}
-            className={`p-3 rounded-lg transition-colors flex justify-center ${currentView === 'journal' ? 'bg-slate-800 text-emerald-400' : 'text-slate-400 hover:bg-slate-800 hover:text-emerald-400'}`}
-            title="Trading Journal"
-          >
-            <BookOpen className="w-5 h-5" />
-          </button>
-
-          <button
-            onClick={() => setShowStrategyGuide(true)}
-            className="p-3 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-emerald-400 transition-colors flex justify-center"
-            title="Strategy Guide"
-          >
-            <BookOpen className="w-5 h-5" />
-          </button>
         </div>
 
         <div className="mt-auto pb-4">
@@ -2595,48 +2695,6 @@ function App() {
             <span className="text-[10px] font-medium">Terminal</span>
           </button>
           <button
-            onClick={() => setCurrentView('backtest')}
-            className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-colors min-w-[60px] ${currentView === 'backtest' ? 'text-blue-400' : 'text-slate-400'}`}
-          >
-            <FlaskConical className="w-6 h-6" />
-            <span className="text-[10px] font-medium">Backtest</span>
-          </button>
-          <button
-            onClick={() => setCurrentView('analytics')}
-            className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-colors min-w-[60px] ${currentView === 'analytics' ? 'text-purple-400' : 'text-slate-400'}`}
-          >
-            <Activity className="w-6 h-6" />
-            <span className="text-[10px] font-medium">Analytics</span>
-          </button>
-          <button
-            onClick={() => setCurrentView('training')}
-            className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-colors min-w-[60px] ${currentView === 'training' ? 'text-pink-400' : 'text-slate-400'}`}
-          >
-            <BrainCircuit className="w-6 h-6" />
-            <span className="text-[10px] font-medium">Training</span>
-          </button>
-          <button
-            onClick={() => setCurrentView('ai-intelligence')}
-            className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-colors min-w-[60px] ${currentView === 'ai-intelligence' ? 'text-blue-400' : 'text-slate-400'}`}
-          >
-            <Brain className="w-6 h-6" />
-            <span className="text-[10px] font-medium">Intelligence</span>
-          </button>
-          <button
-            onClick={() => setCurrentView('leverage')}
-            className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-colors min-w-[60px] ${currentView === 'leverage' ? 'text-amber-400' : 'text-slate-400'}`}
-          >
-            <Coins className="w-6 h-6" />
-            <span className="text-[10px] font-medium">Leverage</span>
-          </button>
-          <button
-            onClick={() => setCurrentView('journal')}
-            className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-colors min-w-[60px] ${currentView === 'journal' ? 'text-emerald-400' : 'text-slate-400'}`}
-          >
-            <BookOpen className="w-6 h-6" />
-            <span className="text-[10px] font-medium">Journal</span>
-          </button>
-          <button
             onClick={() => setShowSettings(true)}
             className="flex flex-col items-center gap-1 p-2 rounded-lg transition-colors min-w-[60px] text-slate-400"
           >
@@ -2654,7 +2712,7 @@ function App() {
           <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-4">
             <div className="flex-1">
               <h1 className="text-lg sm:text-xl md:text-2xl font-bold bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">
-                {currentView === 'terminal' ? 'NeuroTrade' : currentView === 'backtest' ? 'Backtest' : currentView === 'analytics' ? 'Analytics' : currentView === 'training' ? 'AI Training' : currentView === 'leverage' ? 'Leverage' : 'NeuroTrade'}
+                NeuroTrade
               </h1>
               <div className="flex items-center gap-2 mt-1">
                 <div className="flex flex-col sm:flex-row gap-1 sm:gap-2 items-start sm:items-center">
@@ -2801,83 +2859,8 @@ function App() {
         </header>
 
         {/* View Content */}
-        {currentView === 'analytics' ? (
-          <AnalyticsDashboard trades={tradeHistory} />
-        ) : currentView === 'leverage' ? (
-          <LeverageDashboard />
-        ) : currentView === 'journal' ? (
-          <div className="h-full overflow-hidden">
-            <TradingJournal />
-          </div>
-        ) : currentView === 'training' ? (
-          <TrainingDashboard />
-        ) : currentView === 'ai-intelligence' ? (
-          <div className="h-full overflow-y-auto space-y-6">
-            <div className="flex flex-col gap-6">
-              <div className="bg-[#0a0a0f] border border-white/5 rounded-2xl p-6 shadow-2xl">
-                <div className="flex items-center justify-between mb-8">
-                  <div className="flex items-center gap-4">
-                    <div className="p-3 bg-blue-500/10 rounded-2xl">
-                      <Brain className="w-8 h-8 text-blue-400" />
-                    </div>
-                    <div>
-                      <h2 className="text-2xl font-black text-white tracking-tight">AI Intelligence Hub</h2>
-                      <p className="text-gray-500 text-sm">Advanced performance analytics and model optimization</p>
-                    </div>
-                  </div>
-                  
-                  <button 
-                    onClick={handleSyncHistory}
-                    disabled={isSyncingHistory}
-                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-white font-bold text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {isSyncingHistory ? (
-                      <RefreshCw className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <UploadCloud className="w-4 h-4" />
-                    )}
-                    {isSyncingHistory ? 'Processing...' : 'Sync Binance History'}
-                  </button>
-                </div>
-                
-                <TradeAnalyticsDashboard 
-                  trades={tradeHistory} 
-                  currentBalance={balance}
-                  assetSymbol={selectedAsset.symbol.split('/')[0]} // Pass "BNB" not "BNB/USDT"
-                />
-              </div>
+        {/* View Content - Terminal Only */}
 
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-                <BatchTrainingPanel 
-                  trades={tradeHistory} 
-                  onComplete={() => {
-                    console.log("[App] Batch training completed");
-                  }} 
-                />
-                <HyperparameterOptimizer trades={tradeHistory} />
-              </div>
-            </div>
-          </div>
-        ) : currentView === 'backtest' ? (
-          <div className="flex-1 min-h-0 relative">
-            {candles.length === 0 ? (
-              <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950 text-slate-400 gap-3">
-                <RefreshCw className="w-8 h-8 animate-spin text-blue-500" />
-                <p className="text-sm font-mono animate-pulse">LOADING MARKET DATA...</p>
-                <p className="text-xs text-slate-600 max-w-[200px] text-center">
-                  Connecting to Binance or using fallback data...
-                </p>
-              </div>
-            ) : (
-              <BacktestPanel
-                candles={candles}
-                symbol={selectedAsset.symbol}
-                timeframe={selectedInterval}
-                initialBalance={10000}
-              />
-            )}
-          </div>
-        ) : (
           <div className="flex flex-col h-full overflow-hidden">
             {/* Mobile/Tablet Terminal Tabs */}
             <div className="flex lg:hidden bg-slate-900 p-1 rounded-lg mb-2 gap-1 border border-slate-800 shrink-0 mx-1">
@@ -2919,11 +2902,12 @@ function App() {
                   </div>
 
                   <div className="flex-1 relative">
-                    <ModernCandleChart
-                      data={candles.slice(-150)}
-                      pendingSignal={pendingSignal}
-                      activeTrade={activeSignal?.outcome === 'PENDING' ? activeSignal : null}
-                      fibLevels={indicators?.fibLevels}
+                    <RealtimePriceDisplay
+                      symbol={selectedAsset.symbol}
+                      candles={candles}
+                      trend={indicators?.trend}
+                      rsi={indicators?.rsi}
+                      sma200={indicators?.sma200}
                     />
                   </div>
                   
@@ -3004,7 +2988,7 @@ function App() {
               </div>
 
               {/* MIDDLE COLUMN: Signal & Alerts */}
-              <div className={`lg:col-span-1 space-y-3 md:space-y-4 flex-col lg:overflow-y-auto ${terminalTab === 'trade' ? 'flex' : 'hidden lg:flex'}`}>
+              <div className={`lg:col-span-2 space-y-3 md:space-y-4 flex-col lg:overflow-y-auto ${terminalTab === 'trade' ? 'flex' : 'hidden lg:flex'}`}>
                 {/* Active Signal Card */}
                 <div className={`bg-slate-900 border ${isManualOverride ? 'border-amber-500/50' : 'border-slate-800'} rounded-xl p-4 shadow-lg relative overflow-hidden group shrink-0`}>
                   <div className={`absolute top-0 right-0 w-32 h-32 ${isManualOverride ? 'bg-amber-500/5 group-hover:bg-amber-500/10' : 'bg-blue-500/5 group-hover:bg-blue-500/10'} rounded-full blur-3xl transition-all`}></div>
@@ -3178,7 +3162,9 @@ function App() {
                                     <span className="text-[10px] font-bold text-slate-400 uppercase">Running PnL</span>
                                     <div className="text-right">
                                         <div className={`text-sm font-mono font-black ${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                            {pnl >= 0 ? '+' : ''}{quantity ? `$${pnl.toFixed(2)}` : (activeSignal.type === 'BUY' ? currentPrice - entryPrice : entryPrice - currentPrice).toFixed(2)}
+                                            {activeSignal.execution?.unrealizedProfit !== undefined 
+                                                ? (activeSignal.execution.unrealizedProfit >= 0 ? '+' : '') + `$${activeSignal.execution.unrealizedProfit.toFixed(2)}`
+                                                : (pnl >= 0 ? '+' : '') + (quantity ? `$${pnl.toFixed(2)}` : (activeSignal.type === 'BUY' ? currentPrice - entryPrice : entryPrice - currentPrice).toFixed(2))}
                                         </div>
                                     </div>
                                 </div>
@@ -3198,98 +3184,78 @@ function App() {
                                         tradeSymbol += 'T';
                                     }
                                     
-                                    // STEP 1: Cancel OCO orders if they exist
-                                    if (activeSignal.execution?.orderId && typeof activeSignal.execution.orderId === 'object') {
-                                        try {
-                                            console.log('[Manual Close] Cancelling OCO orders...');
-                                            await binanceTradingService.cancelAllOrders(tradeSymbol);
-                                            console.log('[Manual Close] ✅ OCO orders cancelled');
-                                        } catch (cancelError: any) {
-                                            console.warn('[Manual Close] Failed to cancel OCO:', cancelError);
-                                            // Continue anyway - market close will override
-                                        }
-                                    }
-                                    
-                                    const closeSide = activeSignal.type === 'BUY' ? 'SELL' : 'BUY';
-                                    
-                                    // Ensure we have a valid quantity
-                                    let qty = activeSignal.quantity || 0;
-                                    if (qty === 0 && activeSignal.execution?.size) {
-                                         qty = activeSignal.execution.size;
-                                    }
+                                    showNotification("⏳ Closing Position...", "info");
 
-                                    // NEW: Fallback to fetch ACTUAL position from Binance if local is 0
-                                    let actualSide = closeSide;
-                                    
-                                    if (qty === 0) {
-                                        try {
-                                             // showNotification("Syncing position with Binance...", "info");
-                                             const positions = await binanceTradingService.getPositions(tradeSymbol);
-                                             const pos = positions.find(p => p.symbol === tradeSymbol && parseFloat(p.positionAmt) !== 0);
-                                             
-                                             if (pos) {
-                                                 const amt = parseFloat(pos.positionAmt);
-                                                 qty = Math.abs(amt);
-                                                 // Determine close side: If Long (pos > 0), we SELL. If Short (pos < 0), we BUY.
-                                                 actualSide = amt > 0 ? 'SELL' : 'BUY';
-                                                 console.log(`[Close] Found active position on Binance: ${qty} (${actualSide})`);
-                                             } else {
-                                                 const confirmClear = window.confirm(
-                                                     "No open position found on Binance for this symbol.\n\nClick OK to clear this 'stuck' signal locally."
-                                                 );
-                                                 if (confirmClear) {
-                                                     handleExternalTradeClosed(activeSignal.id, 0, 0, 0); 
-                                                     showNotification("Local signal cleared.", "success");
-                                                 }
-                                                 return;
-                                             }
-                                        } catch (e: any) {
-                                            console.error("[Close] Failed to fetch position:", e);
-                                            showNotification("Error syncing position: " + (e.message || e), "error");
-                                            return;
-                                        }
+                                    // STEP 1: Cancel ALL Open Orders (SL/TP)
+                                    try {
+                                        console.log('[Manual Close] Cancelling open orders...');
+                                        await binanceTradingService.cancelAllOrders(tradeSymbol);
+                                        console.log('[Manual Close] ✅ Open orders cancelled');
+                                    } catch (cancelError: any) {
+                                        console.warn('[Manual Close] Failed to cancel orders:', cancelError);
+                                        // Continue anyway - we must close the position
                                     }
                                     
-                                    // Dynamically round quantity based on Binance LOT_SIZE stepSize
-                                    const roundedQty = await binanceTradingService.roundQuantity(tradeSymbol, qty);
-                                    
-                                    if (Number(roundedQty) === 0) {
-                                        showNotification("Cannot close: Quantity is 0", "error");
+                                    // STEP 2: Fetch REAL Position from Binance (Source of Truth)
+                                    // We DO NOT rely on local 'activeSignal.quantity' or 'side' to avoid "Wrong Flow" / Reversing
+                                    let positionAmt = 0;
+                                    try {
+                                         const positions = await binanceTradingService.getPositions(tradeSymbol);
+                                         const pos = positions.find(p => p.symbol === tradeSymbol);
+                                         if (pos) {
+                                             positionAmt = parseFloat(pos.positionAmt);
+                                         }
+                                    } catch (e: any) {
+                                        console.error("[Close] Failed to fetch position:", e);
+                                        showNotification("Error checking Binance position: " + (e.message || e), "error");
                                         return;
                                     }
 
-                                    console.log("[Close] Attempting to close", {
-                                        original: activeSignal.symbol,
-                                        tradeSymbol,
-                                        qty: qty,
-                                        roundedQty,
-                                        side: actualSide
-                                    });
+                                    // STEP 3: Analyze Position
+                                    if (positionAmt === 0) {
+                                        const confirmClear = window.confirm(
+                                            "⚠️ No open position found on Binance for this symbol.\n\nThe trade might have been closed exclusively or by SL/TP.\n\nClick OK to clear this signal locally."
+                                        );
+                                        if (confirmClear) {
+                                            setActiveSignal(null);
+                                            storageService.clearActiveSignal(activeSignal.symbol);
+                                            showNotification("Local signal cleared.", "success");
+                                        }
+                                        return;
+                                    }
 
+                                    // STEP 4: Determine Closing Side & Quantity
+                                    const absQty = Math.abs(positionAmt);
+                                    const closeSide = positionAmt > 0 ? 'SELL' : 'BUY'; // If Long (>0), Sell. If Short (<0), Buy.
+                                    
+                                    console.log(`[Close] Found Active Position: ${positionAmt} ${tradeSymbol}. Closing via ${closeSide}...`);
+
+                                    // STEP 5: Execute "Reduce Only" Market Order
+                                    // This guarantees we NEVER open a new position, only reduce/close.
+                                    const roundedQty = await binanceTradingService.roundQuantity(tradeSymbol, absQty);
+                                    
                                     await binanceTradingService.placeOrder({
                                         symbol: tradeSymbol,
-                                        side: actualSide as 'BUY' | 'SELL',
+                                        side: closeSide,
                                         type: 'MARKET',
-                                        quantity: roundedQty
+                                        quantity: roundedQty,
+                                        reduceOnly: true // CRITICAL: Ensures we don't flip position
                                     });
                                     
-                                    showNotification("Position Closed on Binance!", "success");
+                                    showNotification("✅ Position Closed Successfully!", "success");
                                     
                                     // Calculate PnL locally for display/history
-                                    // Fetch latest price? Use current candle close
                                     const closePrice = candles[candles.length - 1].close;
-                                    const pnl = activeSignal.type === 'BUY' 
-                                        ? (closePrice - activeSignal.entryPrice) * (activeSignal.quantity || 0)
-                                        : (activeSignal.entryPrice - closePrice) * (activeSignal.quantity || 0);
+                                    // const pnl = ... (Optional: precise PnL from trade result would be better but requires more calls)
 
                                     const symbolToClear = activeSignal.symbol;
                                     setActiveSignal(null); // Clear active signal
                                     storageService.saveActiveSignal(null, symbolToClear); // Clear persistence
+                                    storageService.saveActiveSignalToSupabase(null, symbolToClear); // Clear Cloud persistence
                                     
-                                    // Save log
-                                    // ... existing log logic ...
                                 } catch (e: any) {
-                                    showNotification("Components Error: " + e.message, "error");
+                                    showNotification("Close Error: " + e.message, "error");
+                                    console.error("Close Error", e);
                                 }
                             }}
                             className="col-span-2 bg-slate-800 hover:bg-slate-700 text-white py-2.5 rounded-lg text-xs font-bold border border-slate-600 transition-all flex justify-center items-center gap-2"
@@ -3317,27 +3283,16 @@ function App() {
                         {activeSignal && activeSignal.outcome === 'PENDING' ? `Trade managed elsewhere` : "No active trade signal"}
                       </span>
                       
-                      <div className="grid grid-cols-2 gap-2 w-full mt-2">
+                      <div className="w-full mt-4 flex">
                          <button
                           onClick={handleAnalyze}
-                          disabled={isAnalyzing || (activeSignal?.outcome === 'PENDING' && activeSignal.symbol === selectedAsset.symbol)}
-                          className={`py-2 px-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-all text-xs border ${isAnalyzing 
+                          disabled={isAnalyzing}
+                          className={`w-full py-3.5 px-4 rounded-xl font-bold flex items-center justify-center gap-3 transition-all text-sm shadow-xl border ${isAnalyzing 
                             ? 'bg-slate-800 border-slate-700 text-slate-500 cursor-not-allowed' 
-                            : 'bg-blue-600 border-blue-500 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/20'}`}
+                            : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white border-blue-500/50 shadow-blue-900/40 transform active:scale-95'}`}
                         >
-                          {isAnalyzing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <BrainCircuit className="w-3.5 h-3.5" />}
-                          {isAnalyzing ? "..." : "Predict"}
-                        </button>
-
-                        <button
-                          onClick={handleQuickTrain}
-                          disabled={isTraining || candles.length < 150}
-                          className={`py-2 px-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-all text-xs border ${isTraining 
-                            ? 'bg-slate-800 border-slate-700 text-slate-500 cursor-not-allowed' 
-                            : 'bg-emerald-600 border-emerald-500 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-900/20'}`}
-                        >
-                          {isTraining ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-                          {isTraining ? `${trainingProgress}%` : "Train"}
+                          {isAnalyzing ? <RefreshCw className="w-5 h-5 animate-spin" /> : <BrainCircuit className="w-5 h-5" />}
+                          {isAnalyzing ? "Analyzing Market Data..." : "GENERATE PREDICTION"}
                         </button>
                       </div>
                     </div>
@@ -3674,6 +3629,15 @@ function App() {
                           <span className="text-[10px] text-slate-500">Max Size</span>
                           <span className="text-xs font-mono font-medium text-slate-300">USDT {(balance * leverage * (riskPercent / 100)).toLocaleString('id-ID', { maximumFractionDigits: 0 })}</span>
                         </div>
+                        
+                        {/* MANUAL SYNC BUTTON */}
+                        <button 
+                            onClick={handleManualSync}
+                            className="p-1 hover:bg-slate-700 rounded transition-colors text-slate-400 hover:text-white"
+                            title="Force Sync with Binance"
+                        >
+                             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg>
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -3681,13 +3645,12 @@ function App() {
 
               </div>
 
-              {/* RIGHT COLUMN: News \u0026 Order Book */}
-              <div className={`lg:col-span-1 space-y-3 md:space-y-4 flex-col lg:overflow-y-auto ${terminalTab === 'data' ? 'flex' : 'hidden lg:flex'}`}>
-
-                {/* Order Book Component */}
-                <div className="shrink-0">
+              {/* RIGHT COLUMN: News & Order Book (HIDDEN) */}
+              <div className="hidden">
+                {/* Order Book Removed for Performance */}
+                {/* <div className="shrink-0">
                   <OrderBook symbol={selectedAsset.symbol} />
-                </div>
+                </div> */}
 
                 {/* News Feed */}
                 <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 md:p-4 shadow-xl flex flex-col min-h-[300px] shrink-0">
@@ -3713,8 +3676,6 @@ function App() {
               </div>
             </div>
           </div>
-        )}
-        <Analytics />
       </main>
     </div>
   );

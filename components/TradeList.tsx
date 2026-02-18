@@ -7,7 +7,7 @@ interface TradeListProps {
   onCloseTrade?: (tradeId: string) => void;
 }
 
-const TradeList: React.FC<TradeListProps> = ({ trades, onCloseTrade }) => {
+const TradeList: React.FC<TradeListProps> = React.memo(({ trades, onCloseTrade }) => {
   const [showPending, setShowPending] = useState(true);
 
   // Calculate duration for PENDING trades
@@ -111,9 +111,9 @@ const TradeList: React.FC<TradeListProps> = ({ trades, onCloseTrade }) => {
           onClick={() => setShowPending(!showPending)}
           className={`flex items-center gap-2 px-3 py-1 rounded text-xs font-medium transition-colors ${
             showPending 
-              ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' 
-              : 'bg-slate-800 text-slate-400 border border-slate-700'
-          }`}
+          ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' 
+          : 'bg-slate-800 text-slate-400 border border-slate-700'
+        }`}
         >
           <span>{showPending ? 'Hide' : 'Show'} Pending</span>
           {pendingCount > 0 && (
@@ -180,12 +180,12 @@ const TradeList: React.FC<TradeListProps> = ({ trades, onCloseTrade }) => {
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
                       <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                          trade.outcome === 'WIN' ? 'bg-emerald-500/20 text-emerald-400' : 
-                          trade.outcome === 'LOSS' ? 'bg-rose-500/20 text-rose-400' : 
-                          trade.outcome === 'EXPIRED' ? 'bg-orange-500/20 text-orange-400' :
-                          trade.outcome === 'MANUAL_CLOSE' ? 'bg-purple-500/20 text-purple-400' :
-                          stale ? 'bg-yellow-500/20 text-yellow-400' :
-                          'bg-blue-500/20 text-blue-400'
+                        trade.outcome === 'WIN' ? 'bg-emerald-500/20 text-emerald-400' : 
+                        trade.outcome === 'LOSS' ? 'bg-rose-500/20 text-rose-400' : 
+                        trade.outcome === 'EXPIRED' ? 'bg-orange-500/20 text-orange-400' :
+                        trade.outcome === 'MANUAL_CLOSE' ? 'bg-purple-500/20 text-purple-400' :
+                        stale ? 'bg-yellow-500/20 text-yellow-400' :
+                        'bg-blue-500/20 text-blue-400'
                       }`}>
                           {trade.outcome}
                       </span>
@@ -219,6 +219,6 @@ const TradeList: React.FC<TradeListProps> = ({ trades, onCloseTrade }) => {
       </div>
     </div>
   );
-};
+});
 
 export default TradeList;

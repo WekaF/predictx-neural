@@ -434,6 +434,9 @@ const getMarketState = (candles: Candle[], indicators: TechnicalIndicators, sent
 
 // --- SERVICE EXPORTS ---
 
+let lastAnalysisTime = 0;
+const ANALYSIS_COOLDOWN_MS = 1500; // 1.5s cooldown for heavy analysis
+
 export const analyzeMarket = async (
     candles: Candle[],
     indicators: TechnicalIndicators,
@@ -443,6 +446,13 @@ export const analyzeMarket = async (
     strategy: 'SCALP' | 'SWING' = 'SCALP',
     isTraining: boolean = false // NEW: Allow lower confidence during training
 ): Promise<TradeSignal | null> => {
+    // 0. Debounce Guard (Prevent UI lockup from rapid calls)
+    const now = Date.now();
+    if (!isTraining && (now - lastAnalysisTime < ANALYSIS_COOLDOWN_MS)) {
+        console.log('[analyzeMarket] ⏳ Analysis debounced (cooldown)');
+        return null;
+    }
+    lastAnalysisTime = now;
 
     // 1. Run Local RL Analysis (Fast, Free)
     // ------------------------------------
@@ -463,6 +473,16 @@ export const analyzeMarket = async (
     let decision: 'BUY' | 'SELL' | 'HOLD' = 'HOLD';
     let confidence = qHold;
 
+    // === DEBUG LOGGING ===
+    console.log('\n=== 🔍 AI DECISION DEBUG ===');
+    console.log(`Q-Values: BUY=${qBuy.toFixed(4)}, SELL=${qSell.toFixed(4)}, HOLD=${qHold.toFixed(4)}`);
+    console.log(`Q-Values Identical (Virgin Model): ${qBuy === qSell && qSell === qHold}`);
+    console.log(`Epsilon: ${brain.epsilon.toFixed(3)} (${(brain.epsilon * 100).toFixed(1)}% exploration chance)`);
+    console.log(`Training Iterations: ${brain.totalTrainingIterations}`);
+    console.log(`Market State: RSI=${(state[0]*100).toFixed(1)}%, Trend=${state[1] > 0.5 ? 'UP' : 'DOWN'}, BB Position=${(state[2]*100).toFixed(1)}%`);
+    console.log(`Indicators: RSI=${indicators.rsi.toFixed(1)}, Trend=${indicators.trend}, Price=${last.close.toFixed(2)}`);
+    console.log('========================\n');
+
     // --- 1.5 CALL PYTHON BACKEND (Tier 2 Inference) ---
     // If enabled, this overrides or enhances local decision
     // --------------------------------------------------
@@ -480,10 +500,10 @@ export const analyzeMarket = async (
                 backendConfidence = backendRes.agent_action.confidence; // 0-100
                 backendExecution = backendRes.execution;
                 backendMeta = backendRes.agent_action.meta;
-                console.log(`[Python AI] ${backendAction} with ${backendConfidence}% confidence`);
+                console.log(`[Python AI] 🐍 Backend says: ${backendAction} with ${backendConfidence}% confidence`);
             }
         } catch (e) {
-            console.warn("Backend inference skipped");
+            console.warn("[Backend] ⚠️ Backend inference skipped (not available)");
         }
     }
 
@@ -554,14 +574,16 @@ export const analyzeMarket = async (
     // --- MERGE STRATEGY: LOCAL + BACKEND ---
     if (backendAction && backendAction !== 'HOLD' && backendConfidence > 60) {
         // If Backend is confident, override Local
+        console.log(`[AI Merge] 🤝 Backend OVERRIDE: ${decision} → ${backendAction} (Backend Conf: ${backendConfidence}%)`);
         decision = backendAction as 'BUY' | 'SELL';
         confidence = backendConfidence;
-        console.log(`[AI Merge] 🤝 Adopting Python Backend Signal: ${decision} (${confidence}%)`);
     } else if (backendAction === 'HOLD' && backendConfidence > 80 && decision !== 'HOLD') {
         // If Backend strongly says HOLD, override Local Buy/Sell (Veto power)
-        console.log(`[AI Merge] 🛑 Backend vetoed ${decision} (Backend Conf: ${backendConfidence}%)`);
+        console.log(`[AI Merge] 🛑 Backend VETO: ${decision} blocked by Backend HOLD (Backend Conf: ${backendConfidence}%)`);
         decision = 'HOLD';
         confidence = backendConfidence;
+    } else if (backendAction) {
+        console.log(`[AI Merge] ℹ️ Backend suggestion ignored: ${backendAction} (${backendConfidence}% < 60% threshold)`);
     }
 
     // --- GUARD RAILS (Heuristic Filters) - RELAXED ---
@@ -576,6 +598,8 @@ export const analyzeMarket = async (
 
     // Apply RELAXED Guard Rails
     // Only block trades in EXTREME conditions
+    console.log(`[Guard Rails] 🛡️ Checking filters... RSI=${indicators.rsi.toFixed(1)}, Trend=${isUptrend ? 'UP' : 'DOWN'}`);
+    
     if (decision === 'BUY') {
         if (!isUptrend) {
             // Just warn, don't block
@@ -585,7 +609,7 @@ export const analyzeMarket = async (
             // Block only if RSI > 80
             decision = 'HOLD';
             confidence = 0;
-            console.log(`[Guard Rail] 🛡️ Blocked BUY: RSI Extremely Overbought (${indicators.rsi.toFixed(0)} > 80)`);
+            console.log(`[Guard Rail] 🚫 BLOCKED BUY: RSI Extremely Overbought (${indicators.rsi.toFixed(0)} > 80)`);
         }
     } else if (decision === 'SELL') {
         if (!isDowntrend) {
@@ -596,9 +620,12 @@ export const analyzeMarket = async (
             // Block only if RSI < 20
             decision = 'HOLD';
             confidence = 0;
-            console.log(`[Guard Rail] 🛡️ Blocked SELL: RSI Extremely Oversold (${indicators.rsi.toFixed(0)} < 20)`);
+            console.log(`[Guard Rail] 🚫 BLOCKED SELL: RSI Extremely Oversold (${indicators.rsi.toFixed(0)} < 20)`);
         }
     }
+    
+    console.log(`[Guard Rails] ✅ Final decision after filters: ${decision}`);
+
 
     // --- ENHANCED CONFIDENCE PRE-FILTER (70%+ REQUIREMENT) ---
     // CRITICAL: This filter ensures we only trade with high confidence based on deep RL analysis

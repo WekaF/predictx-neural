@@ -526,6 +526,56 @@ export const storageService = {
     storageService.saveActiveSignal(null, symbol);
   },
 
+  // --- Active Signal Cloud Sync (NEW) ---
+  saveActiveSignalToSupabase: async (signal: any | null, symbol: string) => {
+    if (!supabase) return;
+    try {
+      if (signal) {
+        // Upsert active signal
+        const { error } = await supabase
+          .from('active_trades')
+          .upsert({
+            symbol: symbol,
+            signal_data: signal,
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'symbol' });
+          
+        if (error) console.error('[Supabase] Active signal save error:', error);
+      } else {
+        // DELETE active signal record
+        const { error } = await supabase
+          .from('active_trades')
+          .delete()
+          .eq('symbol', symbol);
+          
+        if (error) console.error('[Supabase] Active signal delete error:', error);
+      }
+    } catch (e) {
+      console.error('[Supabase] Active signal sync failed:', e);
+    }
+  },
+
+  fetchActiveSignalFromSupabase: async (symbol: string): Promise<any | null> => {
+    if (!supabase) return null;
+    try {
+      const { data, error } = await supabase
+        .from('active_trades')
+        .select('signal_data')
+        .eq('symbol', symbol)
+        .maybeSingle();
+        
+      if (error) {
+        console.error('[Supabase] Active signal fetch error:', error);
+        return null;
+      }
+      
+      return data?.signal_data || null;
+    } catch (e) {
+      console.error('[Supabase] Active signal fetch failed:', e);
+      return null;
+    }
+  },
+
   // --- Trading Journal (NEW) ---
   getTradingLogs: (): any[] => {
     try {

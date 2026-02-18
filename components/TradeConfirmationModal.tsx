@@ -80,11 +80,11 @@ const TradeConfirmationModal: React.FC<TradeConfirmationModalProps> = ({ signal,
                 </div>
                 <div className="bg-slate-800/80 p-3 rounded-xl border border-slate-700/50">
                   <span className="text-[10px] text-slate-500 uppercase block mb-1">Margin (IDR)</span>
-                  <span className="text-white font-bold">Rp {signal.execution.margin_idr.toLocaleString()}</span>
+                  <span className="text-white font-bold">Rp {(signal.execution.margin_idr || 0).toLocaleString()}</span>
                 </div>
                 <div className="bg-slate-800/80 p-3 rounded-xl border border-slate-700/50 col-span-2">
                   <span className="text-[10px] text-slate-500 uppercase block mb-1">Total Size (IDR)</span>
-                  <span className="text-blue-400 font-bold">Rp {signal.execution.size_idr.toLocaleString()}</span>
+                  <span className="text-blue-400 font-bold">Rp {(signal.execution.size_idr || 0).toLocaleString()}</span>
                 </div>
               </div>
               <div className="mt-3 text-[10px] text-slate-500 flex justify-between px-1">

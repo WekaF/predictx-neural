@@ -277,7 +277,7 @@ async function authenticatedRequest(
     let currentParams = {
         ...params,
         timestamp: currentTimestamp,
-        recvWindow: 30000 // Increased to 30s for slower proxies
+        recvWindow: 60000 // Increased to 60s for slower proxies and to prevent timestamp errors
     };
 
     const makeRequest = async (requestParams: any) => {
@@ -457,16 +457,21 @@ export async function getOpenOrder(symbol: string, orderId: number): Promise<any
  * Endpoint: /fapi/v2/positionRisk
  */
 export async function getPositions(symbol?: string): Promise<any[]> {
-    console.log('[Binance Auth] Fetching positions...');
+    // console.log('[Binance Auth] Fetching positions...'); // Reduce spam
     const params = symbol ? { symbol } : {};
     const data = await authenticatedRequest('/fapi/v2/positionRisk', 'GET', params);
+    
+    // DEBUG: Log raw data to see what Binance is actually returning
+    if (symbol) {
+        console.log(`[Binance Auth] RAW Position Data for ${symbol}:`, data);
+    }
     
     // Filter out empty positions
     const activePositions = Array.isArray(data) 
         ? data.filter((p: any) => parseFloat(p.positionAmt) !== 0)
         : [];
         
-    console.log(`[Binance Auth] ✅ Found ${activePositions.length} active positions`);
+    // console.log(`[Binance Auth] ✅ Found ${activePositions.length} active positions`);
     return activePositions;
 }
 
@@ -542,42 +547,91 @@ export async function placeOrder(params: {
 }
 
 /**
- * Place OCO Order (One-Cancels-Other)
- * Combines Stop Loss and Take Profit in a single order
- * When one executes, the other is automatically cancelled
+ * Place Hard Stop Loss and Take Profit Orders (Futures)
+ * Binance Futures does not support "OCO" endpoint like Spot.
+ * We must verify separate orders: STOP_MARKET and TAKE_PROFIT_MARKET.
+ * Both must be REDUCE_ONLY to close position.
  */
 export async function placeOCOOrder(params: {
     symbol: string;
     side: 'BUY' | 'SELL';
     quantity: string | number;
-    price: number;           // Take Profit limit price
+    price: number;           // Take Profit trigger price
     stopPrice: number;       // Stop Loss trigger price
-    stopLimitPrice: number;  // Stop Loss limit price
+    stopLimitPrice?: number; // Not used for MARKET stops
 }): Promise<any> {
-    console.log('[Binance Auth] Placing OCO order:', params);
-    
-    const ocoParams: any = {
-        symbol: params.symbol,
-        side: params.side,
-        quantity: params.quantity,
-        price: params.price,
-        stopPrice: params.stopPrice,
-        stopLimitPrice: params.stopLimitPrice,
-        stopLimitTimeInForce: 'GTC',
-        reduceOnly: 'true' // OCO orders are always to close positions
+    console.log('[Binance Auth] Placing Hard SL/TP Orders (Futures Split):', params);
+
+    const results = {
+        orderListId: Date.now(), // Synthetic ID
+        orders: [] as any[]
     };
 
+
+    // We try/catch each individually so one failure doesn't block the other (unless critical)
+    // Actually, for "Atomic" behavior, we might want to fail all?
+    // BUT user request implies "Auto TP not working", maybe they set SL but not TP.
+    // If we throw on TP failure, SL is rolled back? No, SL was already placed.
+    // So if SL succeeds but TP fails, we have an SL-protected position but no TP.
+    // This is safe-ish. We should allow it but warn.
+
     try {
-        // Binance Futures OCO endpoint
-        const data = await authenticatedRequest('/fapi/v1/order/oco', 'POST', ocoParams);
-        console.log('[Binance Auth] ✅ OCO order placed:', {
-            orderListId: data.orderListId,
-            orders: data.orders?.map((o: any) => ({ orderId: o.orderId, type: o.type }))
-        });
-        return data;
+        // 1. Place STOP LOSS (STOP_MARKET)
+        if (params.stopPrice > 0) {
+            console.log(`[OCO-Sim] Placing STOP_MARKET at ${params.stopPrice}`);
+            try {
+                const slOrder = await placeOrder({
+                    symbol: params.symbol,
+                    side: params.side, 
+                    type: 'STOP_MARKET',
+                    quantity: params.quantity,
+                    stopPrice: params.stopPrice,
+                    reduceOnly: true
+                });
+                results.orders.push(slOrder);
+            } catch (slError) {
+                console.error('[OCO-Sim] Failed to place STOP LOSS:', slError);
+                // If SL fails, this is CRITICAL. Retrow to trigger rollback.
+                throw slError;
+            }
+        } else {
+            console.log('[OCO-Sim] Skipping Stop Loss (Price <= 0)');
+        }
+
+        // 2. Place TAKE PROFIT (TAKE_PROFIT_MARKET)
+        if (params.price > 0) {
+            console.log(`[OCO-Sim] Placing TAKE_PROFIT_MARKET at ${params.price}`);
+            try {
+                const tpOrder = await placeOrder({
+                    symbol: params.symbol,
+                    side: params.side, 
+                    type: 'TAKE_PROFIT_MARKET',
+                    quantity: params.quantity,
+                    stopPrice: params.price, // For TP_MARKET, 'stopPrice' is the trigger
+                    reduceOnly: true
+                });
+                results.orders.push(tpOrder);
+            } catch (tpError) {
+                console.error('[OCO-Sim] Failed to place TAKE PROFIT:', tpError);
+                // If TP fails, it's bad but not "lose the account" bad if SL is set.
+                // However, our App.tsx "Atomic" rollback will trigger if we throw.
+                // If we WANT to allow "SL only", we should NOT throw here.
+                // But the user reported "Auto TP not working", implying they WANTED it.
+                // If we catch and suppress, they get a position without TP.
+                // Better to throw so the UI rollback kicks in and tells them "TP Failed".
+                // Result: They know it failed.
+                // So re-throwing is actually CORRECT for "Robost Automation".
+                throw tpError;
+            }
+        } else {
+            console.log('[OCO-Sim] Skipping Take Profit (Price <= 0)');
+        }
+
+        console.log('[Binance Auth] ✅ Hard SL/TP orders execution complete. Placed:', results.orders.length);
+        return results;
     } catch (error: any) {
-        console.error('[Binance Auth] ❌ OCO order failed:', error);
-        throw error;
+        console.error('[Binance Auth] ❌ Failed to place one or more orders:', error);
+        throw error; 
     }
 }
 

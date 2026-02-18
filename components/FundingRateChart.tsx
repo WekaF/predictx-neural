@@ -46,41 +46,48 @@ export const FundingRateChart: React.FC<FundingRateChartProps> = ({
   };
 
   return (
-    <div className="bg-gray-800 rounded-lg p-4 border border-gray-700 w-full h-full">
-      <div className="flex justify-between items-center mb-4">
-        <div className="flex items-center gap-2">
-           <h3 className="text-sm font-semibold text-gray-200">Funding Rate History</h3>
-           <div className="group relative">
-             <Info size={14} className="text-gray-500 cursor-help" />
-             <div className="hidden group-hover:block absolute z-50 bottom-full left-1/2 -translate-x-1/2 w-48 p-2 bg-gray-900 text-xs text-gray-300 rounded border border-gray-700 mb-2">
-               Positive = Longs pay Shorts. Negative = Shorts pay Longs.
+    <div className="h-full flex flex-col justify-between">
+      <div className="flex justify-between items-start mb-2">
+        <div>
+          <h3 className="text-xs font-semibold text-slate-400 uppercase flex items-center gap-1">
+            Funding Rate
+            <div className="group relative">
+               <Info size={10} className="text-slate-600 cursor-help" />
+               <div className="hidden group-hover:block absolute z-50 bottom-full left-0 w-32 p-1.5 bg-slate-900 text-[10px] text-slate-300 rounded border border-slate-700 mb-1">
+                 + Longs pay Shorts
+                 <br/>- Shorts pay Longs
+               </div>
              </div>
-           </div>
-        </div>
-        <div className="text-right">
-          <span className="text-xs text-gray-500 block">Current</span>
-          <span className={`text-sm font-mono font-bold ${currentRate >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+          </h3>
+          <div className={`text-lg font-mono font-bold ${currentRate >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
             {(currentRate * 100).toFixed(4)}%
-          </span>
+          </div>
         </div>
       </div>
       
-      <div className="h-40 w-full">
+      <div className="flex-1 min-h-[60px]">
         {data.length > 0 ? (
             <ResponsiveContainer width="100%" height="100%">
             <BarChart data={chartData}>
-                <ReferenceLine y={0} stroke="#4B5563" strokeDasharray="3 3" />
-                <Tooltip content={<CustomTooltip />} cursor={{fill: 'rgba(255,255,255,0.05)'}} />
-                <Bar dataKey="rate">
-                {chartData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.rate >= 0 ? '#10B981' : '#EF4444'} />
-                ))}
+                <ReferenceLine y={0} stroke="#334155" strokeDasharray="3 3" />
+                <Tooltip 
+                  content={<CustomTooltip />} 
+                  cursor={{fill: 'rgba(255,255,255,0.05)'}} 
+                />
+                <Bar dataKey="rate" radius={[2, 2, 0, 0]}>
+                  {chartData.map((entry, index) => (
+                    <Cell 
+                      key={`cell-${index}`} 
+                      fill={entry.rate >= 0 ? '#10B981' : '#EF4444'} 
+                      opacity={0.8}
+                    />
+                  ))}
                 </Bar>
             </BarChart>
             </ResponsiveContainer>
         ) : (
-            <div className="flex items-center justify-center h-full text-xs text-gray-500">
-                No funding history available
+            <div className="flex items-center justify-center h-full text-[10px] text-slate-600 italic border border-slate-800/50 rounded border-dashed">
+                No history
             </div>
         )}
       </div>

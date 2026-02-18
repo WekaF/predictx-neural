@@ -12,7 +12,7 @@ interface HeaderControlsProps {
     isAnalyzing?: boolean;
 }
 
-export const HeaderControls: React.FC<HeaderControlsProps> = ({
+export const HeaderControls: React.FC<HeaderControlsProps> = React.memo(({
     autoMode,
     onToggleAuto,
     balance,
@@ -101,4 +101,4 @@ export const HeaderControls: React.FC<HeaderControlsProps> = ({
             </button>
         </div>
     );
-};
+});
