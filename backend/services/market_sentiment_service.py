@@ -4,7 +4,7 @@ Analyzes Open Interest, Long/Short Ratio, and Taker Buy/Sell Ratio
 """
 
 import aiohttp
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from datetime import datetime
 
 class MarketSentimentAnalyzer:
