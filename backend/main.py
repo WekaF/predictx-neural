@@ -17,8 +17,7 @@ app = FastAPI(title="PredictX AI Engine", version="1.0.0")
 origins = [
     "http://localhost:5173", # React Frontend
     "http://localhost:3000",
-    "https://predictx-neural.vercel.app", # Production Vercel App
-    "*" # Allow all for flexibility during testing
+    "https://predictx-neural.vercel.app" # Production Vercel App
 ]
 
 app.add_middleware(
