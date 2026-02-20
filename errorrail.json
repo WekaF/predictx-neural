@@ -1,0 +1,14 @@
+{
+  "message": "  File \"/root/.nix-profile/lib/python3.11/importlib/__init__.py\", line 126, in import_module",
+  "attributes": {
+    "level": "error"
+  },
+  "tags": {
+    "project": "b0865539-0b63-4351-b27f-a533a8937189",
+    "environment": "719f8174-02c5-469a-92ed-d37b0d6d1ee1",
+    "service": "6a2c93d7-c280-451f-8c3c-c07593f72a31",
+    "deployment": "97d55c15-ca2e-4b1b-9ad2-ad79c8639635",
+    "replica": "f5339941-a831-47c8-a7d8-7f22cf6133e9"
+  },
+  "timestamp": "2026-02-20T10:49:23.231314508Z"
+}
