@@ -883,6 +883,118 @@ export async function setLeverage(symbol: string, leverage: number): Promise<any
     }
 }
 
+/**
+ * Rule: Auto Open Order with SL & TP (Atomic Batch)
+ */
+export async function placeOrderWithSLTP(params: {
+    symbol: string;
+    side: 'BUY' | 'SELL';
+    type: 'LIMIT' | 'MARKET';
+    quantity: string | number;
+    price?: number;
+    tpPrice: number;
+    slPrice: number;
+    leverage?: number;
+}): Promise<any> {
+    // 1. Rule: Auto Set Leverage sebelum entry
+    if (params.leverage) {
+        await setLeverage(params.symbol, params.leverage);
+    }
+
+    const closeSide = params.side === 'BUY' ? 'SELL' : 'BUY';
+
+    // Susun array untuk Batch Order
+    const orders: any[] = [
+        // Order Utama (Entry)
+        {
+            symbol: params.symbol,
+            side: params.side,
+            type: params.type,
+            quantity: formatParameter(params.quantity),
+            // Only add price and timeInForce if it's a LIMIT order
+            ...(params.type === 'LIMIT' ? { price: formatParameter(params.price), timeInForce: 'GTC' } : {})
+        },
+        // Order Take Profit
+        {
+            symbol: params.symbol,
+            side: closeSide,
+            type: 'TAKE_PROFIT_MARKET',
+            stopPrice: formatParameter(params.tpPrice),
+            closePosition: 'true', // Rule: Auto Close Full
+            workingType: 'MARK_PRICE'
+        },
+        // Order Stop Loss
+        {
+            symbol: params.symbol,
+            side: closeSide,
+            type: 'STOP_MARKET',
+            stopPrice: formatParameter(params.slPrice),
+            closePosition: 'true',
+            workingType: 'MARK_PRICE'
+        }
+    ];
+
+    console.log(`[Binance Trading] 🚀 Executing Batch Entry for ${params.symbol}`);
+    return await authenticatedRequest('/fapi/v1/batchOrders', 'POST', {
+        batchOrders: JSON.stringify(orders)
+    });
+}
+
+/**
+ * Rule: Trailing Logic & Auto Move SL
+ * Panggil fungsi ini di dalam interval/loop di App.tsx atau Store
+ */
+export async function manageTrailingStop(symbol: string, leverage: number) {
+    const positions = await getPositions(symbol);
+    if (positions.length === 0) return;
+
+    const pos = positions[0];
+    const entryPrice = parseFloat(pos.entryPrice);
+    const markPrice = parseFloat(pos.markPrice);
+    const side = parseFloat(pos.positionAmt) > 0 ? 'BUY' : 'SELL';
+    
+    // Hitung ROE% sederhana
+    let roe = 0;
+    if (side === 'BUY') {
+        roe = ((markPrice - entryPrice) / entryPrice) * leverage * 100;
+    } else {
+        roe = ((entryPrice - markPrice) / entryPrice) * leverage * 100;
+    }
+
+    let targetNewSL = 0;
+
+    // Rule: Profit +4% -> Move SL to +2% profit
+    if (roe >= 4.0) {
+        targetNewSL = side === 'BUY' ? entryPrice * 1.002 : entryPrice * 0.998; 
+    } 
+    // Rule: Profit +2% -> Move SL to Entry (Break Even)
+    else if (roe >= 2.0) {
+        targetNewSL = entryPrice;
+    }
+
+    if (targetNewSL > 0) {
+        console.log(`[Trailing] 🛡️ Target ROE reached (${roe.toFixed(2)}%). Moving SL to ${targetNewSL}`);
+        
+        // 1. Cancel SL lama (Type: STOP_MARKET)
+        const openOrders = await getOpenOrders(symbol);
+        const oldSL = openOrders.find(o => o.type === 'STOP_MARKET');
+        
+        if (oldSL && Math.abs(parseFloat(oldSL.stopPrice) - targetNewSL) > 0.1) {
+            await cancelOrder(symbol, oldSL.orderId);
+            
+            // 2. Pasang SL baru
+            await placeOrder({
+                symbol,
+                side: side === 'BUY' ? 'SELL' : 'BUY',
+                type: 'STOP_MARKET',
+                quantity: Math.abs(parseFloat(pos.positionAmt)),
+                stopPrice: await roundPrice(symbol, targetNewSL),
+                reduceOnly: true
+            });
+        }
+    }
+}
+
 export default {
     getAccountInfo,
     getAccountBalances,
@@ -901,5 +1013,7 @@ export default {
     getSymbolFilters,
     roundQuantity,
     roundPrice,
-    setLeverage
+    setLeverage,
+    placeOrderWithSLTP,
+    manageTrailingStop
 };
