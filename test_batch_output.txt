@@ -1,0 +1,2 @@
+Encoded Signature Response: 200 [{"code":-4164,"msg":"Order's notional must be no smaller than 100 (unless you choose reduce only)."}]
+Unencoded Signature Response: 400 {"code":-1022,"msg":"Signature for this request is not valid."}

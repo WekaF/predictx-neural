@@ -1,0 +1,7 @@
+Server time: 1771597719572, Local time: 1771597752165, Offset: -32593
+
+Positions Status Code: 200
+Response: [{"symbol":"SNTUSDT","positionAmt":"0","entryPrice":"0.0","breakEvenPrice":"0.0","markPrice":"0.00000000","unRealizedProfit":"0.00000000","liquidationPrice":"0","leverage":"20","maxNotionalValue":"25000","marginType":"cross","isolatedMargin":"0.00000000","isAutoAddMargin":"false","positionSide":"BOTH","notional":"0","isolatedWallet":"0","updateTime":0,"isolated":false,"adlQuantile":0},{"symbol":"CGPTUSDT","positionAmt":"0","entryPrice":"0.0","breakEvenPrice":"0.0","markPrice":"0.00000000","unRea
+
+Open Orders Status Code: 200
+Response: []

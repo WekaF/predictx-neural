@@ -282,8 +282,12 @@ async function authenticatedRequest(
 
     const makeRequest = async (requestParams: any) => {
         // Create query string using formatParameter helper
+        // CRITICAL: URL-encode values to prevent signature mismatch.
+        // Without encoding, JSON values like batchOrders=[{"symbol":...}] get signed raw,
+        // but the browser/proxy URL-encodes them before sending → Binance sees different
+        // query string than what was signed → -1022 Signature invalid.
         const queryString = Object.entries(requestParams)
-            .map(([key, value]) => `${key}=${formatParameter(value)}`)
+            .map(([key, value]) => `${key}=${encodeURIComponent(formatParameter(value))}`)
             .join('&');
 
         // Generate signature
@@ -315,8 +319,10 @@ async function authenticatedRequest(
         const response = await fetchWithProxy(url, {
             method,
             headers: {
-                'X-MBX-APIKEY': apiKey,
-                ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {})
+                'X-MBX-APIKEY': apiKey
+                // NOTE: Do NOT send Content-Type: application/json for Binance signed requests.
+                // All params go via query string, not body. Sending Content-Type: application/json
+                // with empty body causes the backend proxy (FastAPI) to return 400 Bad Request.
             }
         });
 

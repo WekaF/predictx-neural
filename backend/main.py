@@ -310,27 +310,41 @@ async def proxy_request(path: str, request: Request):
     # Append to URL directly
     if params_str:
         url += f"?{params_str}"
+    
+    print(f"[Proxy] Forwarding {request.method} -> {url[:200]}")
         
-    # Get Body for POST (if any)
-    # Note: Binance mostly uses query params for signed requests, even POST.
-    # But if body used, forward it.
-    body = None
-    if request.method == "POST":
-        try:
-           body = await request.json()
-        except:
-           pass
-
-    # Forward necessary headers (API Key + Content-Type)
+    # Get raw body for POST (if any)
+    # CRITICAL: Read raw bytes, NOT json(). Binance signed requests use query params
+    # even for POST. Calling request.json() with Content-Type: application/json but
+    # empty body causes FastAPI to return 400 Bad Request before reaching our handler.
+    raw_body = await request.body()
+    
+    # Forward necessary headers (API Key only)
+    # Do NOT forward Content-Type: application/json when there's no body,
+    # as it can confuse the upstream server.
     headers = {}
     if 'x-mbx-apikey' in request.headers:
         headers['X-MBX-APIKEY'] = request.headers['x-mbx-apikey']
-    if 'content-type' in request.headers:
-        headers['Content-Type'] = request.headers['content-type']
     
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.request(request.method, url, params=None, json=body, headers=headers) as resp:
+            # CRITICAL: Use yarl.URL with encoded=True to prevent double-encoding.
+            # The query string from the frontend is already URL-encoded (e.g. %5B for [).
+            # Without encoded=True, aiohttp will re-encode % to %25, breaking the
+            # Binance HMAC signature for batch orders.
+            from yarl import URL
+            target_url = URL(url, encoded=True)
+            
+            # Only send body if it actually has content
+            request_kwargs = {
+                'headers': headers
+            }
+            if raw_body:
+                request_kwargs['data'] = raw_body
+                if 'content-type' in request.headers:
+                    headers['Content-Type'] = request.headers['content-type']
+            
+            async with session.request(request.method, target_url, **request_kwargs) as resp:
                 # Read content
                 content = await resp.read()
                 
