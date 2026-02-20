@@ -497,6 +497,11 @@ export const analyzeMarket = async (
             const backendRes = await aiBackendService.predictTrend(assetSymbol, candles);
             if (backendRes && backendRes.agent_action) {
                 backendAction = backendRes.agent_action.action; // BUY, SELL, HOLD
+                if (backendAction && backendAction.includes('BUY')) {
+                    backendAction = 'BUY';
+                } else if (backendAction && backendAction.includes('SELL')) {
+                    backendAction = 'SELL';
+                }
                 backendConfidence = backendRes.agent_action.confidence; // 0-100
                 backendExecution = backendRes.execution;
                 backendMeta = backendRes.agent_action.meta;
@@ -633,6 +638,9 @@ export const analyzeMarket = async (
     const actionIndex = decision === 'BUY' ? 0 : decision === 'SELL' ? 1 : 2;
     let enhancedConfidence = brain.getEnhancedConfidence(state, actionIndex);
 
+    // If backend was used, use the max confidence so an untrained local model doesn't block it
+    let finalConfidence = Math.max(confidence, enhancedConfidence);
+
     // --- RSI DIVERGENCE BOOST ---
     // Apply confidence boost if divergence aligns with trading signal
     if (indicators.rsiDivergence && decision !== 'HOLD') {
@@ -641,29 +649,31 @@ export const analyzeMarket = async (
         
         if ((div.type === 'BULLISH' && decision === 'BUY') || 
             (div.type === 'BEARISH' && decision === 'SELL')) {
-            enhancedConfidence += divergenceBoost;
+            finalConfidence += divergenceBoost;
             console.log(`[RSI Divergence] ✅ ${div.type} divergence aligns with ${decision} signal. Confidence boost: +${divergenceBoost.toFixed(1)}%`);
         } else if ((div.type === 'BULLISH' && decision === 'SELL') || 
                    (div.type === 'BEARISH' && decision === 'BUY')) {
-            enhancedConfidence -= divergenceBoost;
+            finalConfidence -= divergenceBoost;
             console.log(`[RSI Divergence] ⚠️ ${div.type} divergence CONTRADICTS ${decision} signal. Confidence penalty: -${divergenceBoost.toFixed(1)}%`);
         }
         
         // Ensure confidence stays within 0-100 range
-        enhancedConfidence = Math.min(Math.max(enhancedConfidence, 0), 100);
+        finalConfidence = Math.min(Math.max(finalConfidence, 0), 100);
     }
 
     const MINIMUM_ENHANCED_CONFIDENCE = 40; // Relaxed from 45% to allow more entries
 
-    if (decision !== 'HOLD' && enhancedConfidence < MINIMUM_ENHANCED_CONFIDENCE) {
-        const reason = `Enhanced confidence ${enhancedConfidence.toFixed(1)}% < ${MINIMUM_ENHANCED_CONFIDENCE}% threshold`;
+    if (decision !== 'HOLD' && finalConfidence < MINIMUM_ENHANCED_CONFIDENCE) {
+        const reason = `Final confidence ${finalConfidence.toFixed(1)}% < ${MINIMUM_ENHANCED_CONFIDENCE}% threshold`;
         console.log(`[Enhanced Confidence Filter] ❌ BLOCKED ${decision}: ${reason}`);
         
         // Pass the reason to the signal object for UI visibility
         (decision as any) = 'HOLD';
         (confidence as any) = 0;
     } else if (decision !== 'HOLD') {
-        console.log(`[Enhanced Confidence Filter] ✅ PASSED: ${decision} with ${enhancedConfidence.toFixed(1)}% enhanced confidence (threshold: ${MINIMUM_ENHANCED_CONFIDENCE}%)`);
+        console.log(`[Enhanced Confidence Filter] ✅ PASSED: ${decision} with ${finalConfidence.toFixed(1)}% final confidence (threshold: ${MINIMUM_ENHANCED_CONFIDENCE}%)`);
+        // Use final confidence for downstream
+        confidence = finalConfidence;
     }
 
     // 2. PURE SELF-LEARNING RL - NO EXTERNAL AI
@@ -735,7 +745,7 @@ export const analyzeMarket = async (
             symbol: assetSymbol,
             type: 'HOLD',
             entryPrice: 0, stopLoss: 0, takeProfit: 0,
-            confidence: Math.round(enhancedConfidence),
+            confidence: Math.round(confidence),
             reasoning: `AI Strategy (${strategy}): Wait. ${generateReasoning()}`,
             timestamp: Date.now(),
             execution: backendExecution,
@@ -869,12 +879,12 @@ export const analyzeMarket = async (
         stopLoss: Number(sl.toFixed(2)),
         takeProfit: Number(tp.toFixed(2)),
         reasoning: generateReasoning(), // Use rule-based reasoning
-        confidence: Math.round(enhancedConfidence), // Use enhanced confidence (adjusted by funding)
+        confidence: Math.round(confidence), // Use enhanced confidence (adjusted by funding)
         timestamp: Date.now(),
         patternDetected: `RL-DQN: ${currentPattern}`,
         confluenceFactors: [
             `Strategy: ${strategy}`, 
-            `Enhanced Confidence: ${enhancedConfidence.toFixed(0)}%`, 
+            `Enhanced Confidence: ${confidence.toFixed(0)}%`, 
             `Trend: ${indicators.trend}`, 
             `RSI: ${indicators.rsi.toFixed(0)}`,
             ...(indicators.rsiDivergence ? [`${indicators.rsiDivergence.type} RSI Divergence (${indicators.rsiDivergence.strength}%)`] : []),

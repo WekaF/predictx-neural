@@ -99,12 +99,13 @@ function App() {
     loadAssets();
   }, []);
 
-  // Auto-detect Demo Key and force Testnet
+  // Auto-detect Demo Key and force Testnet (only if real keys are absent)
   useEffect(() => {
     const demoKey = "WaBJscL1raLkhUB2KcyyiTxNguObcqeWYELLeTxkXvVZbJpygUxYQuvgbl9HQEjK";
     const configuredKey = import.meta.env.VITE_BINANCE_API_KEY_TESTNET;
+    const hasRealKeys = Boolean(import.meta.env.VITE_BINANCE_API_KEY && import.meta.env.VITE_BINANCE_SECRET_KEY);
     
-    if (configuredKey === demoKey) {
+    if (configuredKey === demoKey && !hasRealKeys) {
         const settings = storageService.getSettings();
         if (!settings.useTestnet) {
             console.log('[App] 🔧 Auto-enabling Testnet for Demo Key');
@@ -290,7 +291,19 @@ function App() {
              const orderId = execution.orderId;
              if (!orderId) return;
 
-             const orderStatus = await binanceTradingService.getOpenOrder(tradeSymbol, orderId);
+             let orderStatus;
+             try {
+                 orderStatus = await binanceTradingService.getOpenOrder(tradeSymbol, orderId);
+             } catch (err: any) {
+                 if (err.message && (err.message.includes('Order does not exist') || err.message.includes('-2013'))) {
+                     console.log('[Trade Manager] ⚠️ Limit Order not found on exchange (likely cancelled). Clearing local state.');
+                     setActiveSignal(null);
+                     storageService.clearActiveSignal(symbol);
+                 } else {
+                     console.error('[Trade Manager] Failed to get order status:', err);
+                 }
+                 return;
+             }
              
              if (orderStatus.status === 'FILLED') {
                  console.log('[Trade Manager] 🚀 Limit Order FILLED! Placing OCO...');
@@ -689,6 +702,16 @@ function App() {
       // Save and update state
       await storageService.saveTradingLog(newTrade);
       setTradeHistory(prev => [newTrade, ...prev]);
+      
+      // CRITICAL FIX: Clear the active signal so the user can enter a new trade
+      setActiveSignal(currentSignal => {
+          if (currentSignal && currentSignal.symbol === trade.symbol) {
+              console.log('[App] 🧹 Clearing active signal after manual close:', trade.symbol);
+              storageService.clearActiveSignal(trade.symbol);
+              return null;
+          }
+          return currentSignal;
+      });
       
       // Show notification
       setNotification({
@@ -1236,8 +1259,8 @@ function App() {
     }
 
     if (!indicators || candles.length === 0) {
-      console.log('[handleAnalyze] ⚠️ Early return: No indicators or candles', {
-        hasIndicators: !!indicators,
+      console.warn('[handleAnalyze] 🛑 ANALYSIS ABORTED: Missing required data', {
+        reason: !indicators ? 'Indicators not yet calculated' : 'No candle data available',
         candlesCount: candles.length
       });
       return;
@@ -1364,8 +1387,12 @@ function App() {
       if (!activeSignal || activeSignal.outcome !== 'PENDING') {
         console.log('[Auto-Trading Loop] ✅ Starting auto-trading loop (every 4s)');
         interval = setInterval(() => {
-          console.log('[Auto-Trading Loop] ⏰ Triggering handleAnalyze...');
-          handleAnalyzeRef.current(); // Use ref to avoid dependency issues
+          if (document.visibilityState === 'visible') {
+            console.log('[Auto-Trading Loop] ⏰ 4s elapsed. Triggering handleAnalyze...');
+            handleAnalyzeRef.current();
+          } else {
+            console.log('[Auto-Trading Loop] 💤 Skipping: Tab inactive.');
+          }
         }, 4000);
       } else {
         console.log('[Auto-Trading Loop] ⏸️ Not starting: Active signal is PENDING');
@@ -1803,83 +1830,81 @@ function App() {
             // Step 0: Set Leverage
             await binanceTradingService.setLeverage(tradeSymbol, leverage);
             
-            // Step 1: Place Entry Order (Limit or Market)
-            const orderRes = await binanceTradingService.placeOrder({
-                symbol: tradeSymbol,
-                side: signal.type as 'BUY' | 'SELL',
-                type: executionType,
-                quantity: quantityAsset,
-                price: executionType === 'LIMIT' ? entryPrice : undefined,
-                timeInForce: 'GTC'
-            });
+            // Step 1: Construct Batch Orders
+            const closeSide = signal.type === 'BUY' ? 'SELL' : 'BUY';
+            const rawStopPrice = signal.stopLoss;
+            const rawTakeProfitPrice = finalTakeProfit;
             
-            if (!orderRes || !orderRes.orderId) {
-                throw new Error("Order response missing orderId");
+            // Round prices to tickSize
+            const [stopPrice, takeProfitPrice] = await Promise.all([
+                binanceTradingService.roundPrice(tradeSymbol, rawStopPrice),
+                binanceTradingService.roundPrice(tradeSymbol, rawTakeProfitPrice)
+            ]);
+
+            const batchOrders: any[] = [
+                // 1. ENTRY ORDER
+                {
+                    symbol: tradeSymbol,
+                    side: signal.type as 'BUY' | 'SELL',
+                    type: executionType,
+                    quantity: String(quantityAsset),
+                    ...(executionType === 'LIMIT' ? { price: String(entryPrice), timeInForce: 'GTC' } : {})
+                }
+            ];
+
+            // 2. Add PROTECTION Orders (if prices > 0)
+            if (stopPrice > 0) {
+                batchOrders.push({
+                    symbol: tradeSymbol,
+                    side: closeSide,
+                    type: 'STOP_MARKET',
+                    stopPrice: String(stopPrice),
+                    closePosition: 'true',
+                    workingType: 'MARK_PRICE'
+                });
             }
 
-            const entryOrderId = orderRes.orderId;
-            console.log(`[Binance] ✅ Entry order placed: ${entryOrderId}`);
+            if (takeProfitPrice > 0) {
+                batchOrders.push({
+                    symbol: tradeSymbol,
+                    side: closeSide,
+                    type: 'TAKE_PROFIT_MARKET',
+                    stopPrice: String(takeProfitPrice),
+                    closePosition: 'true',
+                    workingType: 'MARK_PRICE'
+                });
+            }
+
+            console.log(`[Binance] Sending batch of ${batchOrders.length} orders...`);
+            const batchRes = await binanceTradingService.placeBatchOrders(batchOrders);
             
+            if (!batchRes || !Array.isArray(batchRes) || batchRes.length === 0) {
+                throw new Error("Batch order response invalid or empty");
+            }
+
+            // Check for errors in individual orders (Binance batchOrders can partially fail)
+            const errors = batchRes.filter((o: any) => o.code && o.code !== 200 && o.code !== 0);
+            if (errors.length > 0) {
+                const firstError = errors[0];
+                throw new Error(`Batch Order Error: ${firstError.msg || firstError.code}`);
+            }
+
+            const entryOrder = batchRes[0];
+            const entryOrderId = entryOrder.orderId;
+            console.log(`[Binance] ✅ Batch Entry placed: ${entryOrderId}`);
+
             if (executionType === 'LIMIT') {
-                // For Limit Orders, we DO NOT place OCO yet. We wait for fill.
-                // We just store the order ID and status.
                 binanceOrderId = entryOrderId;
                 executionStatus = 'PENDING_LIMIT';
-                showNotification(`✅ Limit Order Placed on Binance (${isTestnet ? 'Testnet' : 'Live'}) @ ${entryPrice}`, "success");
+                showNotification(`✅ Batch Limit Entry Placed on Binance (${isTestnet ? 'Testnet' : 'Live'}) @ ${entryPrice}`, "success");
             } else {
-                // For Market Orders, we place OCO immediately as before
                 executionStatus = 'FILLED';
-                
-                // Step 2: Place OCO Order (Stop Loss + Take Profit)
-                try {
-                    console.log('[OCO] Placing protective orders...');
-                    
-                    const rawStopPrice = signal.stopLoss;
-                    const rawStopLimitPrice = signal.type === 'BUY' 
-                        ? rawStopPrice * 0.995  // 0.5% below stop
-                        : rawStopPrice * 1.005; // 0.5% above stop
-                    const rawTakeProfitPrice = finalTakeProfit;
-                    
-                    // CRITICAL: Round prices to tickSize
-                    const [stopPrice, stopLimitPrice, takeProfitPrice] = await Promise.all([
-                        binanceTradingService.roundPrice(tradeSymbol, rawStopPrice),
-                        binanceTradingService.roundPrice(tradeSymbol, rawStopLimitPrice),
-                        binanceTradingService.roundPrice(tradeSymbol, rawTakeProfitPrice)
-                    ]);
-                    
-                    const ocoOrder = await binanceTradingService.placeOCOOrder({
-                        symbol: tradeSymbol,
-                        side: signal.type === 'BUY' ? 'SELL' : 'BUY',
-                        quantity: quantityAsset,
-                        price: takeProfitPrice,
-                        stopPrice: stopPrice,
-                        stopLimitPrice: stopLimitPrice
-                    });
-                    
-                    console.log('[OCO] ✅ Protective orders placed:', ocoOrder.orderListId);
-                    
-                    binanceOrderId = {
-                        entry: entryOrderId,
-                        oco: ocoOrder.orderListId,
-                        stopLoss: ocoOrder.orders?.find((o: any) => o.type.includes('STOP'))?.orderId,
-                        takeProfit: ocoOrder.orders?.find((o: any) => o.type === 'TAKE_PROFIT_MARKET')?.orderId
-                    };
-                    
-                    showNotification(`✅ Trade Opened on Binance (${isTestnet ? 'Testnet' : 'Live'})!`, "success");
-                    
-                } catch (ocoError: any) {
-                    console.error('[OCO] ❌ Failed to place protective orders:', ocoError);
-                    // Rollback logic for Market Orders...
-                    console.warn('[ROLLBACK] Closing entry position due to OCO failure...');
-                    try {
-                        await binanceTradingService.closePosition(tradeSymbol, signal.type === 'BUY' ? quantityAsset : -quantityAsset);
-                        showNotification('❌ Trade Cancelled: Failed to place Stop Loss/Take Profit. Position closed.', 'error');
-                        return;
-                    } catch (rbError) {
-                         console.error('[ROLLBACK] Failed:', rbError);
-                         return;
-                    }
-                }
+                binanceOrderId = {
+                    entry: entryOrderId,
+                    stopLoss: batchRes.find((o: any) => o.type === 'STOP_MARKET')?.orderId,
+                    takeProfit: batchRes.find((o: any) => o.type === 'TAKE_PROFIT_MARKET')?.orderId
+                };
+                showNotification(`✅ Trade Opened on Binance (${isTestnet ? 'Testnet' : 'Live'})!`, "success");
             }
             
         } catch (error: any) {
@@ -2525,7 +2550,7 @@ function App() {
         takeProfit: 0,
         quantity: parseFloat(t.qty),
         pnl: parseFloat(t.realizedPnl) || 0, // Binance specific field if available, else 0
-        outcome: parseFloat(t.realizedPnl) > 0 ? 'WIN' : parseFloat(t.realizedPnl) < 0 ? 'LOSS' : 'OPEN',
+        outcome: parseFloat(t.realizedPnl) > 0 ? 'WIN' : parseFloat(t.realizedPnl) < 0 ? 'LOSS' : 'MANUAL_CLOSE',
         source: 'BINANCE_IMPORT',
         marketContext: {
             indicators: { rsi: 50, macd: { value: 0, signal: 0, histogram: 0 }, stochastic: { k: 50, d: 50 }, sma20: 0, sma50: 0, sma200: 0, ema12: 0, ema26: 0, momentum: 0 },

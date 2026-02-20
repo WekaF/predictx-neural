@@ -126,7 +126,8 @@ async def predict_trend(request: PredictionRequest):
         request.symbol, 
         action, 
         confidence, 
-        current_price
+        current_price,
+        meta=meta
     )
     
     # Inject futures metadata into response if available
@@ -160,17 +161,23 @@ def train_model(symbol: str = "BTC-USD", epochs: int = 20):
 
 # --- Scheduler Integration ---
 # from services.scheduler import training_scheduler
+from services.position_manager import position_manager
+import asyncio
 
 @app.on_event("startup")
-def startup_event():
+async def startup_event():
     # Start the scheduler when the app starts
     # training_scheduler.start()
+    
+    # Start Position Manager (Background Loop)
+    asyncio.create_task(position_manager.run_loop())
     pass
 
 @app.get("/api/training/schedule/status")
 def get_schedule_status():
     # return training_scheduler.get_status()
-    return {"running": False, "job_scheduled": False, "next_run": None}
+    # return {"running": False, "job_scheduled": False, "next_run": None}
+    return {"running": True, "service": "Position Manager Active"}
 
 @app.post("/api/training/schedule")
 def set_schedule(interval_hours: int = 24):
@@ -222,6 +229,7 @@ if __name__ == "__main__":
 
 # --- Tier 0.5: Binance Proxy (Bypass Blokir) ---
 import aiohttp
+from aiohttp import ClientConnectorError
 import websockets
 from fastapi import WebSocket, WebSocketDisconnect
 import asyncio
@@ -286,6 +294,7 @@ async def websocket_proxy(websocket: WebSocket, stream: str):
             pass
 
 from fastapi import Response
+from fastapi import Request # Added import for Request
 
 @app.api_route("/api/proxy/{path:path}", methods=["GET", "POST", "DELETE"])
 async def proxy_request(path: str, request: Request):
@@ -296,6 +305,24 @@ async def proxy_request(path: str, request: Request):
     is_testnet = request.query_params.get('testnet') == 'true'
     base_url = BINANCE_API_TESTNET if is_testnet else BINANCE_API_BASE
     
+    # --- SPECIAL HANDLING FOR TIME SYNC ---
+    if path.endswith('/v1/time'):
+        try:
+            # Use requests (sync) for reliability as tested in scripts
+            import requests as req
+            target_url = f"{base_url}/{path}"
+            r = req.get(target_url, timeout=5)
+            return Response(content=r.content, status_code=r.status_code, media_type="application/json")
+        except Exception as e:
+            print(f"[Proxy] Time Sync Failed: {e}. Returning System Time.")
+            # Fallback to system time to prevent frontend 0 timestamp
+            import time
+            return Response(
+                content=json.dumps({"serverTime": int(time.time() * 1000)}), 
+                status_code=200, 
+                media_type="application/json"
+            )
+
     url = f"{base_url}/{path}"
     
     # Use raw query string to preserve parameter order for signature verification!
@@ -329,9 +356,14 @@ async def proxy_request(path: str, request: Request):
     if 'content-type' in request.headers:
         headers['Content-Type'] = request.headers['content-type']
     
-    async with aiohttp.ClientSession() as session:
+    # Force ThreadedResolver to bypass aiodns issues with VPNs/Proxies
+    resolver = aiohttp.ThreadedResolver()
+    connector = aiohttp.TCPConnector(resolver=resolver)
+    
+    async with aiohttp.ClientSession(connector=connector) as session:
         try:
-            async with session.request(request.method, url, params=None, json=body, headers=headers) as resp:
+            # Force close connection to avoid SSL issues on some networks
+            async with session.request(request.method, url, params=None, json=body, headers=headers, ssl=False) as resp:
                 # Read content
                 content = await resp.read()
                 
@@ -340,16 +372,27 @@ async def proxy_request(path: str, request: Request):
                     try:
                         error_json = json.loads(content)
                         print(f"[Proxy] ❌ Binance API Error {resp.status}: {error_json}")
-                        print(f"[Proxy] Request URL: {url}")
-                        print(f"[Proxy] Request Method: {request.method}")
-                        print(f"[Proxy] Request Headers: {headers}")
                     except:
-                        print(f"[Proxy] ❌ Binance API Error {resp.status}: {content.decode('utf-8')}")
+                        print(f"[Proxy] ❌ Binance API Error {resp.status}: {content.decode('utf-8')[:200]}")
                 
                 # Forward response exactly as is (status + body)
-                return Response(content=content, status_code=resp.status, media_type="application/json")
+                return Response(
+                    content=content, 
+                    status_code=resp.status, 
+                    media_type=resp.headers.get('Content-Type', 'application/json')
+                )
                 
+        except aiohttp.ClientConnectorError as e:
+            import traceback
+            with open("proxy_errors.log", "a") as f:
+                f.write(f"URL: {url}\nHeaders: {headers}\n")
+                f.write(traceback.format_exc() + "\n")
+            print(f"[Proxy] 🔌 Connection Error: {e}")
+            if "Timeout while contacting DNS servers" in str(e):
+                print("[Proxy] 🌍 DNS TIMEOUT DETECTED! This likely means an ISP block or network restriction.")
+                raise HTTPException(status_code=502, detail="Binance API is blocked by your DNS/ISP (DNS Timeout). Consider using a VPN or changing DNS to 8.8.8.8")
+            raise HTTPException(status_code=502, detail="Failed to connect to Binance API (Network/VPN issue?)")
         except Exception as e:
-            print(f"[Proxy] Exception: {e}")
+            print(f"[Proxy] ⚠️ Exception: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 

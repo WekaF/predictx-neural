@@ -237,7 +237,9 @@ class AIEngine:
         return {"status": "success", "final_loss": history['loss'][-1], "epochs": epochs}
 
     def predict_next_move(self, candles: list, futures_data: dict = None):
-        if not self.models_loaded or len(candles) < 150:
+        if not self.models_loaded or len(candles) < 120:
+            if len(candles) < 120:
+                logging.warning(f"[AI Engine] ⚠️ Not enough candles: {len(candles)} < 120. Returning neutral prediction.")
             return 0.5
 
         try:

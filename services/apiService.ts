@@ -35,8 +35,8 @@ export const aiBackendService = {
      */
     async predictTrend(symbol: string, candles: any[]): Promise<any> {
         try {
-            // Optimization: Only send last 60 candles (LSTM seq_length) + buffer
-            const payloadCandles = candles.slice(-100); 
+            // Optimization: Send last 200 candles to meet AI Engine requirements
+            const payloadCandles = candles.slice(-200); 
             
             const response = await axios.post(`${API_URL}/predict`, {
                 symbol,

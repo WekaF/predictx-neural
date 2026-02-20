@@ -127,10 +127,29 @@ async function fetchWithProxy(url: string, options: RequestInit = {}): Promise<R
         console.log(`[Binance] Fetching via local proxy: ${url}`);
         try {
             const response = await fetch(url, options);
-            if (response.ok) return response;
             
-            const text = await response.text();
-            console.warn(`[Binance] Local Proxy failed (${response.status}): ${text.substring(0, 100)}... Switching to CORS proxies.`);
+            // If the local proxy exists but returns an error (e.g. 400 timestamp issues or 502 DNS blocks),
+            // we should allow it to return to the caller if it's a specific API/Proxy error.
+            if (response.ok || (response.status >= 400 && response.status < 600)) {
+                // Peek at the response if it's a 502/503/504 to see if it's our backend telling us about DNS blocks
+                if (response.status >= 502) {
+                    const cloned = response.clone();
+                    try {
+                        const text = await cloned.text();
+                        if (text.includes("Binance API is blocked") || text.includes("DNS Timeout")) {
+                            return response; // Return specifically if it's our DNS block message
+                        }
+                        // Otherwise fall back to CORS proxies for generic gateway errors
+                        console.warn(`[Binance] Local Proxy failed with ${response.status}. Trying fallbacks.`);
+                    } catch (e) {
+                         return response;
+                    }
+                } else {
+                    return response;
+                }
+            }
+            
+            console.warn(`[Binance] Local Proxy failed with server error (${response.status}). Switching to CORS proxies.`);
         } catch (e) {
             console.warn(`[Binance] Local Proxy network error. Switching to CORS proxies.`, e);
         }
@@ -210,40 +229,60 @@ function formatParameter(val: any): string {
 /**
  * Get Binance server time to sync timestamps
  */
-// ...
-let serverTimeOffset = 0;
+// Absolute server time tracking (more reliable than offset approach)
+let syncedServerTime = 0;     // The server time at sync moment
+let syncedLocalTime = 0;      // The local time at sync moment
 let isTimeSynced = false;
+let lastSyncTime = 0;
+let isSyncing = false;         // Guard against parallel sync requests
+const SYNC_INTERVAL = 5 * 60 * 1000; // 5 minutes (reduced from 10)
 
 /**
- * Get Binance server time to sync timestamps
+ * Get Binance server time using absolute time tracking.
+ * We store both what the server said and what our local clock was, then use
+ * local elapsed time to advance from there — far more reliable than an offset.
  */
 export async function syncServerTime(force = false): Promise<void> {
-    if (isTimeSynced && !force) return;
+    const now = Date.now();
+    if (isSyncing) return; // Prevent parallel syncs
+    if (isTimeSynced && !force && (now - lastSyncTime < SYNC_INTERVAL)) return;
 
+    isSyncing = true;
     try {
         console.log('[Binance Auth] ⏳ Syncing server time...');
         
         let baseUrl = getApiBase();
-        // If production/fallback logic touches this, map correctly
         if (baseUrl === '/api/binance') baseUrl = '/api/futures'; 
 
-        // Use Futures time endpoint (Root + /fapi/v1/time)
         const url = `${baseUrl}/fapi/v1/time`;
         
+        const startTime = Date.now();
         const response = await fetchWithProxy(url);
+        const endTime = Date.now();
+        const rtt = endTime - startTime;
+        
         const data = await response.json();
         const serverTime = data.serverTime;
-        const localTime = Date.now();
         
-        // Calculate offset
-        serverTimeOffset = serverTime - localTime;
+        // Store absolute reference: what time the server was at (rtt/2 ago),
+        // and what our local clock was at that moment.
+        syncedServerTime = serverTime;
+        syncedLocalTime = Math.floor(startTime + rtt / 2);
         isTimeSynced = true;
+        lastSyncTime = Date.now();
         
-        console.log(`[Binance Auth] ⏰ Time synced. Offset: ${serverTimeOffset}ms (Server: ${serverTime}, Local: ${localTime})`);
+        const offset = serverTime - syncedLocalTime;
+        console.log(`[Binance Auth] ⏰ Time synced. Offset: ${offset}ms | RTT: ${rtt}ms (Server: ${serverTime}, Local: ${syncedLocalTime})`);
     } catch (error) {
         console.error('[Binance Auth] ❌ Could not sync server time:', error);
-        // Fallback: subtract 1000ms to be safe against "ahead" errors
-        if (!isTimeSynced) serverTimeOffset = -1000;
+        if (!isTimeSynced) {
+            // Fallback: use local time with no offset
+            syncedServerTime = Date.now();
+            syncedLocalTime = Date.now();
+            isTimeSynced = true;
+        }
+    } finally {
+        isSyncing = false;
     }
 }
 
@@ -264,79 +303,74 @@ async function authenticatedRequest(
     // CRITICAL: Always check sync status before authenticated requests
     if (!isTimeSynced) await syncServerTime();
 
-    // Timestamp Calculation Strategy
-    // We subtract a buffer to ensure we are sufficiently "behind" server time to satisfy "Timestamp ahead" check
-    // But within "recvWindow" to satisfy "Timestamp too old" check.
-    // Proxy latency adds to the "age" of the request when it reaches Binance.
-    // Buffer: 2500ms (Safe zone)
-    const getTimestamp = () => Date.now() + serverTimeOffset - 2500;
-    
-    let currentTimestamp = getTimestamp();
-    
-    // Prepare initial parameters
-    let currentParams = {
-        ...params,
-        timestamp: currentTimestamp,
-        recvWindow: 60000 // Increased to 60s for slower proxies and to prevent timestamp errors
+    // Timestamp: Use absolute server time tracking.
+    // Buffer: -5000ms (Very safe buffer to prevent "ahead" errors, Binance allows up to 60s behind)
+    const getTimestamp = () => {
+        const drift = Date.now() - syncedLocalTime;
+        const ts = syncedServerTime + drift - 5000;
+        return ts;
     };
+    
+    const prepareParams = (p: Record<string, any>) => ({
+        ...p,
+        timestamp: getTimestamp(),
+        recvWindow: 60000 
+    });
 
     const makeRequest = async (requestParams: any) => {
-        // Create query string using formatParameter helper
-        const queryString = Object.entries(requestParams)
-            .map(([key, value]) => `${key}=${formatParameter(value)}`)
-            .join('&');
+        // Create query string using URLSearchParams for correct encoding
+        const sp = new URLSearchParams();
+        Object.entries(requestParams).forEach(([key, value]) => {
+            sp.append(key, formatParameter(value));
+        });
+        
+        const queryString = sp.toString();
 
-        // Generate signature
+        // Generate signature on EXACTLY what is in the query string
         const signature = generateSignature(queryString);
         const signedQueryString = `${queryString}&signature=${signature}`;
 
         // Determine Base URL
         let baseUrl = getApiBase();
         
-        // Check if using ANY proxy (Local or Railway)
-        // Local uses /ai-api/proxy, Production uses /api/proxy
         const isProxy = baseUrl.includes('/ai-api/proxy') || baseUrl.includes('/api/proxy');
 
         if (endpoint.startsWith('/fapi')) {
-             // If direct Binance API (fallback), adjust base path if needed
             if (baseUrl === '/api/binance') baseUrl = '/api/futures';
         }
 
         // Construct URL
         let url = `${baseUrl}${endpoint}?${signedQueryString}`;
         
-        // Append testnet flag for Proxy (both local and production Railway)
         if (isProxy) {
             url += '&testnet=true';
         }
         
-        console.log(`[Binance Auth] ${method} ${endpoint} | TS: ${requestParams.timestamp} | Offset: ${serverTimeOffset}`);
+        const currentTimestamp = requestParams.timestamp;
+        console.log(`[Binance Auth] ${method} ${endpoint} | TS: ${currentTimestamp} (Now: ${Date.now()})`);
 
         const response = await fetchWithProxy(url, {
             method,
             headers: {
                 'X-MBX-APIKEY': apiKey,
-                ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {})
-            }
+                ...(method === 'POST' && params.body ? { 'Content-Type': 'application/json' } : {})
+            },
+            body: params.body ? JSON.stringify(params.body) : undefined
         });
 
         if (!response.ok) {
             const errorText = await response.text();
-            // Try to parse JSON error if possible
             try {
                 const jsonError = JSON.parse(errorText);
-                throw new Error(jsonError.msg || jsonError.message || `Binance API Error: ${response.status}`);
+                throw new Error(jsonError.detail || jsonError.msg || jsonError.message || `Binance API Error: ${response.status}`);
             } catch (e) {
-                // If not JSON, it might be HTML or plain text
                 throw new Error(`Binance API Error: ${response.status} - ${errorText.substring(0, 200)}`);
             }
         }
 
-        // Validate Content-Type for JSON
         const contentType = response.headers.get('content-type');
         if (contentType && !contentType.includes('application/json')) {
              const text = await response.text();
-             // Check if it's the index.html (React App)
              if (text.includes('<!DOCTYPE html>') || text.includes('<div id="root">')) {
                  throw new Error(`API Connection Failed: Endpoint not found (served HTML). URL: ${endpoint}`);
              }
@@ -347,29 +381,18 @@ async function authenticatedRequest(
     };
 
     try {
-        return await makeRequest(currentParams);
+        const initialParams = prepareParams(params);
+        return await makeRequest(initialParams);
     } catch (error: any) {
-        // AUTO-RETRY LOGIC for Timestamp/Sync errors (-1021)
-        if (error.message.includes('-1021') || 
-            error.message.includes('Timestamp for this request') || 
-            error.message.includes('recvWindow') ||
-            (error.message.includes('Invalid Timestamp') && !params.timestamp)) {
-            
-            console.warn('[Binance Auth] ⚠️ Timestamp sync error detected. Force re-syncing and retrying...');
-            
-            // Force Update Server Time
+        // Handle -1021 (Timestamp outside of recvWindow) with one retry
+        if (error.message.includes('-1021') || error.message.includes('outside of the recvWindow')) {
+            console.warn('[Binance Auth] ⚠️ Timestamp error detected. Re-syncing time and retrying...');
             await syncServerTime(true);
             
-            // Re-calculate timestamp with new offset
-            currentTimestamp = getTimestamp();
-            currentParams = {
-                ...params,
-                timestamp: currentTimestamp,
-                recvWindow: 60000 // Maximize window on retry
-            };
-            
-            console.log(`[Binance Auth] 🔄 Retrying with new Offset: ${serverTimeOffset}ms`);
-            return await makeRequest(currentParams);
+            const currentOffset = syncedServerTime - syncedLocalTime;
+            console.log(`[Binance Auth] 🔄 Retrying with new Offset: ${currentOffset}ms`);
+            const retryParams = prepareParams(params);
+            return await makeRequest(retryParams);
         }
         
         console.error('[Binance Auth] API Error:', error);
@@ -447,9 +470,19 @@ export async function getAllOrders(symbol: string, limit: number = 500): Promise
  */
 export async function getOpenOrder(symbol: string, orderId: number): Promise<any> {
     console.log(`[Binance Auth] Fetching order ${orderId} for ${symbol}...`);
-    const data = await authenticatedRequest('/fapi/v1/openOrder', 'GET', { symbol, orderId });
-    console.log(`[Binance Auth] ✅ Order status: ${data.status}`);
-    return data;
+    try {
+        const data = await authenticatedRequest('/fapi/v1/openOrder', 'GET', { symbol, orderId });
+        console.log(`[Binance Auth] ✅ Order status: ${data.status}`);
+        return data;
+    } catch (err: any) {
+        if (err.message && (err.message.includes('Order does not exist') || err.message.includes('-2013'))) {
+            console.log(`[Binance Auth] ⚠️ Order ${orderId} for ${symbol} not found on exchange (likely filled or cancelled).`);
+            throw new Error('Order does not exist on exchange.');
+        } else {
+            console.error(`[Binance Auth] Failed to get order status for ${orderId}:`, err);
+            throw err;
+        }
+    }
 }
 
 /**
@@ -546,6 +579,60 @@ export async function placeOrder(params: {
     }
 }
 
+
+export async function placeOrderWithSLTP(params: {
+    symbol: string;
+    side: 'BUY' | 'SELL';
+    type: 'LIMIT' | 'MARKET';
+    quantity: string | number;
+    price?: number;
+    tpPrice: number;
+    slPrice: number;
+    leverage?: number;
+}): Promise<any> {
+    // 1. Rule: Auto Set Leverage sebelum entry
+    if (params.leverage) {
+        await setLeverage(params.symbol, params.leverage);
+    }
+
+    const closeSide = params.side === 'BUY' ? 'SELL' : 'BUY';
+
+    // Susun array untuk Batch Order
+    const orders: any[] = [
+        // Order Utama (Entry)
+        {
+            symbol: params.symbol,
+            side: params.side,
+            type: params.type,
+            quantity: formatParameter(params.quantity),
+            ...(params.type === 'LIMIT' ? { price: formatParameter(params.price), timeInForce: 'GTC' } : {})
+        },
+        // Order Take Profit
+        {
+            symbol: params.symbol,
+            side: closeSide,
+            type: 'TAKE_PROFIT_MARKET',
+            stopPrice: formatParameter(params.tpPrice),
+            closePosition: 'true', // Rule: Auto Close Full
+            workingType: 'MARK_PRICE'
+        },
+        // Order Stop Loss
+        {
+            symbol: params.symbol,
+            side: closeSide,
+            type: 'STOP_MARKET',
+            stopPrice: formatParameter(params.slPrice),
+            closePosition: 'true',
+            workingType: 'MARK_PRICE'
+        }
+    ];
+
+    console.log(`[Binance Trading] 🚀 Executing Batch Entry for ${params.symbol}`);
+    return await authenticatedRequest('/fapi/v1/batchOrders', 'POST', {
+        batchOrders: JSON.stringify(orders)
+    });
+}
+
 /**
  * Place Hard Stop Loss and Take Profit Orders (Futures)
  * Binance Futures does not support "OCO" endpoint like Spot.
@@ -632,6 +719,156 @@ export async function placeOCOOrder(params: {
     } catch (error: any) {
         console.error('[Binance Auth] ❌ Failed to place one or more orders:', error);
         throw error; 
+    }
+}
+
+export async function tradingBotLogic(symbol: string = 'BTCUSDT') {
+    // 1. Ambil data Candle (15m)
+    const baseUrl = getApiBase();
+    const klines = await (await fetch(`${baseUrl}/fapi/v1/klines?symbol=${symbol}&interval=15m&limit=20`)).json();
+    
+    // 2. Cek apakah ada posisi aktif
+    const positions = await getPositions(symbol);
+    
+    if (positions.length === 0) {
+        // --- LOGIKA ENTRY ---
+        const ob = detectOrderBlock(klines);
+        
+        if (ob) {
+            console.log(`✨ OB Terdeteksi: ${ob.type}`);
+            
+            // Hitung TP menggunakan Fibonacci sederhana (misal 1.618 dari range OB)
+            const range = Math.abs(ob.entry - ob.sl);
+            const tpPrice = ob.type === 'BULLISH' ? ob.entry + (range * 2) : ob.entry - (range * 2);
+
+            // Pembulatan harga sesuai filter Binance
+            const roundedEntry = await roundPrice(symbol, ob.entry);
+            const roundedSL = await roundPrice(symbol, ob.sl);
+            const roundedTP = await roundPrice(symbol, tpPrice);
+
+            // Rule: Auto Entry + SL + TP sekaligus
+            await placeOrderWithSLTP({
+                symbol,
+                side: ob.type === 'BULLISH' ? 'BUY' : 'SELL',
+                type: 'LIMIT',
+                quantity: 0.01, // Sesuaikan qty
+                price: roundedEntry,
+                slPrice: roundedSL,
+                tpPrice: roundedTP,
+                leverage: 10 // Rule: Auto set leverage
+            });
+        }
+    } else {
+        // --- LOGIKA MAINTENANCE ---
+        // Rule: Auto Move SL (+2% ke BE, +4% ke Lock Profit)
+        await manageTrailingStop(symbol, 10);
+    }
+}
+
+// Jalankan bot setiap 30 detik
+// Bot logic will need to be called explicitly (e.g. from UI or controlled backend loop)
+// setInterval(tradingBotLogic, 30000);
+
+
+export function detectOrderBlock(klines: any[]) {
+    // klines: [[time, open, high, low, close, vol], ...]
+    if (klines.length < 5) return null;
+
+    const latest = klines[klines.length - 1];
+    const prev = klines[klines.length - 2];
+    const prev2 = klines[klines.length - 3];
+
+    // Bullish OB: Close terbaru menembus High 2 candle sebelumnya (Break of Structure)
+    // Dan candle sebelumnya adalah candle merah (Bearish)
+    if (parseFloat(latest[4]) > parseFloat(prev2[2]) && parseFloat(prev[4]) < parseFloat(prev[1])) {
+        return {
+            type: 'BULLISH',
+            entry: parseFloat(prev[2]), // High candle merah sebagai entry limit
+            sl: parseFloat(prev[3]),    // Low candle merah sebagai SL
+            color: 'green'
+        };
+    }
+
+    // Bearish OB: Close terbaru menembus Low 2 candle sebelumnya
+    if (parseFloat(latest[4]) < parseFloat(prev2[3]) && parseFloat(prev[4]) > parseFloat(prev[1])) {
+        return {
+            type: 'BEARISH',
+            entry: parseFloat(prev[3]), // Low candle hijau sebagai entry limit
+            sl: parseFloat(prev[2]),    // High candle hijau sebagai SL
+            color: 'red'
+        };
+    }
+
+    return null;
+}
+
+/**
+ * Place multiple orders in a single request (Batch Orders)
+ * Limits: Max 5 orders per batch.
+ */
+export async function placeBatchOrders(orders: any[]): Promise<any> {
+    console.log('[Binance Auth] Placing Batch Orders:', orders.length);
+
+    try {
+        const data = await authenticatedRequest('/fapi/v1/batchOrders', 'POST', {
+            batchOrders: JSON.stringify(orders)
+        });
+        console.log('[Binance Auth] ✅ Batch orders placed successfully');
+        return data;
+    } catch (error: any) {
+        console.error('[Binance Auth] ❌ Batch Order placement failed:', error);
+        throw error;
+    }
+}
+
+export async function manageTrailingStop(symbol: string, leverage: number) {
+    const positions = await getPositions(symbol);
+    if (positions.length === 0) return;
+
+    const pos = positions[0];
+    const entryPrice = parseFloat(pos.entryPrice);
+    const markPrice = parseFloat(pos.markPrice);
+    const side = parseFloat(pos.positionAmt) > 0 ? 'BUY' : 'SELL';
+    
+    // Hitung ROE% sederhana
+    let roe = 0;
+    if (side === 'BUY') {
+        roe = ((markPrice - entryPrice) / entryPrice) * leverage * 100;
+    } else {
+        roe = ((entryPrice - markPrice) / entryPrice) * leverage * 100;
+    }
+
+    let targetNewSL = 0;
+
+    // Rule: Profit +4% -> Move SL to +2% profit
+    if (roe >= 4.0) {
+        targetNewSL = side === 'BUY' ? entryPrice * 1.002 : entryPrice * 0.998; 
+    } 
+    // Rule: Profit +2% -> Move SL to Entry (Break Even)
+    else if (roe >= 2.0) {
+        targetNewSL = entryPrice;
+    }
+
+    if (targetNewSL > 0) {
+        console.log(`[Trailing] 🛡️ Target ROE reached (${roe.toFixed(2)}%). Moving SL to ${targetNewSL}`);
+        
+        // 1. Cancel SL lama (Type: STOP_MARKET)
+        const openOrders = await getOpenOrders(symbol);
+        const oldSL = openOrders.find(o => o.type === 'STOP_MARKET');
+        
+        if (oldSL && Math.abs(parseFloat(oldSL.stopPrice) - targetNewSL) > 0.1) {
+            await cancelOrder(symbol, oldSL.orderId);
+            
+            // 2. Pasang SL baru
+            await placeOrder({
+                symbol,
+                side: side === 'BUY' ? 'SELL' : 'BUY',
+                type: 'STOP_MARKET',
+                quantity: Math.abs(parseFloat(pos.positionAmt)),
+                stopPrice: await roundPrice(symbol, targetNewSL),
+                reduceOnly: true
+            });
+        }
     }
 }
 
@@ -888,6 +1125,7 @@ export default {
     getAccountBalances,
     getOpenOrders,
     getAllOrders,
+    placeBatchOrders,
     getOpenOrder,
     getPositions,
     placeOrder,
