@@ -179,8 +179,8 @@ async function fetchWithProxy(url: string, options: RequestInit = {}): Promise<R
     // Final error with helpful message
     const isProduction = import.meta.env.PROD;
     const errorMsg = isProduction 
-        ? '❌ Connection failed. Please enable "Paper Trading" mode in Settings, or check your network connection.'
-        : 'All connection attempts failed (Direct + Proxies). Check console for details.';
+        ? `❌ Connection failed (${url.substring(0, 50)}...). Please ensure VITE_BACKEND_URL is set in Vercel to your Railway app, and check your network.`
+        : `All connection attempts failed to ${url.substring(0, 50)}. Check console for details.`;
     
     console.error(`[Binance] ${errorMsg}`);
     throw new Error(errorMsg);

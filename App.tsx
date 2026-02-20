@@ -355,7 +355,7 @@ function App() {
       }
     };
 
-    const interval = setInterval(manageTrade, 5000); // Check every 5s
+    const interval = setInterval(manageTrade, 15000); // Check every 15s to prevent IP Bans
     return () => clearInterval(interval);
   }, [activeSignal, candles, selectedAsset.symbol]); // Depend on symbol to re-run guard
 
@@ -567,8 +567,8 @@ function App() {
   useEffect(() => {
     fetchBalance();
     
-    // Poll for balance updates (Real-time Equity/PNL) every 10 seconds (Throttled)
-    const intervalId = setInterval(fetchBalance, 10000);
+    // Poll for balance updates (Real-time Equity/PNL) every 60 seconds (Throttled for rate limits)
+    const intervalId = setInterval(fetchBalance, 60000);
 
     // RESTORE STATE FROM BINANCE & CLOUD (Critical for Refresh/New Tab)
     const restoreActiveState = async () => {

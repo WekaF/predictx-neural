@@ -299,7 +299,7 @@ async def proxy_request(path: str, request: Request):
     url = f"{base_url}/{path}"
     
     # Use raw query string to preserve parameter order for signature verification!
-    query_string = request.scope["query_string"].decode("utf-8")
+    query_string = request.scope.get("query_string", b"").decode("utf-8")
     
     # Remove testnet param from query string safely
     # It could be "?testnet=true", "&testnet=true", "testnet=true&"

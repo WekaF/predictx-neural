@@ -111,7 +111,7 @@ export const OpenOrders: React.FC<OpenOrdersProps> = ({ onTradeClosed }) => {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 5000); // Poll every 5s for realtime-ish updates
+    const interval = setInterval(fetchData, 30000); // Poll every 30s to prevent Binance IP Bans
     return () => clearInterval(interval);
   }, []);
 
