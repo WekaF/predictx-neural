@@ -614,7 +614,8 @@ function App() {
     }
 
     return () => clearInterval(intervalId);
-  }, [selectedAsset, fetchBalance, tradingMode, syncStateWithBinance]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAsset, fetchBalance, tradingMode]); // Intentionally omitted syncStateWithBinance to prevent infinite loops
 
   // Handle manual/external trade close from OpenOrders component
   const handleExternalTradeClosed = useCallback(async (trade: any) => {
