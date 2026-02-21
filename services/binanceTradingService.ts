@@ -850,6 +850,44 @@ export async function getTradeHistory(symbol: string, limit: number = 500): Prom
 }
 
 /**
+ * Get income history (realized PnL, funding fees, commissions)
+ * Endpoint: /fapi/v1/income
+ */
+export async function getIncomeHistory(params: {
+    symbol?: string;
+    incomeType?: 'REALIZED_PNL' | 'FUNDING_FEE' | 'COMMISSION' | 'TRANSFER' | 'INSURANCE_CLEAR';
+    startTime?: number;
+    endTime?: number;
+    limit?: number;
+} = {}): Promise<any[]> {
+    const requestParams: Record<string, any> = {
+        limit: params.limit || 1000
+    };
+    if (params.symbol) {
+        let formattedSymbol = params.symbol.replace('/', '');
+        if (!formattedSymbol.endsWith('USDT') && !formattedSymbol.endsWith('USDC') && !formattedSymbol.endsWith('BUSD')) {
+            formattedSymbol += 'USDT';
+        }
+        requestParams.symbol = formattedSymbol;
+    }
+    if (params.incomeType) requestParams.incomeType = params.incomeType;
+    if (params.startTime) requestParams.startTime = params.startTime;
+    if (params.endTime) requestParams.endTime = params.endTime;
+
+    try {
+        const data = await authenticatedRequest('/fapi/v1/income', 'GET', requestParams);
+        if (Array.isArray(data)) {
+            data.sort((a: any, b: any) => b.time - a.time);
+        }
+        console.log(`[Binance Auth] ✅ Found ${data?.length || 0} income records`);
+        return data || [];
+    } catch (error: any) {
+        console.error('[Binance Auth] ❌ Fetch income history failed:', error);
+        return [];
+    }
+}
+
+/**
  * Test connectivity and authentication
  */
 export async function testConnection(): Promise<boolean> {
@@ -949,6 +987,7 @@ export async function placeOrderWithSLTP(params: {
 /**
  * Rule: Trailing Logic & Auto Move SL
  * Panggil fungsi ini di dalam interval/loop di App.tsx atau Store
+ * ROE thresholds adjusted for leverage-aware risk management
  */
 export async function manageTrailingStop(symbol: string, leverage: number) {
     const positions = await getPositions(symbol);
@@ -969,12 +1008,12 @@ export async function manageTrailingStop(symbol: string, leverage: number) {
 
     let targetNewSL = 0;
 
-    // Rule: Profit +4% -> Move SL to +2% profit
-    if (roe >= 4.0) {
-        targetNewSL = side === 'BUY' ? entryPrice * 1.002 : entryPrice * 0.998; 
+    // Rule: Profit +3% ROE -> Move SL to +0.3% profit (Lock Profit)
+    if (roe >= 3.0) {
+        targetNewSL = side === 'BUY' ? entryPrice * 1.003 : entryPrice * 0.997; 
     } 
-    // Rule: Profit +2% -> Move SL to Entry (Break Even)
-    else if (roe >= 2.0) {
+    // Rule: Profit +1.5% ROE -> Move SL to Entry (Break Even)
+    else if (roe >= 1.5) {
         targetNewSL = entryPrice;
     }
 
@@ -1014,6 +1053,7 @@ export default {
     closePosition,
     cancelOrder,
     getTradeHistory,
+    getIncomeHistory,
     testConnection,
     isConfigured,
     getSymbolFilters,

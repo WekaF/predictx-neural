@@ -253,25 +253,25 @@ def run_backtest_v2(engine, symbol="BTC-USD", period="3mo", interval="1h"):
             # Dynamic TP/SL or Signal Exit?
             # Dynamic TP/SL or Signal Exit?
             # Basic Safety TP/SL
-            tp_hit = current_high >= entry_price * 1.04  # Tighten TP to 4%
-            sl_hit = current_low <= entry_price * 0.98  # Tighten SL to 2%
+            tp_hit = current_high >= entry_price * 1.015  # TP at 1.5%
+            sl_hit = current_low <= entry_price * 0.992   # SL at 0.8%
             
-            # Trailing Stop Logic
-            # If price moves up > 1.5%, set SL to Breakeven + 0.5%
-            # If price moves up > 3%, set SL to Entry + 2%
-            trailing_sl_price = entry_price * 0.98
+            # Trailing Stop Logic (Leverage-Aware)
+            # If price moves up > 1%, set SL to Breakeven + 0.3%
+            # If price moves up > 2%, set SL to Entry + 0.8%
+            trailing_sl_price = entry_price * 0.992
             pnl_high_pct = (current_high - entry_price) / entry_price
             
-            if pnl_high_pct > 0.03:
-                trailing_sl_price = entry_price * 1.02
+            if pnl_high_pct > 0.02:
+                trailing_sl_price = entry_price * 1.008
                 if current_low <= trailing_sl_price:
                     sl_hit = True
-                    exit_reason = "Trailing Stop (+2%)"
-            elif pnl_high_pct > 0.015:
-                trailing_sl_price = entry_price * 1.005
+                    exit_reason = "Trailing Stop (+0.8%)"
+            elif pnl_high_pct > 0.01:
+                trailing_sl_price = entry_price * 1.003
                 if current_low <= trailing_sl_price:
                     sl_hit = True
-                    exit_reason = "Trailing Stop (+0.5%)"
+                    exit_reason = "Trailing Stop (+0.3%)"
             # Use centralized state vector method
             state_vector = engine.get_state_vector(
                 current_candles, 
@@ -288,11 +288,11 @@ def run_backtest_v2(engine, symbol="BTC-USD", period="3mo", interval="1h"):
             exit_price = current_price
 
             if tp_hit:
-                exit_reason = "TP (+6%)"
-                exit_price = entry_price * 1.06
+                exit_reason = "TP (+1.5%)"
+                exit_price = entry_price * 1.015
             elif sl_hit:
-                exit_reason = "SL (-5%)"
-                exit_price = entry_price * 0.95
+                exit_reason = "SL (-0.8%)"
+                exit_price = entry_price * 0.992
             elif "SELL" in action_code:
                 # Only exit on Sell signal if confidence is decent
                 if confidence > 32:

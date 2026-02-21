@@ -34,6 +34,7 @@ import { Analytics } from "@vercel/analytics/react"
 import { futuresRiskManager } from './services/futuresRiskManager';
 import { liquidationCalculator } from './services/liquidationCalculator';
 import { OrderList, BinanceOrder } from './components/OrderList';
+import BinanceAnalyticsDashboard from './components/BinanceAnalyticsDashboard';
 
 
 
@@ -212,7 +213,7 @@ function App() {
 
   // Navigation & Config
   // Simplified View State - effectively always 'terminal' now, but kept for compatibility with minor logic if needed
-  const [currentView, setCurrentView] = useState<'terminal'>('terminal');
+  const [currentView, setCurrentView] = useState<'terminal' | 'analytics'>('terminal');
   const [dbConnected, setDbConnected] = useState(false);
   const [aiReady, setAiReady] = useState(false);
 
@@ -2617,6 +2618,13 @@ function App() {
           >
             <LayoutDashboard className="w-5 h-5" />
           </button>
+          <button
+            onClick={() => setCurrentView('analytics')}
+            className={`p-3 rounded-lg transition-colors flex justify-center ${currentView === 'analytics' ? 'bg-slate-800 text-violet-400' : 'text-slate-400 hover:bg-slate-800 hover:text-violet-400'}`}
+            title="Trade Analytics"
+          >
+            <BarChart3 className="w-5 h-5" />
+          </button>
         </div>
 
         <div className="mt-auto pb-4">
@@ -2639,6 +2647,13 @@ function App() {
           >
             <LayoutDashboard className="w-6 h-6" />
             <span className="text-[10px] font-medium">Terminal</span>
+          </button>
+          <button
+            onClick={() => setCurrentView('analytics')}
+            className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-colors min-w-[60px] ${currentView === 'analytics' ? 'text-violet-400' : 'text-slate-400'}`}
+          >
+            <BarChart3 className="w-6 h-6" />
+            <span className="text-[10px] font-medium">Analytics</span>
           </button>
           <button
             onClick={() => setShowSettings(true)}
@@ -2807,8 +2822,15 @@ function App() {
         </header>
 
         {/* View Content */}
-        {/* View Content - Terminal Only */}
 
+        {currentView === 'analytics' && (
+          <BinanceAnalyticsDashboard
+            symbol={selectedAsset?.symbol}
+            onClose={() => setCurrentView('terminal')}
+          />
+        )}
+
+        {currentView === 'terminal' && (
           <div className="flex flex-col h-full overflow-hidden">
             {/* Mobile/Tablet Terminal Tabs */}
             <div className="flex lg:hidden bg-slate-900 p-1 rounded-lg mb-2 gap-1 border border-slate-800 shrink-0 mx-1">
@@ -3624,6 +3646,7 @@ function App() {
               </div>
             </div>
           </div>
+        )}
       </main>
     </div>
   );

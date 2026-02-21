@@ -754,6 +754,20 @@ export const analyzeMarket = async (
     let sl = decision === 'BUY' ? entry - (atr * slMult) : entry + (atr * slMult);
     let tp = decision === 'BUY' ? entry + (atr * tpMult) : entry - (atr * tpMult);
 
+    // --- STRICT MAX DRAWDOWN CAP (1-2%) ---
+    // Prevent SL from being too far from entry to ensure max drawdown is strictly 1-2%.
+    // Setting absolute strict cap at 1.5% of entry price.
+    const maxSlDistance = entry * 0.015; // 1.5% strict cap
+    const currentSlDistance = Math.abs(entry - sl);
+    if (currentSlDistance > maxSlDistance) {
+        console.log(`[SL Cap] ⚠️ ATR-based SL too wide (${(currentSlDistance/entry*100).toFixed(2)}%). Capping to strict 1.5%.`);
+        sl = decision === 'BUY' ? entry - maxSlDistance : entry + maxSlDistance;
+        // Recalculate TP to maintain minimum R:R of 1.5
+        const cappedRisk = maxSlDistance;
+        const minReward = cappedRisk * 1.5;
+        tp = decision === 'BUY' ? entry + minReward : entry - minReward;
+    }
+
     if (decision === 'BUY') sl = Math.min(sl, indicators.nearestSupport * 0.999);
     else sl = Math.max(sl, indicators.nearestResistance * 1.001);
 

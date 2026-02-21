@@ -60,9 +60,12 @@ class TradingService:
                  margin_usdt = self.min_order_usd
                  position_size_usdt = margin_usdt * leverage
 
-        # 3. Calculate TP / SL (Standard Tier 5/7 settings)
-        tp_pct = 0.06 # +6%
-        sl_pct = 0.025 # -2.5%
+        # 3. Calculate TP / SL (Strict 1-2% Max Drawdown Cap)
+        # User requested max drawdown tidak lebih dari 1% max 2%.
+        # We enforce a strict 1.5% maximum price movement SL.
+        effective_leverage = max(leverage, 1)
+        sl_pct = 0.015  # Strict 1.5% price movement Max SL
+        tp_pct = sl_pct * 1.5  # 1:1.5 Risk Reward Ratio minimum
         
         is_buy = "BUY" in action
         if is_buy:
