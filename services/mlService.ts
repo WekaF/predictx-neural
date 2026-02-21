@@ -573,20 +573,18 @@ export const analyzeMarket = async (
 
     let isBackendOverride = false;
     // --- MERGE STRATEGY: LOCAL + BACKEND ---
-    if (backendAction && backendAction !== 'HOLD' && backendConfidence > 60) {
-        // If Backend is confident, override Local
-        console.log(`[AI Merge] 🤝 Backend OVERRIDE: ${decision} → ${backendAction} (Backend Conf: ${backendConfidence}%)`);
+    if (backendAction && backendAction !== 'HOLD') {
+        // Always prioritize Backend if it provides an explicit BUY/SELL.
+        // It's the Tier 7 Engine; the user expects its output to be visible.
+        console.log(`[AI Merge] 🤝 Tier 7 Backend active: ${decision} → ${backendAction} (Backend Conf: ${backendConfidence}%)`);
         decision = backendAction as 'BUY' | 'SELL';
         confidence = backendConfidence;
         isBackendOverride = true;
-    } else if (backendAction === 'HOLD' && backendConfidence > 80 && decision !== 'HOLD') {
-        // If Backend strongly says HOLD, override Local Buy/Sell (Veto power)
+    } else if (backendAction === 'HOLD' && backendConfidence > 65 && decision !== 'HOLD') {
         console.log(`[AI Merge] 🛑 Backend VETO: ${decision} blocked by Backend HOLD (Backend Conf: ${backendConfidence}%)`);
         decision = 'HOLD';
         confidence = backendConfidence;
         isBackendOverride = true;
-    } else if (backendAction) {
-        console.log(`[AI Merge] ℹ️ Backend suggestion ignored: ${backendAction} (${backendConfidence}% < 60% threshold)`);
     }
 
     // --- GUARD RAILS (Heuristic Filters) - RELAXED ---
@@ -656,7 +654,7 @@ export const analyzeMarket = async (
         enhancedConfidence = Math.min(Math.max(enhancedConfidence, 0), 100);
     }
 
-    const MINIMUM_ENHANCED_CONFIDENCE = 40; // Relaxed from 45% to allow more entries
+    const MINIMUM_ENHANCED_CONFIDENCE = 30; // Further relaxed to allow more entries for training agents
 
     if (decision !== 'HOLD' && enhancedConfidence < MINIMUM_ENHANCED_CONFIDENCE && !isBackendOverride) {
         const reason = `Enhanced confidence ${enhancedConfidence.toFixed(1)}% < ${MINIMUM_ENHANCED_CONFIDENCE}% threshold`;
