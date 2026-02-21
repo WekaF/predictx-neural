@@ -1826,6 +1826,26 @@ function App() {
                     takeProfit: tpOrder?.orderId
                 };
                 
+                // Extract actual fill price if available (Market orders)
+                let fillPriceStr = entryRes.avgPrice || entryRes.price;
+                let fillPrice = fillPriceStr ? parseFloat(fillPriceStr) : 0;
+                
+                // If the batchOrder response doesn't have the avgPrice populated yet, we fetch it explicitly
+                if (fillPrice === 0) {
+                     try {
+                         const orderDetails = await binanceTradingService.getOrder(tradeSymbol, entryOrderId);
+                         fillPriceStr = orderDetails.avgPrice || orderDetails.price;
+                         fillPrice = fillPriceStr ? parseFloat(fillPriceStr) : 0;
+                     } catch (err) {
+                         console.warn(`[Binance] Could not fetch explicit order details for ${entryOrderId}:`, err);
+                     }
+                }
+
+                if (fillPrice > 0) {
+                    console.log(`[Binance] 🔄 Entry Price updated from prediction (${entryPrice}) to EXACT fill (${fillPrice})`);
+                    entryPrice = fillPrice;
+                }
+                
                 showNotification(`✅ Trade Opened on Binance (${isTestnet ? 'Testnet' : 'Live'}) with SL/TP!`, "success");
             }
             

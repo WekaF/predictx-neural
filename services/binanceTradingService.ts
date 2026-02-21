@@ -452,8 +452,19 @@ export async function getAllOrders(symbol: string, limit: number = 500): Promise
  * Endpoint: /fapi/v1/openOrder
  */
 export async function getOpenOrder(symbol: string, orderId: number): Promise<any> {
-    console.log(`[Binance Auth] Fetching order ${orderId} for ${symbol}...`);
+    console.log(`[Binance Auth] Fetching open order ${orderId} for ${symbol}...`);
     const data = await authenticatedRequest('/fapi/v1/openOrder', 'GET', { symbol, orderId });
+    console.log(`[Binance Auth] ✅ Order status: ${data.status}`);
+    return data;
+}
+
+/**
+ * Get a specific order (open or filled)
+ * Endpoint: /fapi/v1/order
+ */
+export async function getOrder(symbol: string, orderId: number): Promise<any> {
+    console.log(`[Binance Auth] Fetching order ${orderId} for ${symbol}...`);
+    const data = await authenticatedRequest('/fapi/v1/order', 'GET', { symbol, orderId });
     console.log(`[Binance Auth] ✅ Order status: ${data.status}`);
     return data;
 }
@@ -1046,6 +1057,7 @@ export default {
     getOpenOrders,
     getAllOrders,
     getOpenOrder,
+    getOrder,
     getPositions,
     placeOrder,
     placeOCOOrder,
