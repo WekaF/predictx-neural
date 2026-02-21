@@ -113,7 +113,7 @@ class TradingService:
             
             # 2. Open Position (Market Order)
             # Size in Base Asset (e.g. BTC)
-            size_usd = plan["size_idr"] / self.usd_to_idr
+            size_usd = plan.get("size", 10.0)
             amount = size_usd / plan["price"]
             
             order = self.exchange.create_order(
@@ -122,6 +122,28 @@ class TradingService:
                 side=plan["side"].lower(),
                 amount=amount
             )
+            
+            # Fetch exact fill price
+            fill_price = order.get('average') or order.get('price')
+            if not fill_price or fill_price == 0:
+                try:
+                    fetched_order = self.exchange.fetch_order(order['id'], symbol)
+                    fill_price = fetched_order.get('average') or fetched_order.get('price')
+                except:
+                    pass
+            
+            if fill_price and fill_price > 0:
+                plan["price"] = fill_price
+                
+                # Recalculate strict TP/SL from exact fill price (1.5% max limit)
+                sl_pct = 0.015
+                tp_pct = sl_pct * 1.5
+                if plan["side"] == 'BUY':
+                    plan["tp"] = round(fill_price * (1 + tp_pct), 2)
+                    plan["sl"] = round(fill_price * (1 - sl_pct), 2)
+                else:
+                    plan["tp"] = round(fill_price * (1 - tp_pct), 2)
+                    plan["sl"] = round(fill_price * (1 + sl_pct), 2)
             
             # 3. Set TP/SL
             # Binance Futures often requires separate stop orders

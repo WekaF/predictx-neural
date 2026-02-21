@@ -571,17 +571,20 @@ export const analyzeMarket = async (
         console.log(`[RL Agent] 🧠 Exploitation Mode (${strategy}): Q-values [BUY:${qBuy.toFixed(3)}, SELL:${qSell.toFixed(3)}, HOLD:${qHold.toFixed(3)}] → ${decision}`);
     }
 
+    let isBackendOverride = false;
     // --- MERGE STRATEGY: LOCAL + BACKEND ---
     if (backendAction && backendAction !== 'HOLD' && backendConfidence > 60) {
         // If Backend is confident, override Local
         console.log(`[AI Merge] 🤝 Backend OVERRIDE: ${decision} → ${backendAction} (Backend Conf: ${backendConfidence}%)`);
         decision = backendAction as 'BUY' | 'SELL';
         confidence = backendConfidence;
+        isBackendOverride = true;
     } else if (backendAction === 'HOLD' && backendConfidence > 80 && decision !== 'HOLD') {
         // If Backend strongly says HOLD, override Local Buy/Sell (Veto power)
         console.log(`[AI Merge] 🛑 Backend VETO: ${decision} blocked by Backend HOLD (Backend Conf: ${backendConfidence}%)`);
         decision = 'HOLD';
         confidence = backendConfidence;
+        isBackendOverride = true;
     } else if (backendAction) {
         console.log(`[AI Merge] ℹ️ Backend suggestion ignored: ${backendAction} (${backendConfidence}% < 60% threshold)`);
     }
@@ -655,7 +658,7 @@ export const analyzeMarket = async (
 
     const MINIMUM_ENHANCED_CONFIDENCE = 40; // Relaxed from 45% to allow more entries
 
-    if (decision !== 'HOLD' && enhancedConfidence < MINIMUM_ENHANCED_CONFIDENCE) {
+    if (decision !== 'HOLD' && enhancedConfidence < MINIMUM_ENHANCED_CONFIDENCE && !isBackendOverride) {
         const reason = `Enhanced confidence ${enhancedConfidence.toFixed(1)}% < ${MINIMUM_ENHANCED_CONFIDENCE}% threshold`;
         console.log(`[Enhanced Confidence Filter] ❌ BLOCKED ${decision}: ${reason}`);
         
@@ -735,7 +738,7 @@ export const analyzeMarket = async (
             symbol: assetSymbol,
             type: 'HOLD',
             entryPrice: 0, stopLoss: 0, takeProfit: 0,
-            confidence: Math.round(enhancedConfidence),
+            confidence: isBackendOverride ? Math.round(confidence) : Math.round(enhancedConfidence),
             reasoning: `AI Strategy (${strategy}): Wait. ${generateReasoning()}`,
             timestamp: Date.now(),
             execution: backendExecution,
@@ -883,7 +886,7 @@ export const analyzeMarket = async (
         stopLoss: Number(sl.toFixed(2)),
         takeProfit: Number(tp.toFixed(2)),
         reasoning: generateReasoning(), // Use rule-based reasoning
-        confidence: Math.round(enhancedConfidence), // Use enhanced confidence (adjusted by funding)
+        confidence: isBackendOverride ? Math.round(confidence) : Math.round(enhancedConfidence), // Use enhanced confidence (adjusted by funding)
         timestamp: Date.now(),
         patternDetected: `RL-DQN: ${currentPattern}`,
         confluenceFactors: [
