@@ -1,8 +1,8 @@
 import axios from 'axios';
 
-// In production, use VITE_AI_BACKEND_URL (e.g. https://...railway.app/api)
 // In development, use /ai-api which Vite proxies to localhost:8000/api
-const API_URL = import.meta.env.VITE_AI_BACKEND_URL || '/ai-api';
+// In production, use VITE_AI_BACKEND_URL (e.g. https://...railway.app/api)
+const API_URL = import.meta.env.DEV ? '/ai-api' : (import.meta.env.VITE_AI_BACKEND_URL || '/ai-api');
 
 export interface TrainingResponse {
     status: 'success' | 'error';

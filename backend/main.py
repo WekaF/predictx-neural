@@ -15,9 +15,13 @@ app = FastAPI(title="PredictX AI Engine", version="1.0.0")
 
 # CORS Configuration
 origins = [
-    "http://localhost:5173", # React Frontend
-    "http://localhost:3000",
-    "https://predictx-neural.vercel.app" # Production Vercel App
+    "http://localhost:5173",  # Vite default
+    "http://localhost:3000",  # Common dev port
+    "http://localhost:3001",  # Vite fallback port
+    "http://localhost:3002",  # Vite fallback port
+    "http://localhost:4173",  # Vite preview
+    "https://predictx-neural.vercel.app",  # Production Vercel App
+    "https://predictx-neural-production.up.railway.app",  # Production Railway
 ]
 
 app.add_middleware(

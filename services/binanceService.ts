@@ -14,8 +14,10 @@ const BINANCE_TESTNET_API = 'https://demo-fapi.binance.com/fapi/v1';
 const BINANCE_TESTNET_WS = 'wss://stream.binancefuture.com/ws'; // Futures Testnet WS
 const BINANCE_DIRECT_WS = 'wss://stream.binance.com:9443/ws'; // Backup
 
-// Dynamic Backend URL: Use VITE_BACKEND_URL for production, fallback to localhost for dev
-const BACKEND_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+// Dynamic Backend URL: In dev mode always use localhost, in production use VITE_BACKEND_URL
+const BACKEND_BASE_URL = import.meta.env.DEV
+  ? 'http://localhost:8000'
+  : (import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000');
 const LOCAL_PROXY_API = `${BACKEND_BASE_URL}/api/proxy`;
 const BINANCE_PRODUCTION_WS = `${BACKEND_BASE_URL.replace('https://', 'wss://').replace('http://', 'ws://')}/ws/proxy`;
 

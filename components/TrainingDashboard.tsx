@@ -27,7 +27,7 @@ const TrainingDashboard: React.FC = () => {
   const [autoTraining, setAutoTraining] = useState(false);
   const [nextRun, setNextRun] = useState<string | null>(null);
 
-  const API_BASE = `${import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'}/api`;
+  const API_BASE = `${import.meta.env.DEV ? 'http://localhost:8000' : (import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000')}/api`;
 
   // Fetch model status on mount
   // Fetch model status and active jobs on mount
