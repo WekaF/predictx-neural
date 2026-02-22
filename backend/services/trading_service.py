@@ -62,10 +62,10 @@ class TradingService:
 
         # 3. Calculate TP / SL (Strict 1-2% Max Drawdown Cap)
         # User requested max drawdown tidak lebih dari 1% max 2%.
-        # We enforce a strict 1.5% maximum price movement SL.
+        # We enforce a strict 8% maximum ROE loss SL.
         effective_leverage = max(leverage, 1)
-        sl_pct = 0.015  # Strict 1.5% price movement Max SL
-        tp_pct = sl_pct * 1.5  # 1:1.5 Risk Reward Ratio minimum
+        sl_pct = 0.08 / effective_leverage  # Strict 8% ROE max drawdown based on leverage
+        tp_pct = sl_pct * 1.875  # 1:1.875 Risk Reward Ratio minimum
         
         is_buy = "BUY" in action
         if is_buy:
@@ -135,9 +135,10 @@ class TradingService:
             if fill_price and fill_price > 0:
                 plan["price"] = fill_price
                 
-                # Recalculate strict TP/SL from exact fill price (1.5% max limit)
-                sl_pct = 0.015
-                tp_pct = sl_pct * 1.5
+                # Recalculate strict TP/SL from exact fill price (8% max ROE limit)
+                effective_leverage = max(plan.get("leverage", 10), 1)
+                sl_pct = 0.08 / effective_leverage
+                tp_pct = sl_pct * 1.875
                 if plan["side"] == 'BUY':
                     plan["tp"] = round(fill_price * (1 + tp_pct), 2)
                     plan["sl"] = round(fill_price * (1 - sl_pct), 2)

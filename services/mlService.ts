@@ -755,17 +755,30 @@ export const analyzeMarket = async (
     let sl = decision === 'BUY' ? entry - (atr * slMult) : entry + (atr * slMult);
     let tp = decision === 'BUY' ? entry + (atr * tpMult) : entry - (atr * tpMult);
 
-    // --- STRICT MAX DRAWDOWN CAP (1-2%) ---
-    // Prevent SL from being too far from entry to ensure max drawdown is strictly 1-2%.
-    // Setting absolute strict cap at 1.5% of entry price.
-    const maxSlDistance = entry * 0.015; // 1.5% strict cap
+    // --- LEVERAGE CALCULATION FIRST ---
+    // We must know leverage to enforce strict ROE loss caps.
+    const recommendedLeverage = futuresRiskManager.getRecommendedLeverage(strategy);
+    const side: 'LONG' | 'SHORT' = decision === 'BUY' ? 'LONG' : 'SHORT';
+    
+    // Fallback safe leverage (will be re-validated by liquidationCalculator later)
+    // Using a default max of 10x if not specified, typically constrained down to 3x-5x by recommended.
+    const leverage = Math.min(recommendedLeverage, 10); 
+
+    // --- STRICT MAX DRAWDOWN CAP (8% ROE max) ---
+    // Rule: Max SL ROE = 8%. Distance % = 8% / Leverage.
+    // E.g., at 10x leverage, Max Price Drop = 8% / 10 = 0.8%.
+    const maxLossPercent = 0.08 / leverage;
+    const maxSlDistance = entry * maxLossPercent; 
+
     const currentSlDistance = Math.abs(entry - sl);
     if (currentSlDistance > maxSlDistance) {
-        console.log(`[SL Cap] ⚠️ ATR-based SL too wide (${(currentSlDistance/entry*100).toFixed(2)}%). Capping to strict 1.5%.`);
+        console.log(`[SL Cap] ⚠️ ATR-based SL too wide (${(currentSlDistance/entry*100).toFixed(2)}%). Capping to strict ${maxLossPercent*100}% for ${leverage}x leverage (8% max ROE).`);
         sl = decision === 'BUY' ? entry - maxSlDistance : entry + maxSlDistance;
-        // Recalculate TP to maintain minimum R:R of 1.5
+        
+        // Recalculate TP to maintain minimum R:R of 1.875 as per documentation for fixed leverage caps
         const cappedRisk = maxSlDistance;
-        const minReward = cappedRisk * 1.5;
+        const rewardRatio = 1.875;
+        const minReward = cappedRisk * rewardRatio;
         tp = decision === 'BUY' ? entry + minReward : entry - minReward;
     }
 
@@ -837,14 +850,13 @@ export const analyzeMarket = async (
     }
 
     // 2. Liquidation Risk Assessment
-    const recommendedLeverage = futuresRiskManager.getRecommendedLeverage(strategy);
-    
-    // Convert BUY/SELL to LONG/SHORT for liquidation calculator
-    const side: 'LONG' | 'SHORT' = decision === 'BUY' ? 'LONG' : 'SHORT';
+    // Leverage already calculated above for SL strict bounding:
+    // const leverage = Math.min(recommendedLeverage, safeLeverage);
+    // Re-verify safe leverage against finalized SL
     const safeLeverage = liquidationCalculator.calculateSafeLeverage(entry, sl, side);
-    const leverage = Math.min(recommendedLeverage, safeLeverage);
+    const finalLeverage = Math.min(leverage, safeLeverage);
     
-    const liqInfo = liquidationCalculator.validateTrade(entry, sl, leverage, side);
+    const liqInfo = liquidationCalculator.validateTrade(entry, sl, finalLeverage, side);
     
     // Block trade if liquidation risk is EXTREME
     if (liqInfo.riskLevel === 'EXTREME') {

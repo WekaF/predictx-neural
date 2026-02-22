@@ -1,5 +1,5 @@
 import React from 'react';
-import { PenTool, Activity, Shield, Wallet } from 'lucide-react';
+import { PenTool, Activity, Shield, Wallet, Zap, Bot } from 'lucide-react';
 
 interface HeaderControlsProps {
     autoMode: boolean;
@@ -14,6 +14,27 @@ interface HeaderControlsProps {
     onToggleSimpleBot: () => void;
 }
 
+const Toggle: React.FC<{
+    label: string;
+    active: boolean;
+    onToggle: () => void;
+    activeColor: string;
+    icon: React.ReactNode;
+}> = ({ label, active, onToggle, activeColor, icon }) => (
+    <button
+        onClick={onToggle}
+        className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-xs font-bold transition-all active:scale-95 ${
+            active
+                ? `${activeColor} shadow-sm`
+                : 'bg-slate-800/60 border-slate-700 text-slate-500 hover:bg-slate-800 hover:text-slate-400'
+        }`}
+    >
+        {icon}
+        <span className="hidden xl:inline">{label}</span>
+        <div className={`w-2 h-2 rounded-full ${active ? 'bg-current animate-pulse' : 'bg-slate-600'}`} />
+    </button>
+);
+
 export const HeaderControls: React.FC<HeaderControlsProps> = React.memo(({
     autoMode,
     onToggleAuto,
@@ -27,97 +48,78 @@ export const HeaderControls: React.FC<HeaderControlsProps> = React.memo(({
     onToggleSimpleBot
 }) => {
     return (
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 bg-slate-900/50 border border-slate-800 p-2 rounded-xl backdrop-blur-sm shadow-sm">
-            
-            {/* AI Analyze Button */}
+        <div className="flex items-center gap-1.5 sm:gap-2">
+            {/* Analyze Button */}
             <button 
                 onClick={onAnalyze}
                 disabled={isAnalyzing}
-                className={`flex items-center justify-center gap-2 px-4 py-1.5 rounded-lg border transition-all active:scale-95 ${isAnalyzing ? 'bg-slate-800 border-slate-700 text-slate-500' : 'bg-blue-600/10 border-blue-500/30 text-blue-400 hover:bg-blue-600/20 hover:border-blue-500/50'}`}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all active:scale-95 whitespace-nowrap ${
+                    isAnalyzing
+                        ? 'bg-slate-800 border-slate-700 text-slate-500 cursor-wait'
+                        : 'bg-blue-600/10 border-blue-500/30 text-blue-400 hover:bg-blue-600/20 hover:border-blue-500/50'
+                }`}
             >
                 {isAnalyzing ? (
-                    <div className="w-3.5 h-3.5 border-2 border-blue-400/30 border-t-blue-400 rounded-full animate-spin"></div>
+                    <div className="w-3.5 h-3.5 border-2 border-blue-400/30 border-t-blue-400 rounded-full animate-spin" />
                 ) : (
-                    <Activity className="w-4 h-4" />
+                    <Activity className="w-3.5 h-3.5" />
                 )}
-                <span className="text-xs font-bold uppercase tracking-wider">{isAnalyzing ? 'Analyzing...' : 'Analyze Market'}</span>
+                <span className="hidden sm:inline">{isAnalyzing ? 'Scanning...' : 'Analyze'}</span>
             </button>
 
-            <div className="h-8 w-px bg-slate-800 hidden sm:block"></div>
+            {/* Divider */}
+            <div className="h-6 w-px bg-slate-700/50 hidden sm:block" />
 
-            <div className="flex items-center justify-between sm:justify-start px-3 py-1 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                <div className="flex flex-col mr-3">
-                    <span className="text-[10px] text-slate-400 font-bold tracking-wider">AUTO-TRADE</span>
-                    <span className={`text-xs font-bold ${autoMode ? 'text-emerald-400' : 'text-slate-500'}`}>
-                        {autoMode ? 'ACTIVE' : 'PAUSED'}
-                    </span>
-                </div>
-                <button 
-                    onClick={onToggleAuto}
-                    className={`w-10 h-5 rounded-full transition-all duration-300 relative focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-offset-slate-900 ${autoMode ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.3)]' : 'bg-slate-700'}`}
-                >
-                    <div className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-transform duration-300 ${autoMode ? 'translate-x-5' : ''}`}></div>
-                </button>
+            {/* Toggle Buttons */}
+            <Toggle
+                label="Auto"
+                active={autoMode}
+                onToggle={onToggleAuto}
+                activeColor="bg-emerald-500/10 border-emerald-500/40 text-emerald-400"
+                icon={<Zap className="w-3.5 h-3.5" />}
+            />
+            <Toggle
+                label="Bot"
+                active={isSimpleBotActive}
+                onToggle={onToggleSimpleBot}
+                activeColor="bg-purple-500/10 border-purple-500/40 text-purple-400"
+                icon={<Bot className="w-3.5 h-3.5" />}
+            />
+
+            {/* Divider */}
+            <div className="h-6 w-px bg-slate-700/50 hidden sm:block" />
+
+            {/* Balance */}
+            <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-slate-800/40 rounded-lg border border-slate-700/50">
+                <Wallet className="w-3.5 h-3.5 text-slate-500" />
+                <span className="font-mono text-emerald-400 font-bold text-xs">
+                    {balance.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                </span>
+                <span className="text-[10px] text-slate-500 font-bold">USDT</span>
             </div>
 
-            {/* Simple Bot Control */}
-            <div className="flex items-center justify-between sm:justify-start px-3 py-1 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                <div className="flex flex-col mr-3">
-                    <span className="text-[10px] text-slate-400 font-bold tracking-wider">SIMPLE BOT</span>
-                    <span className={`text-xs font-bold ${isSimpleBotActive ? 'text-purple-400' : 'text-slate-500'}`}>
-                        {isSimpleBotActive ? 'RUNNING' : 'STOPPED'}
-                    </span>
-                </div>
-                <button 
-                    onClick={onToggleSimpleBot}
-                    className={`w-10 h-5 rounded-full transition-all duration-300 relative focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-offset-slate-900 ${isSimpleBotActive ? 'bg-purple-500 shadow-[0_0_10px_rgba(168,85,247,0.3)]' : 'bg-slate-700'}`}
-                >
-                    <div className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-transform duration-300 ${isSimpleBotActive ? 'translate-x-5' : ''}`}></div>
-                </button>
-            </div>
-
-            <div className="h-8 w-px bg-slate-800 hidden sm:block"></div>
-
-            {/* Balance Display */}
-            <div className="flex items-center gap-3 px-2 flex-1 sm:flex-none">
-                <div className="flex flex-col">
-                    <span className="text-[10px] text-slate-500 font-bold flex items-center gap-1">
-                        <Wallet className="w-3 h-3" /> BALANCE
-                    </span>
-                    <span className="font-mono text-emerald-400 font-bold text-sm">
-                        USDT {balance.toLocaleString('id-ID', { maximumFractionDigits: 2 })}
-                    </span>
-                </div>
-            </div>
-
-            <div className="h-8 w-px bg-slate-800 hidden sm:block"></div>
-
-            {/* Risk Control */}
-            <div className="flex items-center gap-2 px-2 flex-1 sm:flex-none">
-                 <div className="flex flex-col">
-                    <span className="text-[10px] text-slate-500 font-bold flex items-center gap-1">
-                        <Shield className="w-3 h-3" /> RISK %
-                    </span>
-                    <div className="flex items-center">
-                        <input 
-                            type="number" 
-                            value={riskPercent} 
-                            onChange={(e) => setRiskPercent(Number(e.target.value))}
-                            className="w-10 bg-transparent text-white font-mono font-bold focus:outline-none border-b border-dotted border-slate-600 focus:border-blue-500 text-sm py-0" 
-                        />
-                        <span className="text-slate-500 text-xs ml-1">%</span>
-                    </div>
-                </div>
+            {/* Risk */}
+            <div className="hidden md:flex items-center gap-1 px-2 py-1 bg-slate-800/40 rounded-lg border border-slate-700/50">
+                <Shield className="w-3.5 h-3.5 text-slate-500" />
+                <input 
+                    type="number" 
+                    value={riskPercent} 
+                    onChange={(e) => setRiskPercent(Number(e.target.value))}
+                    className="w-8 bg-transparent text-white font-mono font-bold focus:outline-none text-xs text-center" 
+                    min={0.1}
+                    max={100}
+                    step={0.5}
+                />
+                <span className="text-[10px] text-slate-500 font-bold">%</span>
             </div>
 
             {/* Manual Trade Button */}
             <button 
                 onClick={onManualTrade}
-                className="ml-auto bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white p-2 rounded-lg border border-slate-700 transition-all active:scale-95 flex items-center justify-center gap-2 sm:gap-0 group"
+                className="p-1.5 rounded-lg border border-slate-700 bg-slate-800/60 hover:bg-slate-700 text-slate-400 hover:text-blue-400 transition-all active:scale-95"
                 title="Manual Trade Entry"
             >
-                <PenTool className="w-4 h-4 group-hover:text-blue-400 transition-colors" />
-                <span className="sm:hidden text-xs font-bold">Manual Entry</span>
+                <PenTool className="w-3.5 h-3.5" />
             </button>
         </div>
     );

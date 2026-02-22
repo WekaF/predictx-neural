@@ -12,9 +12,12 @@ const CORS_PROXIES = [
 const BINANCE_PRODUCTION_API = 'https://api.binance.com/api/v3';
 const BINANCE_TESTNET_API = 'https://demo-fapi.binance.com/fapi/v1';
 const BINANCE_TESTNET_WS = 'wss://stream.binancefuture.com/ws'; // Futures Testnet WS
-const BINANCE_PRODUCTION_WS = 'ws://localhost:8000/ws/proxy'; // Local Proxy (Bypass ISP Block)
 const BINANCE_DIRECT_WS = 'wss://stream.binance.com:9443/ws'; // Backup
-const LOCAL_PROXY_API = 'http://localhost:8000/api/proxy';
+
+// Dynamic Backend URL: Use VITE_BACKEND_URL for production, fallback to localhost for dev
+const BACKEND_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+const LOCAL_PROXY_API = `${BACKEND_BASE_URL}/api/proxy`;
+const BINANCE_PRODUCTION_WS = `${BACKEND_BASE_URL.replace('https://', 'wss://').replace('http://', 'ws://')}/ws/proxy`;
 
 /**
  * Get API configuration based on testnet setting

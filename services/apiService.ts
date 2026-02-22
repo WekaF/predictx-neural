@@ -1,6 +1,8 @@
 import axios from 'axios';
 
-const API_URL = '/ai-api';
+// In production, use VITE_AI_BACKEND_URL (e.g. https://...railway.app/api)
+// In development, use /ai-api which Vite proxies to localhost:8000/api
+const API_URL = import.meta.env.VITE_AI_BACKEND_URL || '/ai-api';
 
 export interface TrainingResponse {
     status: 'success' | 'error';
@@ -35,8 +37,8 @@ export const aiBackendService = {
      */
     async predictTrend(symbol: string, candles: any[]): Promise<any> {
         try {
-            // Optimization: Only send last 60 candles (LSTM seq_length) + buffer
-            const payloadCandles = candles.slice(-100); 
+            // Optimization: Send last 250 candles to fulfill ai_engine requirements (EMA200 + Seq60)
+            const payloadCandles = candles.slice(-250); 
             
             const response = await axios.post(`${API_URL}/predict`, {
                 symbol,

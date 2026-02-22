@@ -294,6 +294,45 @@ function App() {
              const orderId = typeof execution.orderId === 'object' ? execution.orderId.entry : execution.orderId;
              if (!orderId) return;
 
+             // --- HYBRID EXPIRY: TIME-BASED (3 min for scalping) ---
+             const placedAt = activeSignal.timestamp || 0;
+             const elapsedMs = Date.now() - placedAt;
+             const TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes
+
+             if (placedAt > 0 && elapsedMs > TIMEOUT_MS) {
+                 console.warn(`[Trade Manager] ⏰ Limit Order EXPIRED (${(elapsedMs / 1000 / 60).toFixed(1)} min). Canceling...`);
+                 try {
+                     await binanceTradingService.cancelAllOrders(tradeSymbol);
+                 } catch (cancelErr) {
+                     console.error('[Trade Manager] Failed to cancel expired order:', cancelErr);
+                 }
+                 setActiveSignal(null);
+                 storageService.clearActiveSignal(symbol);
+                 showNotification(`⏰ Limit Order expired after ${Math.round(elapsedMs / 1000 / 60)} min. Re-scanning...`, 'warning');
+                 return;
+             }
+
+             // --- HYBRID EXPIRY: PRICE INVALIDATION (>1.5% away) ---
+             const limitEntryPrice = activeSignal.entryPrice;
+             if (limitEntryPrice > 0) {
+                 const priceDeviationPct = Math.abs(currentPrice - limitEntryPrice) / limitEntryPrice * 100;
+                 const MAX_DEVIATION_PCT = 1.5;
+
+                 if (priceDeviationPct > MAX_DEVIATION_PCT) {
+                     console.warn(`[Trade Manager] 📉 Price invalidation: ${priceDeviationPct.toFixed(2)}% away from entry ${limitEntryPrice}. Canceling...`);
+                     try {
+                         await binanceTradingService.cancelAllOrders(tradeSymbol);
+                     } catch (cancelErr) {
+                         console.error('[Trade Manager] Failed to cancel invalidated order:', cancelErr);
+                     }
+                     setActiveSignal(null);
+                     storageService.clearActiveSignal(symbol);
+                     showNotification(`📉 Entry price invalidated (${priceDeviationPct.toFixed(1)}% away). Re-scanning...`, 'warning');
+                     return;
+                 }
+             }
+
+             // --- CHECK ORDER STATUS (Fill / Cancel / Expire) ---
              const orderStatus = await binanceTradingService.getOpenOrder(tradeSymbol, orderId);
              
              if (orderStatus.status === 'FILLED') {
@@ -1561,10 +1600,25 @@ function App() {
               }
           }
 
+          let signalUpdated = false;
+          let updatedSignal = { ...activeSignal };
+
           // Update quantity if different (e.g. partial fill or manual partial close)
           if (activeSignal.quantity && Math.abs(binanceQty - activeSignal.quantity) > 0.001) {
             console.log('[Position Sync] Quantity mismatch. Updating:', { local: activeSignal.quantity, binance: binanceQty });
-            const updatedSignal = { ...activeSignal, quantity: binanceQty };
+            updatedSignal.quantity = binanceQty;
+            signalUpdated = true;
+          }
+
+          // Update entry price if different (fixes exact fill price sync vs prediction)
+          const binanceEntryPrice = validBinancePos.entryPrice ? parseFloat(validBinancePos.entryPrice) : 0;
+          if (binanceEntryPrice > 0 && Math.abs(binanceEntryPrice - activeSignal.entryPrice) > 0.01) {
+            console.log('[Position Sync] Entry Price mismatch. Updating:', { local: activeSignal.entryPrice, binance: binanceEntryPrice });
+            updatedSignal.entryPrice = binanceEntryPrice;
+            signalUpdated = true;
+          }
+
+          if (signalUpdated) {
             setActiveSignal(updatedSignal);
             storageService.saveActiveSignal(updatedSignal, activeSignal.symbol);
           }
@@ -1827,14 +1881,15 @@ function App() {
                 };
                 
                 // Extract actual fill price if available (Market orders)
-                let fillPriceStr = entryRes.avgPrice || entryRes.price;
+                // Binance MARKET orders often have price="0" and avgPrice="68000"
+                let fillPriceStr = entryRes.avgPrice && parseFloat(entryRes.avgPrice) > 0 ? entryRes.avgPrice : entryRes.price;
                 let fillPrice = fillPriceStr ? parseFloat(fillPriceStr) : 0;
                 
                 // If the batchOrder response doesn't have the avgPrice populated yet, we fetch it explicitly
                 if (fillPrice === 0) {
                      try {
                          const orderDetails = await binanceTradingService.getOrder(tradeSymbol, entryOrderId);
-                         fillPriceStr = orderDetails.avgPrice || orderDetails.price;
+                         fillPriceStr = orderDetails.avgPrice && parseFloat(orderDetails.avgPrice) > 0 ? orderDetails.avgPrice : orderDetails.price;
                          fillPrice = fillPriceStr ? parseFloat(fillPriceStr) : 0;
                      } catch (err) {
                          console.warn(`[Binance] Could not fetch explicit order details for ${entryOrderId}:`, err);
@@ -2689,56 +2744,43 @@ function App() {
       <main className="flex-1 p-3 md:p-6 pb-20 md:pb-6 flex flex-col min-h-0 overflow-y-auto">
 
         {/* Header */}
-        <header className="flex flex-col md:flex-row md:justify-between md:items-center gap-3 md:gap-0 mb-4 md:mb-6 shrink-0">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-4">
-            <div className="flex-1">
-              <h1 className="text-lg sm:text-xl md:text-2xl font-bold bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">
+        <header className="flex flex-wrap items-center justify-between gap-2 mb-3 md:mb-4 shrink-0">
+          {/* Left: Logo + Asset + Interval */}
+          <div className="flex items-center gap-2 sm:gap-3">
+            {/* Logo */}
+            <div className="flex items-center gap-2">
+              <h1 className="text-base sm:text-lg font-bold bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent whitespace-nowrap">
                 NeuroTrade
               </h1>
-              <div className="flex items-center gap-2 mt-1">
-                <div className="flex flex-col sm:flex-row gap-1 sm:gap-2 items-start sm:items-center">
-                  <span className="text-[10px] sm:text-xs text-emerald-500 font-mono font-bold flex items-center gap-1">
-                    <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
-                    <span className="hidden sm:inline">HYBRID AI ENGINE</span>
-                    <span className="sm:hidden">AI ACTIVE</span>
-                  </span>
-                  <div className="flex gap-1.5 sm:gap-2">
-                    <span className={`text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded border ${dbConnected ? 'border-emerald-500/30 text-emerald-400 bg-emerald-500/10' : 'border-rose-500/30 text-rose-400 bg-rose-500/10'}`}>
-                      DB: {dbConnected ? 'ON' : 'OFF'}
-                    </span>
-                    <span className={`text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded border ${aiReady ? 'border-blue-500/30 text-blue-400 bg-blue-500/10' : 'border-yellow-500/30 text-yellow-400 bg-yellow-500/10'}`}>
-                      AI: {aiReady ? 'OK' : 'NO KEY'}
-                    </span>
-                  </div>
-                </div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
+                <span className={`text-[9px] px-1.5 py-0.5 rounded border font-bold ${dbConnected ? 'border-emerald-500/30 text-emerald-400 bg-emerald-500/10' : 'border-rose-500/30 text-rose-400 bg-rose-500/10'}`}>
+                  DB
+                </span>
+                <span className={`text-[9px] px-1.5 py-0.5 rounded border font-bold ${aiReady ? 'border-blue-500/30 text-blue-400 bg-blue-500/10' : 'border-yellow-500/30 text-yellow-400 bg-yellow-500/10'}`}>
+                  AI
+                </span>
               </div>
             </div>
 
-            {/* Asset Selector Dropdown */}
+            {/* Asset Selector */}
             {currentView === 'terminal' && (
               <div className="relative">
                 <button
                   onClick={() => setIsAssetMenuOpen(!isAssetMenuOpen)}
-                  className="flex items-center gap-3 bg-slate-800 hover:bg-slate-700 px-3 py-2 rounded-lg border border-slate-700 transition-colors group"
+                  className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 px-2.5 py-1.5 rounded-lg border border-slate-700 transition-colors group"
                 >
-                  <div className="flex items-center gap-2">
-                      <Coins className="w-4 h-4 text-blue-400" />
-                      <span className="font-bold text-white text-sm">{selectedAsset.symbol}</span>
-                  </div>
-                  
-                  {/* LIVE PRICE INDICATOR */}
+                  <Coins className="w-3.5 h-3.5 text-blue-400" />
+                  <span className="font-bold text-white text-xs">{selectedAsset.symbol}</span>
                   {candles.length > 0 && (
-                      <div className="flex items-center gap-2 px-2 py-0.5 bg-slate-900 rounded border border-slate-700">
-                          <span className={`text-sm font-mono font-bold ${
-                              candles[candles.length - 1].close >= candles[candles.length - 2]?.close 
-                                ? 'text-emerald-400' 
-                                : 'text-rose-400'
-                          }`}>
-                              ${candles[candles.length - 1].close.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                          </span>
-                      </div>
+                    <span className={`text-xs font-mono font-bold ${
+                      candles[candles.length - 1].close >= (candles[candles.length - 2]?.close || 0)
+                        ? 'text-emerald-400' 
+                        : 'text-rose-400'
+                    }`}>
+                      ${candles[candles.length - 1].close.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </span>
                   )}
-
                   <ChevronDown className="w-3 h-3 text-slate-400 group-hover:text-white transition-colors" />
                 </button>
 
@@ -2791,53 +2833,51 @@ function App() {
                 <select
                   value={selectedInterval}
                   onChange={(e) => setSelectedInterval(e.target.value)}
-                  className="bg-slate-800 hover:bg-slate-700 px-3 py-2 rounded-lg border border-slate-700 transition-colors text-white text-sm font-bold cursor-pointer appearance-none pr-8"
+                  className="bg-slate-800 hover:bg-slate-700 px-2.5 py-1.5 rounded-lg border border-slate-700 transition-colors text-white text-xs font-bold cursor-pointer appearance-none pr-7"
                   style={{ backgroundImage: 'none' }}
                 >
-                  <option value="1m">1 Min</option>
-                  <option value="5m">5 Min</option>
-                  <option value="15m">15 Min</option>
-                  <option value="30m">30 Min</option>
-                  <option value="1h">1 Hour</option>
-                  <option value="4h">4 Hour</option>
-                  <option value="1d">1 Day</option>
+                  <option value="1m">1m</option>
+                  <option value="5m">5m</option>
+                  <option value="15m">15m</option>
+                  <option value="30m">30m</option>
+                  <option value="1h">1H</option>
+                  <option value="4h">4H</option>
+                  <option value="1d">1D</option>
                 </select>
                 <ChevronDown className="w-3 h-3 text-slate-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
               </div>
             )}
+
+            {/* Sentiment (inline, compact) */}
+            {currentView === 'terminal' && (
+              <div className="hidden lg:flex items-center gap-2 px-2.5 py-1 bg-slate-800/40 rounded-lg border border-slate-700/50">
+                <div className="w-16 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full transition-all duration-500 rounded-full ${sentimentScore > 0 ? 'bg-emerald-500' : sentimentScore < 0 ? 'bg-rose-500' : 'bg-slate-500'}`}
+                    style={{ width: `${Math.max(10, Math.abs(sentimentScore) * 100)}%` }}
+                  />
+                </div>
+                <span className={`text-[10px] font-bold whitespace-nowrap ${sentimentScore > 0.2 ? 'text-emerald-400' : sentimentScore < -0.2 ? 'text-rose-400' : 'text-slate-500'}`}>
+                  {sentimentScore > 0.3 ? 'BULL' : sentimentScore < -0.3 ? 'BEAR' : 'NEUTRAL'}
+                </span>
+              </div>
+            )}
           </div>
 
+          {/* Right: Trading Controls */}
           {currentView === 'terminal' && (
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-4 w-full sm:w-auto">
-              {/* Market Sentiment Meter - Hidden on mobile */}
-              <div className="hidden lg:flex flex-col items-end mr-4">
-                <span className="text-[10px] uppercase text-slate-500 font-bold mb-1">Market Sentiment</span>
-                <div className="flex items-center gap-2">
-                  <div className="w-24 h-2 bg-slate-800 rounded-full overflow-hidden">
-                    <div
-                      className={`h-full transition-all duration-500 ${sentimentScore > 0 ? 'bg-emerald-500' : sentimentScore < 0 ? 'bg-rose-500' : 'bg-slate-500'}`}
-                      style={{ width: `${Math.abs(sentimentScore) * 100}%`, marginLeft: sentimentScore < 0 ? 0 : 'auto', marginRight: sentimentScore > 0 ? 0 : 'auto' }}
-                    ></div>
-                  </div>
-                  <span className={`text-xs font-bold ${sentimentScore > 0.2 ? 'text-emerald-400' : sentimentScore < -0.2 ? 'text-rose-400' : 'text-slate-400'}`}>
-                    {sentimentScore > 0.3 ? 'BULLISH' : sentimentScore < -0.3 ? 'BEARISH' : 'NEUTRAL'}
-                  </span>
-                </div>
-              </div>
-
-              <HeaderControls
-                autoMode={autoMode}
-                onToggleAuto={toggleAutoMode}
-                balance={balance}
-                riskPercent={riskPercent}
-                setRiskPercent={setRiskPercent}
-                onManualTrade={() => setShowManualModal(true)}
-                onAnalyze={handleAnalyze}
-                isAnalyzing={isAnalyzing}
-                isSimpleBotActive={isSimpleBotActive}
-                onToggleSimpleBot={handleToggleSimpleBot}
-              />
-            </div>
+            <HeaderControls
+              autoMode={autoMode}
+              onToggleAuto={toggleAutoMode}
+              balance={balance}
+              riskPercent={riskPercent}
+              setRiskPercent={setRiskPercent}
+              onManualTrade={() => setShowManualModal(true)}
+              onAnalyze={handleAnalyze}
+              isAnalyzing={isAnalyzing}
+              isSimpleBotActive={isSimpleBotActive}
+              onToggleSimpleBot={handleToggleSimpleBot}
+            />
           )}
         </header>
 

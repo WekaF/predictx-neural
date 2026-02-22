@@ -20,7 +20,7 @@ interface FundingRateCache {
 class FundingRateService {
   private cache: Map<string, FundingRateCache> = new Map();
   private cacheDuration = 3600000; // 1 hour (funding updates every 8h)
-  private baseUrl = 'http://localhost:8000/api';
+  private baseUrl = `${import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'}/api`;
 
   /**
    * Get current funding rate for a symbol
