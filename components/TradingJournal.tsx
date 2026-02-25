@@ -10,8 +10,12 @@ export const TradingJournal: React.FC = () => {
 
     useEffect(() => {
         const loadedLogs = storageService.getTradingLogs();
-        setLogs(loadedLogs);
-        if (loadedLogs.length > 0) setSelectedLog(loadedLogs[0]);
+        // Hide trades that are PENDING/OPEN. Show WIN and LOSS.
+        const filteredLogs = loadedLogs.filter(log => {
+            return log.outcome === 'WIN' || log.outcome === 'LOSS';
+        });
+        setLogs(filteredLogs);
+        if (filteredLogs.length > 0) setSelectedLog(filteredLogs[0]);
     }, []);
 
     const formatDate = (timestamp: number) => {

@@ -419,7 +419,7 @@ function App() {
   // Prevents "Double Entry" and "Ghost Trades" by syncing with actual exchange state
   const lastClearedSignalRef = useRef<string | null>(null); // Track last cleared signal to prevent duplicate notifications
   
-  const syncStateWithBinance = useCallback(async () => {
+  const syncStateWithBinance = useCallback(async (currentSignalOverride?: TradeSignal | null) => {
     if (!selectedAsset || selectedAsset.type !== 'CRYPTO') {
         console.log('[Sync] ⏭️ Skipping sync: Not a crypto asset');
         return;
@@ -428,16 +428,20 @@ function App() {
     try {
         const symbol = selectedAsset.symbol.replace('/', '').replace(/USD$/, 'USDT');
         console.log(`[Sync] 🔄 Checking Binance positions for ${symbol}...`);
-        console.log(`[Sync] Current activeSignal:`, activeSignal ? `${activeSignal.type} ${activeSignal.symbol}` : 'NONE');
+        
+        // Use override if provided, otherwise fallback to current state
+        const signalToCompare = currentSignalOverride !== undefined ? currentSignalOverride : activeSignal;
+        console.log(`[Sync] Comparing against signal:`, signalToCompare ? `${signalToCompare.type} ${signalToCompare.symbol}` : 'NONE');
         
         const positions = await binanceTradingService.getPositions(symbol);
         console.log(`[Sync] 📊 Received ${positions.length} positions from Binance:`, positions);
         
-        const activePosition = positions.find(p => parseFloat(p.positionAmt) !== 0);
+        // Scope the active position check to the currently selected asset to prevent cross-coin blocking
+        const activePosition = positions.find(p => parseFloat(p.positionAmt) !== 0 && p.symbol === symbol);
         console.log(`[Sync] 🎯 Active position found:`, activePosition ? `${parseFloat(activePosition.positionAmt)} @ ${activePosition.entryPrice}` : 'NONE');
 
         // CASE 1: Binance HAS position, but local is EMPTY → RESTORE
-        if (activePosition && !activeSignal) {
+        if (activePosition && !signalToCompare) {
             console.log(`[Sync] ⚠️ Found ORPHANED position on Binance! Restoring...`, activePosition);
             
             const size = parseFloat(activePosition.positionAmt);
@@ -473,11 +477,11 @@ function App() {
 
             // HARDENING: Check if we have a local activeSignal with VALID SL/TP.
             // If yes, we keep the local ones instead of the Binance 0s (Latency protection)
-            const resolvedTP = (tp === 0 && activeSignal?.takeProfit) ? activeSignal.takeProfit : tp;
-            const resolvedSL = (sl === 0 && activeSignal?.stopLoss) ? activeSignal.stopLoss : sl;
+            const resolvedTP = (tp === 0 && signalToCompare?.takeProfit) ? signalToCompare.takeProfit : tp;
+            const resolvedSL = (sl === 0 && signalToCompare?.stopLoss) ? signalToCompare.stopLoss : sl;
 
             const restoredSignal: TradeSignal = {
-                id: activeSignal?.id || 'restored-' + Date.now(),
+                id: signalToCompare?.id || 'restored-' + Date.now(),
                 type: side,
                 symbol: selectedAsset.symbol,
                 entryPrice: entryPrice,
@@ -485,10 +489,10 @@ function App() {
                 stopLoss: resolvedSL,
                 takeProfit: resolvedTP,
                 outputToken: 'USDT',
-                confidence: activeSignal?.confidence || 0,
-                reasoning: activeSignal?.reasoning || 'Restored from Active Exchange Position',
+                confidence: signalToCompare?.confidence || 0,
+                reasoning: signalToCompare?.reasoning || 'Restored from Active Exchange Position',
                 outcome: 'PENDING',
-                timestamp: activeSignal?.timestamp || Date.now(),
+                timestamp: signalToCompare?.timestamp || Date.now(),
                 execution: {
                     status: 'FILLED',
                     execution_status: 'FILLED',
@@ -541,7 +545,7 @@ function App() {
         }
         */
         // CASE 3: Both match → UPDATE DYNAMIC METRICS (PnL, etc.)
-        else if (activePosition && activeSignal && activeSignal.outcome === 'PENDING') {
+        else if (activePosition && signalToCompare && signalToCompare.outcome === 'PENDING') {
             console.log(`[Sync] 📈 Updating dynamic metrics for ${symbol}...`);
             
             const pnl = parseFloat(activePosition.unRealizedProfit);
@@ -571,13 +575,16 @@ function App() {
   // Reusable balance fetcher
   const fetchBalance = useCallback(async () => {
       try {
-        // console.log(`[App] 💰 Fetching balance for ${selectedAsset.symbol}...`);
+        console.log(`[App] 💰 Fetching balance for ${selectedAsset?.symbol}...`);
         const balances = await getAccountBalances();
+        console.log(`[App] 🏦 Raw balances received:`, balances);
         
         // For Futures trading, we typically want the USDT (or USDC) balance as margin/wallet balance
         const quoteCurrency = 'USDT';
         const marginBalance = balances.find(b => b.asset === quoteCurrency) || 
                             balances.find(b => b.asset === 'USDC');
+        
+        console.log(`[App] 💵 Margin balance object:`, marginBalance);
         
         // Use marginBalance (Equity) if available to show PNL fluctuations, otherwise free (Available)
         const equity = marginBalance?.marginBalance ? parseFloat(marginBalance.marginBalance) : 0;
@@ -585,12 +592,16 @@ function App() {
         
         const displayBalance = equity > 0 ? equity : available;
         
+        console.log(`[App] 🔢 Display Balance Calc: Equity=${equity}, Available=${available} -> Selected=${displayBalance}`);
+        
         if (displayBalance > 0) {
             updateBalance(displayBalance);
-            // console.log(`[App] ✅ Balance Update: ${displayBalance.toFixed(2)}`);
+            console.log(`[App] ✅ Balance Update State: ${displayBalance.toFixed(2)}`);
+        } else {
+            console.log(`[App] ⚠️ Display balance is 0 or negative, not updating state.`);
         }
       } catch (error) {
-        // console.error('[App] ❌ Failed to load Binance balance:', error);
+        console.error('[App] ❌ Failed to load Binance balance:', error);
       }
   }, [selectedAsset, updateBalance]);
 
@@ -613,23 +624,24 @@ function App() {
     // RESTORE STATE FROM BINANCE & CLOUD (Critical for Refresh/New Tab)
     const restoreActiveState = async () => {
         // 1. Try Local First
-        const savedSignal = storageService.getActiveSignal(selectedAsset.symbol);
-        if (savedSignal && savedSignal.symbol === selectedAsset.symbol) {
+        let currentRestoredSignal = storageService.getActiveSignal(selectedAsset.symbol);
+        if (currentRestoredSignal && currentRestoredSignal.symbol === selectedAsset.symbol) {
             console.log('[App] ♻️ Restored active signal (LOCAL) for:', selectedAsset.symbol);
-            setActiveSignal(savedSignal);
-            if (savedSignal.execution?.leverage) setLeverage(savedSignal.execution.leverage);
-            if (savedSignal.execution?.mode) setTradingMode(savedSignal.execution.mode);
+            setActiveSignal(currentRestoredSignal);
+            if (currentRestoredSignal.execution?.leverage) setLeverage(currentRestoredSignal.execution.leverage);
+            if (currentRestoredSignal.execution?.mode) setTradingMode(currentRestoredSignal.execution.mode);
         }
 
         // 2. Sync from Cloud (Supabase) to handle device switches/incognito
         try {
             const cloudSignal = await storageService.fetchActiveSignalFromSupabase(selectedAsset.symbol);
-            if (cloudSignal && cloudSignal.id !== savedSignal?.id) {
+            if (cloudSignal && cloudSignal.id !== currentRestoredSignal?.id) {
                 console.log('[App] ♻️ Restored active signal (CLOUD) for:', selectedAsset.symbol);
-                setActiveSignal(cloudSignal);
-                storageService.saveActiveSignal(cloudSignal, selectedAsset.symbol); // Update local
-                if (cloudSignal.execution?.leverage) setLeverage(cloudSignal.execution.leverage);
-                if (cloudSignal.execution?.mode) setTradingMode(cloudSignal.execution.mode);
+                currentRestoredSignal = cloudSignal;
+                setActiveSignal(currentRestoredSignal);
+                storageService.saveActiveSignal(currentRestoredSignal, selectedAsset.symbol); // Update local
+                if (currentRestoredSignal.execution?.leverage) setLeverage(currentRestoredSignal.execution.leverage);
+                if (currentRestoredSignal.execution?.mode) setTradingMode(currentRestoredSignal.execution.mode);
             }
         } catch (e) {
             console.error('[App] Failed to fetch active signal from Supabase:', e);
@@ -638,7 +650,7 @@ function App() {
         // 3. Finally verify with Binance Actual State
         if (tradingMode === 'live' || binanceTradingService.isConfigured()) {
             console.log('[App] 🔄 Triggering final Binance/PnL Sync check...');
-            syncStateWithBinance();
+            syncStateWithBinance(currentRestoredSignal); // Pass the latest known signal to avoid closure race
         }
     };
     
@@ -924,7 +936,7 @@ function App() {
         clearInterval(pollingInterval);
       }
     };
-  }, [selectedAsset, selectedInterval]);
+  }, [selectedAsset.symbol, selectedAsset.type, selectedInterval]);
 
   // Toggle Auto Mode with Persistence
   const toggleAutoMode = () => {
@@ -1110,24 +1122,24 @@ function App() {
     let webhookEvent: 'TAKE_PROFIT' | 'STOP_LOSS' | null = null;
 
     if (activeSignal.type === 'BUY') {
-      if (newLow <= activeSignal.stopLoss) {
+      if (activeSignal.stopLoss > 0 && newLow <= activeSignal.stopLoss) {
         closedOutcome = 'LOSS';
         actualClosePrice = activeSignal.stopLoss;
         webhookEvent = 'STOP_LOSS';
         showNotification(`STOP LOSS HIT! Position Closed at ${actualClosePrice}`, 'error');
-      } else if (newHigh >= activeSignal.takeProfit) {
+      } else if (activeSignal.takeProfit > 0 && newHigh >= activeSignal.takeProfit) {
         closedOutcome = 'WIN';
         actualClosePrice = activeSignal.takeProfit;
         webhookEvent = 'TAKE_PROFIT';
         showNotification(`TAKE PROFIT HIT! Position Closed at ${actualClosePrice}`, 'success');
       }
     } else if (activeSignal.type === 'SELL') {
-      if (newHigh >= activeSignal.stopLoss) {
+      if (activeSignal.stopLoss > 0 && newHigh >= activeSignal.stopLoss) {
         closedOutcome = 'LOSS';
         actualClosePrice = activeSignal.stopLoss;
         webhookEvent = 'STOP_LOSS';
         showNotification(`STOP LOSS HIT! Position Closed at ${actualClosePrice}`, 'error');
-      } else if (newLow <= activeSignal.takeProfit) {
+      } else if (activeSignal.takeProfit > 0 && newLow <= activeSignal.takeProfit) {
         closedOutcome = 'WIN';
         actualClosePrice = activeSignal.takeProfit;
         webhookEvent = 'TAKE_PROFIT';
@@ -1207,7 +1219,8 @@ function App() {
           outcome: closedOutcome!,
           confluence: activeSignal.confluenceFactors?.join(', ') || 'Automated Close',
           riskReward: activeSignal.riskRewardRatio || 0,
-          note: `Auto-Closed by System at ${lastCandle.time}. PNL: ${pnl.toFixed(2)}`
+          note: `Auto-Closed by System at ${lastCandle.time}. PNL: ${pnl.toFixed(2)}`,
+          pnl: pnl
         };
         storageService.saveTrainingData([newHistory, ...prev].slice(0, 15));
 
@@ -1400,6 +1413,11 @@ function App() {
 
   // --- POSITION SYNC WITH BINANCE ---
   // Periodically check if the active trade still exists on Binance
+  const candlesRef = useRef(candles);
+  useEffect(() => {
+    candlesRef.current = candles;
+  }, [candles]);
+
   useEffect(() => {
     let syncInterval: ReturnType<typeof setInterval>;
 
@@ -1424,7 +1442,7 @@ function App() {
              return;
         }
 
-        const activePos = positions.find(p => parseFloat(p.positionAmt) !== 0);
+        const activePos = positions.find(p => parseFloat(p.positionAmt) !== 0 && p.symbol === tradeSymbol);
         console.log('[Position Sync] Active Position found:', activePos);
 
         // CHECK DIRECTION MISMATCH
@@ -1454,16 +1472,32 @@ function App() {
         
         // Revised Logic:
         // Position is "Valid for this Signal" ONLY if it exists AND has correct direction.
-        const isValidPosition = activePos && (
+        // HOWEVER, if the signal was placed as a LIMIT order and hasn't filled yet, position will be 0.
+        // We must check if the original entry LIMIT order is still open before we consider the position "closed".
+        let isPendingLimit = false;
+
+        if (!activePos && activeSignal.execution?.execution_status === 'PENDING_LIMIT' && activeSignal.execution?.orderId?.entry) {
+             const openOrders = await binanceTradingService.getOpenOrders(tradeSymbol);
+             const stillOpen = openOrders.some(o => o.orderId === activeSignal.execution?.orderId?.entry);
+             if (stillOpen) {
+                 isPendingLimit = true;
+                 console.log(`[Position Sync] ⏳ LIMIT entry order ${activeSignal.execution.orderId.entry} is still pending. Keeping signal active.`);
+             } else {
+                 console.log(`[Position Sync] ❌ LIMIT entry order ${activeSignal.execution.orderId.entry} is no longer open and position is 0. Signal might be canceled or filled then closed.`);
+                 // if filled and immediately closed, the next logic block will handle mapping the PNL correctly
+             }
+        }
+
+        const isValidPosition = isPendingLimit || (activePos && (
             (activeSignal.type === 'BUY' && parseFloat(activePos.positionAmt) > 0) ||
             (activeSignal.type === 'SELL' && parseFloat(activePos.positionAmt) < 0)
-        );
+        ));
 
         if (!isValidPosition) {
           // Double check: Did we get a valid empty list or error? 
           // If we passed symbol to getPositions, empty list means no position.
           // BUT, to prevent "flickering" closes, let's verify if candles are updating (connection alive).
-          if (candles.length === 0) {
+          if (candlesRef.current.length === 0) {
               console.warn('[Position Sync] Candles empty, assuming loading state. Skipping close.');
               return;
           }
@@ -1501,7 +1535,7 @@ function App() {
               } else {
                 // Both gone or manual close - use current price
                 // Fallback to entryPrice if candles not ready to avoid 0 check
-                const currentPrice = candles.length > 0 ? candles[candles.length - 1].close : activeSignal.entryPrice;
+                const currentPrice = candlesRef.current.length > 0 ? candlesRef.current[candlesRef.current.length - 1].close : activeSignal.entryPrice;
                 exitPrice = currentPrice > 0 ? currentPrice : activeSignal.entryPrice;
                 
                 closureReason = 'Manual Close or Unknown';
@@ -1509,11 +1543,11 @@ function App() {
               }
             } catch (orderCheckError) {
               console.warn('[Position Sync] Failed to check orders, using current price:', orderCheckError);
-              exitPrice = candles.length > 0 ? candles[candles.length - 1].close : activeSignal.entryPrice;
+              exitPrice = candlesRef.current.length > 0 ? candlesRef.current[candlesRef.current.length - 1].close : activeSignal.entryPrice;
             }
           } else {
             // No OCO - use current price
-            exitPrice = candles.length > 0 ? candles[candles.length - 1].close : activeSignal.entryPrice;
+            exitPrice = candlesRef.current.length > 0 ? candlesRef.current[candlesRef.current.length - 1].close : activeSignal.entryPrice;
           }
           
           // Calculate final PNL
@@ -1552,7 +1586,7 @@ function App() {
           // CRITICAL: Use the valid position we found (which matches direction)
           const validBinancePos = activePos; 
           const binanceQty = Math.abs(parseFloat(validBinancePos.positionAmt));
-          const currentPrice = candles.length > 0 ? candles[candles.length - 1].close : 0;
+          const currentPrice = candlesRef.current.length > 0 ? candlesRef.current[candlesRef.current.length - 1].close : 0;
           
           if (currentPrice > 0) {
               let closeReason = '';
@@ -1618,6 +1652,15 @@ function App() {
             signalUpdated = true;
           }
 
+          if (activeSignal.execution?.execution_status === 'PENDING_LIMIT') {
+             console.log('[Position Sync] LIMIT order filled! Updating status to FILLED.');
+             updatedSignal.execution = {
+                 ...updatedSignal.execution,
+                 execution_status: 'FILLED'
+             };
+             signalUpdated = true;
+          }
+
           if (signalUpdated) {
             setActiveSignal(updatedSignal);
             storageService.saveActiveSignal(updatedSignal, activeSignal.symbol);
@@ -1642,7 +1685,7 @@ function App() {
         clearInterval(syncInterval);
       }
     };
-  }, [activeSignal, tradingMode, candles]);
+  }, [activeSignal, tradingMode]);
 
   // --- QUICK TRAIN MODEL (500 Iterations) ---
 
@@ -1795,10 +1838,33 @@ function App() {
         // Pass entryPrice for MinNotional check
         quantityAsset = await binanceTradingService.roundQuantity(tradeSymbol, rawQuantity, entryPrice);
         
-        // Fallback: If Quantity is 0 (too small) but we have balance, bump to Min Notional (~$6)
-        if (quantityAsset === 0 && balance >= 6) {
-             console.warn(`[Position Sizing] Calculated Qty ${rawQuantity} too small. Bumping to 6 USDT (Min Notional).`);
-             quantityAsset = await binanceTradingService.roundQuantity(tradeSymbol, 6.0 / entryPrice, entryPrice);
+        // Fallback: If Quantity is 0 (too small) but we have balance, bump to exchange minimums
+        if (quantityAsset === 0) {
+             console.log(`[Position Sizing] Calculating minimum required quantity for ${tradeSymbol}...`);
+             const filters = await binanceTradingService.getSymbolFilters(tradeSymbol);
+             if (filters) {
+                 const { minQty, minNotional } = filters;
+                 // Required quantity to meet minNotional
+                 const qtyForNotional = minNotional / entryPrice;
+                 // We need at least the max of minQty and qtyForNotional
+                 // Add 5% buffer to be safe against price fluctuations
+                 let requiredQty = Math.max(minQty, qtyForNotional) * 1.05;
+                 
+                 // Check if we have enough margin to open this position
+                 // Margin required = (requiredQty * entryPrice) / leverage
+                 const marginRequired = (requiredQty * entryPrice) / leverage;
+                 
+                 if (balance >= marginRequired) {
+                     console.warn(`[Position Sizing] Bumping quantity to minimum required: ${requiredQty}`);
+                     // Disable minNotional check in roundQuantity by passing 0 for price since we manually verified
+                     quantityAsset = await binanceTradingService.roundQuantity(tradeSymbol, requiredQty, 0);
+                 } else {
+                     console.warn(`[Position Sizing] Insufficient margin for minimum order. Need ${marginRequired.toFixed(2)}, have ${balance.toFixed(2)}.`);
+                 }
+             } else if (balance >= (6 / leverage)) {
+                 // Fallback if no filters
+                 quantityAsset = await binanceTradingService.roundQuantity(tradeSymbol, 6.0 / entryPrice, 0);
+             }
         }
         
         console.log(`[Position Sizing] Confirmed Quantity: ${quantityAsset} @ ${entryPrice}`);
@@ -2483,7 +2549,8 @@ function App() {
       outcome: outcome,
       confluence: activeSignal.confluenceFactors?.join(', ') || 'Unknown',
       riskReward: activeSignal.riskRewardRatio || 0,
-      note: outcome === 'WIN' ? 'Good entry, verified pattern.' : 'False signal, volatility stopped out.'
+      note: outcome === 'WIN' ? 'Good entry, verified pattern.' : 'False signal, volatility stopped out.',
+      pnl: pnl
     };
 
     setTrainingHistory(prev => {
@@ -3571,6 +3638,9 @@ function App() {
                           onClick={() => {
                             setTradingMode('paper');
                             storageService.saveTradingMode('paper');
+                            // Also ensure useTestnet setting is synced
+                            const settings = storageService.getSettings();
+                            storageService.saveSettings({ ...settings, useTestnet: true });
                           }}
                           className={`flex-1 py-1.5 rounded-md text-[10px] font-bold transition-all flex items-center justify-center gap-1.5 ${tradingMode === 'paper'
                             ? 'bg-slate-800 text-blue-400 shadow-sm'
@@ -3588,6 +3658,9 @@ function App() {
                             if (window.confirm('Enable LIVE TRADING mode? Real funds will be used.')) {
                               setTradingMode('live');
                               storageService.saveTradingMode('live');
+                              // Also ensure useTestnet setting is synced
+                              const settings = storageService.getSettings();
+                              storageService.saveSettings({ ...settings, useTestnet: false });
                             }
                           }}
                           className={`flex-1 py-1.5 rounded-md text-[10px] font-bold transition-all flex items-center justify-center gap-1.5 ${tradingMode === 'live'

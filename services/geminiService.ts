@@ -36,8 +36,11 @@ export const analyzeMarketWithAI = async (
     : "No major news events.";
 
   // 3. Prepare Neural Feedback (Knowledge Base)
-  const successfulPatterns = trainingHistory.filter(t => t.outcome === 'WIN');
-  const failedPatterns = trainingHistory.filter(t => t.outcome === 'LOSS');
+  // ONLY KEEP TRADES WITH POSITIVE PNL OR ZERO (per user request: "jangan gunakan jika pnl -")
+  const filteredHistory = trainingHistory.filter(t => t.pnl === undefined || t.pnl >= 0);
+  
+  const successfulPatterns = filteredHistory.filter(t => t.outcome === 'WIN');
+  const failedPatterns = filteredHistory.filter(t => t.outcome === 'LOSS');
   
   const learningContext = `
     MEMORY & LEARNING:

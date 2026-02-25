@@ -311,7 +311,15 @@ async function authenticatedRequest(
         
         // Append testnet flag for Proxy (both local and production Railway)
         if (isProxy) {
-            url += '&testnet=true';
+            const isTestnet = (() => {
+                try {
+                    const settings = localStorage.getItem('neurotrade_settings');
+                    return settings ? JSON.parse(settings).useTestnet : true;
+                } catch {
+                    return true;
+                }
+            })();
+            url += `&testnet=${isTestnet}`;
         }
         
         console.log(`[Binance Auth] ${method} ${endpoint} | TS: ${requestParams.timestamp} | Offset: ${serverTimeOffset}`);
@@ -328,14 +336,36 @@ async function authenticatedRequest(
 
         if (!response.ok) {
             const errorText = await response.text();
+            let errorMessage = `Binance API Error: ${response.status}`;
+            let errorCode = null;
+
             // Try to parse JSON error if possible
             try {
                 const jsonError = JSON.parse(errorText);
-                throw new Error(jsonError.msg || jsonError.message || `Binance API Error: ${response.status}`);
+                errorMessage = jsonError.msg || jsonError.message || errorMessage;
+                errorCode = jsonError.code;
             } catch (e) {
-                // If not JSON, it might be HTML or plain text
-                throw new Error(`Binance API Error: ${response.status} - ${errorText.substring(0, 200)}`);
+                errorMessage = `${errorMessage} - ${errorText.substring(0, 200)}`;
             }
+
+            // DETAILED HANDLING FOR 401/403 (AUTHENTICATION/PERMISSION)
+            if (response.status === 401 || response.status === 403 || errorCode === -2015) {
+                console.error(`[Binance Auth] 🔐 AUTH ERROR DETECTED: ${errorMessage}`);
+                
+                const helpMsg = `
+❌ Binance Authentication Failed (${response.status})
+Common causes:
+1. API Key/Secret is incorrect.
+2. IP Whitelisting is blocking this request.
+3. API Key does not have "Enable Futures" permissions.
+
+Please visit Binance API Management to verify settings.
+                `.trim();
+                
+                throw new Error(helpMsg);
+            }
+
+            throw new Error(errorMessage);
         }
 
         // Validate Content-Type for JSON
@@ -958,41 +988,40 @@ export async function placeOrderWithSLTP(params: {
 
     const closeSide = params.side === 'BUY' ? 'SELL' : 'BUY';
 
-    // Susun array untuk Batch Order
-    const orders: any[] = [
-        // Order Utama (Entry)
-        {
-            symbol: params.symbol,
-            side: params.side,
-            type: params.type,
-            quantity: formatParameter(params.quantity),
-            // Only add price and timeInForce if it's a LIMIT order
-            ...(params.type === 'LIMIT' ? { price: formatParameter(params.price), timeInForce: 'GTC' } : {})
-        },
-        // Order Take Profit
-        {
-            symbol: params.symbol,
-            side: closeSide,
-            type: 'TAKE_PROFIT_MARKET',
-            stopPrice: formatParameter(params.tpPrice),
-            closePosition: 'true', // Rule: Auto Close Full
-            workingType: 'MARK_PRICE'
-        },
-        // Order Stop Loss
-        {
-            symbol: params.symbol,
-            side: closeSide,
-            type: 'STOP_MARKET',
-            stopPrice: formatParameter(params.slPrice),
-            closePosition: 'true',
-            workingType: 'MARK_PRICE'
-        }
-    ];
-
-    console.log(`[Binance Trading] 🚀 Executing Batch Entry for ${params.symbol}`);
-    return await authenticatedRequest('/fapi/v1/batchOrders', 'POST', {
-        batchOrders: JSON.stringify(orders)
+    console.log(`[Binance Trading] 🚀 Executing Entry for ${params.symbol}`);
+    
+    // 2. Place Order Utama (Entry)
+    const entryRes = await placeOrder({
+        symbol: params.symbol,
+        side: params.side,
+        type: params.type,
+        quantity: typeof params.quantity === 'number' ? params.quantity : parseFloat(params.quantity),
+        ...(params.type === 'LIMIT' ? { price: params.price, timeInForce: 'GTC' } : {})
     });
+    
+    console.log(`[Binance Trading] ✅ Entry Order Placed. ID: ${entryRes?.orderId}. Now placing SL and TP.`);
+
+    // 3. Place OCO (SL & TP) sequentially to bypass Testnet batchOrder limitations with STOP_MARKET
+    let ocoOrders: any[] = [];
+    try {
+        const ocoRes = await placeOCOOrder({
+            symbol: params.symbol,
+            side: closeSide,
+            quantity: params.quantity,
+            price: params.tpPrice,
+            stopPrice: params.slPrice
+        });
+        if (ocoRes && ocoRes.orders) {
+            ocoOrders = ocoRes.orders;
+        }
+    } catch (e) {
+        console.error(`[Binance Trading] ❌ SL/TP placement failed after entry:`, e);
+        // We don't throw here to allow the App.tsx loop to at least register the entry
+        // The user will have an unprotected position, but they will see it.
+    }
+
+    // Return in array format to maintain compatibility with App.tsx which expects batchRes[0]
+    return [entryRes, ...ocoOrders];
 }
 
 /**

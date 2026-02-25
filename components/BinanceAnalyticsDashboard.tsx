@@ -137,7 +137,9 @@ const BinanceAnalyticsDashboard: React.FC<Props> = ({ symbol, onClose }) => {
     if (!metrics) return null;
 
     const readinessColors = getReadinessColor(metrics.aiReadinessScore);
-    const visibleTrades = showAllTrades ? metrics.trades.slice(0, 100) : metrics.trades.slice(0, 15);
+    // Hide open/zero PnL trades, but keep winners and losers
+    const filteredTradesForDisplay = metrics.trades.filter(t => t.realizedPnl !== 0);
+    const visibleTrades = showAllTrades ? filteredTradesForDisplay.slice(0, 100) : filteredTradesForDisplay.slice(0, 15);
 
     return (
         <div className="flex-1 overflow-y-auto pb-20">
@@ -377,7 +379,7 @@ const BinanceAnalyticsDashboard: React.FC<Props> = ({ symbol, onClose }) => {
                             <Activity className="w-4 h-4 text-cyan-400" />
                             <h3 className="text-sm font-black text-white uppercase tracking-wider">Trade History</h3>
                             <span className="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full font-bold">
-                                {metrics.trades.filter(t => t.realizedPnl !== 0).length} closed
+                                {filteredTradesForDisplay.length} trades shown
                             </span>
                         </div>
                     </div>
@@ -434,7 +436,7 @@ const BinanceAnalyticsDashboard: React.FC<Props> = ({ symbol, onClose }) => {
                                 </table>
                             </div>
 
-                            {metrics.trades.length > 15 && (
+                            {filteredTradesForDisplay.length > 15 && (
                                 <button
                                     onClick={() => setShowAllTrades(!showAllTrades)}
                                     className="w-full mt-3 py-2 text-xs text-slate-400 hover:text-white bg-slate-800/30 hover:bg-slate-800/60 rounded-lg flex items-center justify-center gap-1 transition-all font-bold"
@@ -442,7 +444,7 @@ const BinanceAnalyticsDashboard: React.FC<Props> = ({ symbol, onClose }) => {
                                     {showAllTrades ? (
                                         <><ChevronUp className="w-3 h-3" /> Show Less</>
                                     ) : (
-                                        <><ChevronDown className="w-3 h-3" /> Show All ({metrics.trades.length} trades)</>
+                                        <><ChevronDown className="w-3 h-3" /> Show All ({filteredTradesForDisplay.length} trades)</>
                                     )}
                                 </button>
                             )}

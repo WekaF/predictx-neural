@@ -103,6 +103,7 @@ export interface TrainingData {
   outcome: 'WIN' | 'LOSS';
   riskReward: number;
   note: string;
+  pnl?: number; // Added to enable filtering out negative Realized PnL
 }
 
 export interface BacktestTrade {
