@@ -151,68 +151,32 @@ class AIEngine:
         funding, oi, ls = await asyncio.gather(funding_task, oi_task, ls_task)
         return funding, oi, ls
 
+
     def train(self, symbol="BTCUSDT", epochs=50, interval="1h", progress_callback=None):
         start_time = time.time()
-        print(f"Training started for {symbol}...")
+        print(f"Training started for {symbol} (Phase 6 - High Probability Futures)...")
         
-        # 1. Fetch OHLCV
-        raw_data = get_historical_data(symbol, period="1y", interval=interval)
+        # 1. Fetch OHLCV + Futures Data Integrated
+        raw_data = get_historical_data(symbol, period="1y", interval=interval, include_futures=True)
         if "error" in raw_data: return {"status": "error", "message": raw_data["error"]}
 
         df = pd.DataFrame(raw_data["data"])
         
-        # 2. Fetch Futures Data (Async run in Sync)
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            funding, oi, ls = loop.run_until_complete(self.fetch_futures_data(symbol, limit=1000))
-            loop.close()
-            
-            # 3. Merge Data (Simplistic merging logic for prototype)
-            # In production, use accurate timestamp merging. 
-            # Here we assume data density is similar or just fill
-            
-            # Funding
-            if funding and 'history' in funding:
-                 # Funding is 8h usually, repeated mapping needed. 
-                 # For simplicity, we use current funding as feature (not ideal but works for proof of concept)
-                 # Better: Map funding rates to timestamps
-                 df['fundingRate'] = funding['current'] # Placeholder: static funding
-            
-            # OI
-            if oi:
-                oi_df = pd.DataFrame(oi)
-                oi_df['time'] = pd.to_datetime(oi_df['timestamp'], unit='ms')
-                # Use interpolation or merge_asof if indices match
-                # For Phase 6 prototype: We assume last known OI
-                df['openInterest'] = oi[0]['open_interest'] # Placeholder
-                
-            # LS
-            if ls:
-                df['longShortRatio'] = ls[0]['ratio'] # Placeholder
-                
-            print("Futures data fetched and merged.")
-            
-        except Exception as e:
-            print(f"Error fetching futures data: {e}")
-            # Fallback to defaults
-            pass
-
+        # 2. Indicator Calculation (Includes futures indicators)
         df = add_indicators(df)
         
         # Select 9 Features
-        # Ensure we have all columns
         feature_cols = ['log_return', 'rsi', 'ema_diff', 'fundingRate', 'funding_trend', 'openInterest', 'oi_change', 'longShortRatio', 'atr']
         
-        # Fill missing
+        # Ensure we have all columns
         for col in feature_cols:
             if col not in df.columns:
                  df[col] = 0.0
                  
         features = df[feature_cols].values
         
-        # Handle NaNs
-        features = np.nan_to_num(features)
+        # Handle NaNs and Inf
+        features = np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
 
         train_size = int(len(features) * 0.8)
         self.scaler.fit(features[:train_size])
@@ -235,6 +199,7 @@ class AIEngine:
         self.models_loaded = True
 
         return {"status": "success", "final_loss": history['loss'][-1], "epochs": epochs}
+
 
     def predict_next_move(self, candles: list, futures_data: dict = None):
         if not self.models_loaded or len(candles) < 150:

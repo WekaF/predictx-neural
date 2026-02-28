@@ -4,10 +4,9 @@ import { BacktestTrade, ExecutedTrade } from '../types';
 
 interface TradeListProps {
   trades: (BacktestTrade | ExecutedTrade)[];
-  onCloseTrade?: (tradeId: string) => void;
 }
 
-const TradeList: React.FC<TradeListProps> = React.memo(({ trades, onCloseTrade }) => {
+const TradeList: React.FC<TradeListProps> = React.memo(({ trades }) => {
   // Filter out ANY trades that are not WIN or LOSS
   const filteredTrades = trades.filter(t => t.outcome === 'WIN' || t.outcome === 'LOSS');
 

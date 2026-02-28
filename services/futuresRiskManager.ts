@@ -4,7 +4,7 @@
  */
 
 export class FuturesRiskManager {
-  private maxLeverage = 10; // Conservative max leverage
+  private maxLeverage = 150; // Aligned with StrategyConfig
   private maxAccountRisk = 0.02; // 2% per trade
 
   /**
@@ -104,7 +104,7 @@ export class FuturesRiskManager {
     entryPrice: number,
     stopLoss: number,
     takeProfit: number,
-    minRR: number = 1.5
+    minRR: number = 3.0 // Aligned with StrategyConfig 1:3 ratio
   ): boolean {
     const rr = this.calculateRiskReward(entryPrice, stopLoss, takeProfit);
     return rr >= minRR;

@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import time
 from services.data_service import get_historical_data
+from utils.smc_utils import StrategyConfig
 
 def calculate_max_drawdown(balances):
     """
@@ -250,28 +251,27 @@ def run_backtest_v2(engine, symbol="BTC-USD", period="3mo", interval="1h"):
         if position > 0:
             pnl_pct = (current_price - entry_price) / entry_price
 
-            # Dynamic TP/SL or Signal Exit?
-            # Dynamic TP/SL or Signal Exit?
-            # Basic Safety TP/SL
-            tp_hit = current_high >= entry_price * 1.015  # TP at 1.5%
-            sl_hit = current_low <= entry_price * 0.992   # SL at 0.8%
-            
-            # Trailing Stop Logic (Leverage-Aware)
-            # If price moves up > 1%, set SL to Breakeven + 0.3%
-            # If price moves up > 2%, set SL to Entry + 0.8%
-            trailing_sl_price = entry_price * 0.992
+            # Unified Trailing Logic (Price-Based)
+            current_sl_pct = StrategyConfig.DEFAULT_SL_PCT
+            current_tp_pct = StrategyConfig.DEFAULT_TP_PCT
             pnl_high_pct = (current_high - entry_price) / entry_price
             
-            if pnl_high_pct > 0.02:
-                trailing_sl_price = entry_price * 1.008
-                if current_low <= trailing_sl_price:
-                    sl_hit = True
-                    exit_reason = "Trailing Stop (+0.8%)"
-            elif pnl_high_pct > 0.01:
-                trailing_sl_price = entry_price * 1.003
-                if current_low <= trailing_sl_price:
-                    sl_hit = True
-                    exit_reason = "Trailing Stop (+0.3%)"
+            level_hit = None
+            cfg = StrategyConfig.TRAILING_CONFIG
+            if pnl_high_pct >= cfg["LEVEL_3"]["trigger"]:
+                current_sl_pct = -cfg["LEVEL_3"]["sl_move"]
+                current_tp_pct = cfg["LEVEL_3"]["tp_move"]
+                level_hit = "LEVEL_3"
+            elif pnl_high_pct >= cfg["LEVEL_2"]["trigger"]:
+                current_sl_pct = -cfg["LEVEL_2"]["sl_move"]
+                current_tp_pct = cfg["LEVEL_2"]["tp_move"]
+                level_hit = "LEVEL_2"
+            elif pnl_high_pct >= cfg["LEVEL_1"]["trigger"]:
+                current_sl_pct = -cfg["LEVEL_1"]["sl_move"]
+                level_hit = "LEVEL_1"
+
+            tp_hit = current_high >= entry_price * (1 + current_tp_pct)
+            sl_hit = current_low <= entry_price * (1 - current_sl_pct)
             # Use centralized state vector method
             state_vector = engine.get_state_vector(
                 current_candles, 
@@ -288,11 +288,15 @@ def run_backtest_v2(engine, symbol="BTC-USD", period="3mo", interval="1h"):
             exit_price = current_price
 
             if tp_hit:
-                exit_reason = "TP (+1.5%)"
-                exit_price = entry_price * 1.015
+                exit_reason = f"TP (+{current_tp_pct * 100:.1f}%)"
+                if level_hit: exit_reason += f" [{level_hit}]"
+                exit_price = entry_price * (1 + current_tp_pct)
             elif sl_hit:
-                exit_reason = "SL (-0.8%)"
-                exit_price = entry_price * 0.992
+                if level_hit:
+                    exit_reason = f"Trailing SL (+{-current_sl_pct * 100:.1f}%) [{level_hit}]"
+                else:
+                    exit_reason = f"SL (-{current_sl_pct * 100:.1f}%)"
+                exit_price = entry_price * (1 - current_sl_pct)
             elif "SELL" in action_code:
                 # Only exit on Sell signal if confidence is decent
                 if confidence > 32:

@@ -19,10 +19,11 @@ import { fetchBinanceAnalytics, PerformanceMetrics } from '../services/binanceAn
 
 interface Props {
     symbol?: string;
+    tradingMode: 'paper' | 'live';
     onClose: () => void;
 }
 
-const BinanceAnalyticsDashboard: React.FC<Props> = ({ symbol, onClose }) => {
+const BinanceAnalyticsDashboard: React.FC<Props> = ({ symbol, tradingMode, onClose }) => {
     const [metrics, setMetrics] = useState<PerformanceMetrics | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -44,7 +45,7 @@ const BinanceAnalyticsDashboard: React.FC<Props> = ({ symbol, onClose }) => {
 
     useEffect(() => {
         loadAnalytics();
-    }, [loadAnalytics]);
+    }, [loadAnalytics, tradingMode]);
 
     // AI Readiness color
     const getReadinessColor = (score: number) => {
@@ -151,7 +152,16 @@ const BinanceAnalyticsDashboard: React.FC<Props> = ({ symbol, onClose }) => {
                     </div>
                     <div>
                         <h1 className="text-white font-black text-lg tracking-tight">Trade Analytics</h1>
-                        <p className="text-slate-500 text-[10px] font-bold uppercase tracking-wider">Binance Futures • Live Data</p>
+                        <div className="flex items-center gap-2">
+                            <p className="text-slate-500 text-[10px] font-bold uppercase tracking-wider">Binance Futures</p>
+                            <span className={`px-1.5 py-0.5 rounded text-[8px] font-black uppercase ${
+                                tradingMode === 'live' 
+                                    ? 'bg-emerald-500 text-white' 
+                                    : 'bg-amber-500 text-black'
+                            }`}>
+                                {tradingMode === 'live' ? 'LIVE DATA' : 'TESTNET DATA'}
+                            </span>
+                        </div>
                     </div>
                 </div>
                 <button

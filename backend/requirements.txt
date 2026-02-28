@@ -13,6 +13,8 @@ ccxt>=4.1.0
 # Machine Learning
 # torch (Installed manually in nixpacks.toml for CPU version)
 scikit-learn>=1.3.0
+matplotlib>=3.7.0
+stable-baselines3>=2.0.0
 websockets>=11.0.3
 aiohttp>=3.8.5
 apscheduler>=3.10.0

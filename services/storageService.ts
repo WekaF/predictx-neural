@@ -345,12 +345,13 @@ export const storageService = {
           webhookUrl: urlToUse,
           webhookMethod: parsed.webhookMethod || 'POST',
           enableNotifications: parsed.enableNotifications ?? false,
-          useTestnet: parsed.useTestnet ?? false
+          useTestnet: parsed.useTestnet ?? false,
+          autoSLTP: parsed.autoSLTP ?? true
         };
       }
-      return { webhookUrl: defaultUrl, webhookMethod: 'POST', enableNotifications: false, useTestnet: false };
+      return { webhookUrl: defaultUrl, webhookMethod: 'POST', enableNotifications: false, useTestnet: false, autoSLTP: true };
     } catch (e) {
-      return { webhookUrl: defaultUrl, webhookMethod: 'POST', enableNotifications: false, useTestnet: false };
+      return { webhookUrl: defaultUrl, webhookMethod: 'POST', enableNotifications: false, useTestnet: false, autoSLTP: true };
     }
   },
 
@@ -540,7 +541,10 @@ export const storageService = {
             updated_at: new Date().toISOString()
           }, { onConflict: 'symbol' });
           
-        if (error) console.error('[Supabase] Active signal save error:', error);
+        if (error) {
+          const isAbort = error.message?.includes('AbortError') || error.details?.includes('AbortError');
+          if (!isAbort) console.error('[Supabase] Active signal save error:', error);
+        }
       } else {
         // DELETE active signal record
         const { error } = await supabase
@@ -548,10 +552,15 @@ export const storageService = {
           .delete()
           .eq('symbol', symbol);
           
-        if (error) console.error('[Supabase] Active signal delete error:', error);
+        if (error) {
+          const isAbort = error.message?.includes('AbortError') || error.details?.includes('AbortError');
+          if (!isAbort) console.error('[Supabase] Active signal delete error:', error);
+        }
       }
-    } catch (e) {
-      console.error('[Supabase] Active signal sync failed:', e);
+    } catch (e: any) {
+      if (e?.name !== 'AbortError' && !e?.message?.includes('AbortError')) {
+        console.error('[Supabase] Active signal sync failed:', e);
+      }
     }
   },
 
@@ -627,14 +636,25 @@ export const storageService = {
             outcome: log.outcome,
             source: log.source || (log.tags?.includes('AI') ? 'AI' : 'MANUAL'),
             confidence: log.aiConfidence || log.items?.aiConfidence,
-            reasoning: log.aiReasoning || log.items?.aiReasoning
+            reasoning: log.aiReasoning || log.items?.aiReasoning,
+            trading_mode: log.tradingMode
           });
 
-        if (error) console.error('[Supabase] Signal/Log save error:', error);
-        else console.log('[Supabase] ✅ Trade saved to trade_signals:', log.symbol, log.type);
+        // Ignore duplicate-key errors (23505) and AbortErrors silently
+        if (error && error.code !== '23505') {
+          const isAbort = error.message?.includes('AbortError') || error.details?.includes('AbortError');
+          if (!isAbort) {
+            console.error('[Supabase] Signal/Log save error:', error);
+          }
+        } else if (!error) {
+          console.log('[Supabase] ✅ Trade saved to trade_signals:', log.symbol, log.type);
+        }
       }
-    } catch (e) {
-      console.error("Failed to save trading log", e);
+    } catch (e: any) {
+      // Silently ignore AbortError — caused by browser cancelling the request (navigation, unmount, etc)
+      if (e?.name !== 'AbortError' && !e?.message?.includes('AbortError')) {
+        console.error("Failed to save trading log", e);
+      }
     }
   },
 
@@ -682,7 +702,8 @@ export const storageService = {
           aiReasoning: d.ai_reasoning || 'No reasoning available',
           aiConfidence: d.ai_confidence || 0,
           aiPrediction: d.pattern_detected
-        }
+        },
+        tradingMode: d.trading_mode || (d.source === 'BINANCE_IMPORT' ? 'live' : 'paper')
       })) || [];
 
       // Update local storage - Merge with existing to avoid losing local-only trades

@@ -27,10 +27,11 @@ interface Position {
 }
 
 interface OpenOrdersProps {
+  tradingMode: 'paper' | 'live';
   onTradeClosed?: (trade: any) => void;
 }
 
-export const OpenOrders: React.FC<OpenOrdersProps> = ({ onTradeClosed }) => {
+export const OpenOrders: React.FC<OpenOrdersProps> = ({ tradingMode, onTradeClosed }) => {
   const [activeTab, setActiveTab] = useState<'positions' | 'orders'>('positions');
   const [orders, setOrders] = useState<OpenOrder[]>([]);
   const [positions, setPositions] = useState<Position[]>([]);
@@ -113,7 +114,7 @@ export const OpenOrders: React.FC<OpenOrdersProps> = ({ onTradeClosed }) => {
     fetchData();
     const interval = setInterval(fetchData, 30000); // Poll every 30s to prevent Binance IP Bans
     return () => clearInterval(interval);
-  }, []);
+  }, [tradingMode]);
 
   if (error) {
     return (

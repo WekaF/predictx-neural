@@ -179,6 +179,7 @@ export interface AppSettings {
   webhookMethod: 'POST' | 'GET';
   enableNotifications: boolean;
   useTestnet: boolean;
+  autoSLTP?: boolean;
 }
 
 export interface Asset {

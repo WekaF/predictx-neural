@@ -17,9 +17,19 @@ const BINANCE_PRODUCTION_API = 'https://api.binance.com';
 const BINANCE_TESTNET_API = 'https://testnet.binancefuture.com';
 const LOCAL_PROXY_API = '/ai-api/proxy';
 
-// Local cache for symbol stepSize (LOT_SIZE filter)
-const symbolStepSizeCache = new Map<string, number>();
-const symbolPrecisionCache = new Map<string, number>();
+// Local cache for symbol filters
+const symbolFilterCache = new Map<string, { stepSize: number, tickSize: number, precision: number, minQty: number, minNotional: number }>();
+
+// Internal state for trading mode
+let currentMode: 'paper' | 'live' = 'paper';
+
+/**
+ * Update the active trading mode
+ */
+export function setMode(mode: 'paper' | 'live') {
+    console.log(`[Binance Trading] 🔄 Mode switched to: ${mode.toUpperCase()}`);
+    currentMode = mode;
+}
 
 /**
  * Get API base URL based on testnet setting and environment
@@ -69,6 +79,9 @@ function getApiBase(): string {
 // Support separate keys for production and testnet
 function getApiCredentials(): { apiKey: string; secretKey: string } {
     const isTestnet = (() => {
+        // If tradingMode is 'live', we FORCE production keys regardless of settings
+        if (currentMode === 'live') return false;
+        
         try {
             const settings = localStorage.getItem('neurotrade_settings');
             return settings ? JSON.parse(settings).useTestnet : true;
@@ -93,7 +106,8 @@ function getApiCredentials(): { apiKey: string; secretKey: string } {
         if (testnetKey && testnetSecret) {
             return { apiKey: testnetKey, secretKey: testnetSecret };
         } else {
-            console.warn('[Binance Auth] Testnet keys missing, falling back to production keys check...');
+            console.error('[Binance Auth] ❌ Testnet keys missing! To use Testnet, set VITE_BINANCE_API_KEY_TESTNET and VITE_BINANCE_API_SECRET_TESTNET in .env.local');
+            return { apiKey: '', secretKey: '' };
         }
     }
 
@@ -311,7 +325,10 @@ async function authenticatedRequest(
         
         // Append testnet flag for Proxy (both local and production Railway)
         if (isProxy) {
-            const isTestnet = (() => {
+            const isTestnetFlag = (() => {
+                // If currentMode is live, we force testnet=false
+                if (currentMode === 'live') return false;
+                
                 try {
                     const settings = localStorage.getItem('neurotrade_settings');
                     return settings ? JSON.parse(settings).useTestnet : true;
@@ -319,7 +336,7 @@ async function authenticatedRequest(
                     return true;
                 }
             })();
-            url += `&testnet=${isTestnet}`;
+            url += `&testnet=${isTestnetFlag}`;
         }
         
         console.log(`[Binance Auth] ${method} ${endpoint} | TS: ${requestParams.timestamp} | Offset: ${serverTimeOffset}`);
@@ -522,9 +539,6 @@ export async function getPositions(symbol?: string): Promise<any[]> {
     return activePositions;
 }
 
-/**
- * Place a new order
- */
 export async function placeOrder(params: {
     symbol: string;
     side: 'BUY' | 'SELL';
@@ -534,6 +548,7 @@ export async function placeOrder(params: {
     stopPrice?: string | number;
     timeInForce?: 'GTC' | 'IOC' | 'FOK';
     reduceOnly?: boolean;
+    closePosition?: boolean;
 }): Promise<any> {
     console.log('[Binance Auth] Placing order:', params);
     
@@ -546,6 +561,12 @@ export async function placeOrder(params: {
 
     if (params.reduceOnly) {
         orderParams.reduceOnly = 'true';
+    }
+
+    if (params.closePosition) {
+        orderParams.closePosition = 'true';
+        // When closePosition is used, quantity should NOT be sent or should be ignored by Binance for STOP_MARKET/TAKE_PROFIT_MARKET
+        delete orderParams.quantity;
     }
 
     if (params.type === 'LIMIT') {
@@ -578,6 +599,13 @@ export async function placeOrder(params: {
         if (errorMsg.includes('-2019') || errorMsg.includes('Margin is insufficient')) {
             throw new Error('❌ Insufficient balance. Please reduce position size or add funds to your testnet account at https://testnet.binancefuture.com');
         }
+        if (errorMsg.includes('-2021')) {
+            throw new Error('❌ Immediate Trigger: Order would trigger immediately. Please adjust stop price.');
+        }
+        if (errorMsg.includes('-1111') || errorMsg.includes('Precision')) {
+            throw new Error('❌ Invalid quantity or price precision. Please check symbol filters.');
+        }
+
         if (errorMsg.includes('-1111') || errorMsg.includes('Precision')) {
             throw new Error('❌ Invalid quantity or price precision. Please check symbol filters.');
         }
@@ -594,6 +622,89 @@ export async function placeOrder(params: {
 }
 
 /**
+ * Place Algo Order (Conditional)
+ * Endpoint: /fapi/v1/algoOrder
+ */
+export async function placeAlgoOrder(params: {
+    symbol: string;
+    side: 'BUY' | 'SELL';
+    type: 'STOP_MARKET' | 'TAKE_PROFIT_MARKET' | 'STOP' | 'TAKE_PROFIT' | 'TRAILING_STOP_MARKET';
+    triggerPrice: string | number;
+    workingType?: 'MARK_PRICE' | 'CONTRACT_PRICE';
+    closePosition?: boolean;
+    timeInForce?: 'GTC' | 'IOC' | 'FOK' | 'GTX';
+}): Promise<any> {
+    console.log('[Binance Auth] Placing Algo order:', params);
+    
+    const orderParams: any = {
+        symbol: params.symbol,
+        side: params.side,
+        type: params.type,
+        algoType: 'CONDITIONAL',
+        triggerPrice: formatParameter(params.triggerPrice),
+        workingType: params.workingType || 'MARK_PRICE',
+        closePosition: params.closePosition ? 'true' : 'false',
+        timeInForce: params.timeInForce || 'GTC'
+    };
+
+    try {
+        const data = await authenticatedRequest('/fapi/v1/algoOrder', 'POST', orderParams);
+        console.log('[Binance Auth] ✅ Algo order placed:', data.algoId || 'Success');
+        return data;
+    } catch (error: any) {
+        console.error('[Binance Auth] ❌ Algo order placement failed:', error);
+        throw error;
+    }
+}
+
+/**
+ * Place batch orders (Atomic or Sequential fallback)
+ * Endpoint: /fapi/v1/batchOrders
+ */
+export async function placeBatchOrders(orders: any[]): Promise<any[]> {
+    console.log(`[Binance Auth] Placing batch of ${orders.length} orders...`);
+    
+    // Format orders for Binance batchOrders parameter
+    const formattedOrders = orders.map(order => {
+        const orderParams: any = {
+            symbol: order.symbol,
+            side: order.side,
+            type: order.type
+        };
+
+        if (order.quantity && !order.closePosition) orderParams.quantity = formatParameter(order.quantity);
+        if (order.reduceOnly) orderParams.reduceOnly = 'true';
+        if (order.closePosition) orderParams.closePosition = 'true';
+        if (order.price) orderParams.price = formatParameter(order.price);
+        if (order.stopPrice) orderParams.stopPrice = formatParameter(order.stopPrice);
+        if (order.timeInForce) orderParams.timeInForce = order.timeInForce;
+
+        return orderParams;
+    });
+
+    try {
+        const data = await authenticatedRequest('/fapi/v1/batchOrders', 'POST', {
+            batchOrders: JSON.stringify(formattedOrders)
+        });
+        console.log('[Binance Auth] ✅ Batch orders placed');
+        return data;
+    } catch (error: any) {
+        console.error('[Binance Auth] ❌ Batch order failed. Attempting sequential fallback...', error);
+        // Fallback for Testnet issues if batch is rejected
+        const results = [];
+        for (const order of orders) {
+            try {
+                const res = await placeOrder(order);
+                results.push(res);
+            } catch (err) {
+                results.push({ code: -1, msg: String(err) });
+            }
+        }
+        return results;
+    }
+}
+
+/**
  * Place Hard Stop Loss and Take Profit Orders (Futures)
  * Binance Futures does not support "OCO" endpoint like Spot.
  * We must verify separate orders: STOP_MARKET and TAKE_PROFIT_MARKET.
@@ -606,6 +717,7 @@ export async function placeOCOOrder(params: {
     price: number;           // Take Profit trigger price
     stopPrice: number;       // Stop Loss trigger price
     stopLimitPrice?: number; // Not used for MARKET stops
+    reduceOnly?: boolean;    // Ensure this is properly passed
 }): Promise<any> {
     console.log('[Binance Auth] Placing Hard SL/TP Orders (Futures Split):', params);
 
@@ -622,24 +734,28 @@ export async function placeOCOOrder(params: {
     // So if SL succeeds but TP fails, we have an SL-protected position but no TP.
     // This is safe-ish. We should allow it but warn.
 
+    // 0. Ensure prices are rounded to tickSize
+    const roundedTP = await roundPrice(params.symbol, params.price);
+    const roundedSL = await roundPrice(params.symbol, params.stopPrice);
+
+    console.log(`[Binance Auth] Rounded Prices for ${params.symbol}: TP ${roundedTP}, SL ${roundedSL}`);
+
     try {
         // 1. Place STOP LOSS (STOP_MARKET)
         if (params.stopPrice > 0) {
-            console.log(`[OCO-Sim] Placing STOP_MARKET at ${params.stopPrice}`);
+            console.log(`[OCO-Sim] Placing STOP_MARKET (Algo) at ${params.stopPrice}`);
             try {
-                const slOrder = await placeOrder({
+                const slOrder = await placeAlgoOrder({
                     symbol: params.symbol,
                     side: params.side, 
                     type: 'STOP_MARKET',
-                    quantity: params.quantity,
-                    stopPrice: params.stopPrice,
-                    reduceOnly: true
+                    triggerPrice: roundedSL,
+                    closePosition: true
                 });
                 results.orders.push(slOrder);
-            } catch (slError) {
+            } catch (slError: any) {
                 console.error('[OCO-Sim] Failed to place STOP LOSS:', slError);
-                // If SL fails, this is CRITICAL. Retrow to trigger rollback.
-                throw slError;
+                throw new Error(`Stop Loss Error: ${slError.message || slError}`);
             }
         } else {
             console.log('[OCO-Sim] Skipping Stop Loss (Price <= 0)');
@@ -647,37 +763,28 @@ export async function placeOCOOrder(params: {
 
         // 2. Place TAKE PROFIT (TAKE_PROFIT_MARKET)
         if (params.price > 0) {
-            console.log(`[OCO-Sim] Placing TAKE_PROFIT_MARKET at ${params.price}`);
+            console.log(`[OCO-Sim] Placing TAKE_PROFIT_MARKET (Algo) at ${params.price}`);
             try {
-                const tpOrder = await placeOrder({
+                const tpOrder = await placeAlgoOrder({
                     symbol: params.symbol,
                     side: params.side, 
                     type: 'TAKE_PROFIT_MARKET',
-                    quantity: params.quantity,
-                    stopPrice: params.price, // For TP_MARKET, 'stopPrice' is the trigger
-                    reduceOnly: true
+                    triggerPrice: roundedTP,
+                    closePosition: true
                 });
                 results.orders.push(tpOrder);
-            } catch (tpError) {
+            } catch (tpError: any) {
                 console.error('[OCO-Sim] Failed to place TAKE PROFIT:', tpError);
-                // If TP fails, it's bad but not "lose the account" bad if SL is set.
-                // However, our App.tsx "Atomic" rollback will trigger if we throw.
-                // If we WANT to allow "SL only", we should NOT throw here.
-                // But the user reported "Auto TP not working", implying they WANTED it.
-                // If we catch and suppress, they get a position without TP.
-                // Better to throw so the UI rollback kicks in and tells them "TP Failed".
-                // Result: They know it failed.
-                // So re-throwing is actually CORRECT for "Robost Automation".
-                throw tpError;
+                throw new Error(`Take Profit Error: ${tpError.message || tpError}`);
             }
         } else {
             console.log('[OCO-Sim] Skipping Take Profit (Price <= 0)');
         }
 
-        console.log('[Binance Auth] ✅ Hard SL/TP orders execution complete. Placed:', results.orders.length);
+        console.log('[Binance Auth] ✅ Hard SL/TP algo orders execution complete. Placed:', results.orders.length);
         return results;
     } catch (error: any) {
-        console.error('[Binance Auth] ❌ Failed to place one or more orders:', error);
+        console.error('[Binance Auth] ❌ Failed to place one or more algo orders:', error);
         throw error; 
     }
 }
@@ -707,15 +814,9 @@ export async function cancelAllOrders(symbol: string): Promise<any> {
  * Uses Futures endpoint (/fapi/v1/exchangeInfo)
  */
 export async function getSymbolFilters(symbol: string): Promise<{ stepSize: number, tickSize: number, precision: number, minQty: number, minNotional: number } | null> {
-    // Check cache first (Simple cache strategy, might need invalidation later)
-    if (symbolStepSizeCache.has(symbol) && symbolPrecisionCache.has(symbol)) {
-        return { 
-            stepSize: symbolStepSizeCache.get(symbol)!, 
-            tickSize: symbolPrecisionCache.get(symbol)!, // We'll store tickSize in same cache or new one? Let's use new one.
-            precision: 8, // Derived, not strictly needed for math if we have tickSize
-            minQty: 0.001, // Default fallback if cached heavily
-            minNotional: 5.0
-        };
+    // Check cache first
+    if (symbolFilterCache.has(symbol)) {
+        return symbolFilterCache.get(symbol)!;
     }
 
     try {
@@ -746,12 +847,9 @@ export async function getSymbolFilters(symbol: string): Promise<{ stepSize: numb
         const minNotional = minNotionalFilter ? parseFloat(minNotionalFilter.notional) : 5.0; // Default 5 USDT
         const precision = symbolInfo.quantityPrecision || 8; 
 
-        symbolStepSizeCache.set(symbol, stepSize);
-        symbolPrecisionCache.set(symbol, tickSize); // Reuse cache map for tickSize (misnomer but works if we track it)
-        // Ideally we should rename or use separate cache. For safety let's just make a new one or ignore cache for now to ensure freshness.
-        // Actually, let's just return values.
-
-        return { stepSize, tickSize, precision, minQty, minNotional };
+        const filters = { stepSize, tickSize, precision, minQty, minNotional };
+        symbolFilterCache.set(symbol, filters);
+        return filters;
     } catch (error) {
         console.error(`[Binance] Error fetching filters for ${symbol}:`, error);
         return null; // Fail safe
@@ -790,7 +888,7 @@ export async function roundPrice(symbol: string, price: number): Promise<number>
 /**
  * Round quantity to comply with Binance LOT_SIZE stepSize and MIN_NOTIONAL
  */
-export async function roundQuantity(symbol: string, quantity: number, price: number = 0): Promise<number> {
+export async function roundQuantity(symbol: string, quantity: number, price: number = 0, reduceOnly: boolean = false): Promise<number> {
     const filters = await getSymbolFilters(symbol);
     if (!filters) {
         // Fallback to 6 decimals if filter not found (safer than nothing)
@@ -805,15 +903,19 @@ export async function roundQuantity(symbol: string, quantity: number, price: num
         return 0;
     }
 
-    // 2. Check Min Notional (only if price is provided)
-    if (price > 0 && (quantity * price) < minNotional) {
+    // 2. Check Min Notional (only if price is provided AND it's not a closing order)
+    if (!reduceOnly && price > 0 && (quantity * price) < minNotional) {
         console.warn(`[Binance] Notional value ${(quantity * price).toFixed(2)} below minNotional ${minNotional} for ${symbol}`);
         return 0;
     }
     
     // 3. Round to Step Size
+    // Use Math.round to avoid floor-ing below notional limit
     const factor = 1 / stepSize;
-    return Math.floor(quantity * factor) / factor;
+    const rounded = Math.round(quantity * factor) / factor;
+    
+    // Double check that we didn't round down below minQty
+    return Math.max(rounded, minQty);
 }
 
 /**
@@ -839,7 +941,7 @@ export async function closePosition(symbol: string, positionAmt: string | number
     
     // CRITICAL: Round quantity to stepSize to avoid LOT_SIZE error
     // Even "ReduceOnly" orders must respect stepSize
-    const quantity = await roundQuantity(symbol, rawQuantity);
+    const quantity = await roundQuantity(symbol, rawQuantity, 0, true);
 
     console.log(`[Binance Auth] Closing position for ${symbol}. Side: ${side}, Raw: ${rawQuantity}, Rounded: ${quantity}`);
     
@@ -988,40 +1090,91 @@ export async function placeOrderWithSLTP(params: {
 
     const closeSide = params.side === 'BUY' ? 'SELL' : 'BUY';
 
-    console.log(`[Binance Trading] 🚀 Executing Entry for ${params.symbol}`);
-    
-    // 2. Place Order Utama (Entry)
-    const entryRes = await placeOrder({
+    const entryPrice = params.type === 'LIMIT' && params.price ? await roundPrice(params.symbol, params.price) : params.price;
+    const roundedTP = await roundPrice(params.symbol, params.tpPrice);
+    const roundedSL = await roundPrice(params.symbol, params.slPrice);
+
+    // Round quantities
+    const quantity = typeof params.quantity === 'number' ? params.quantity : parseFloat(params.quantity);
+    const roundedQty = await roundQuantity(params.symbol, quantity, entryPrice || 0);
+
+    // 1. Place Entry Order (Wait for it to land)
+    const entryOrder = {
         symbol: params.symbol,
         side: params.side,
         type: params.type,
-        quantity: typeof params.quantity === 'number' ? params.quantity : parseFloat(params.quantity),
-        ...(params.type === 'LIMIT' ? { price: params.price, timeInForce: 'GTC' } : {})
-    });
-    
-    console.log(`[Binance Trading] ✅ Entry Order Placed. ID: ${entryRes?.orderId}. Now placing SL and TP.`);
+        quantity: roundedQty,
+        ...(params.type === 'LIMIT' ? { price: entryPrice, timeInForce: 'GTC' } : {})
+    };
 
-    // 3. Place OCO (SL & TP) sequentially to bypass Testnet batchOrder limitations with STOP_MARKET
-    let ocoOrders: any[] = [];
+    let entryRes: any;
     try {
-        const ocoRes = await placeOCOOrder({
-            symbol: params.symbol,
-            side: closeSide,
-            quantity: params.quantity,
-            price: params.tpPrice,
-            stopPrice: params.slPrice
-        });
-        if (ocoRes && ocoRes.orders) {
-            ocoOrders = ocoRes.orders;
-        }
-    } catch (e) {
-        console.error(`[Binance Trading] ❌ SL/TP placement failed after entry:`, e);
-        // We don't throw here to allow the App.tsx loop to at least register the entry
-        // The user will have an unprotected position, but they will see it.
+        entryRes = await placeOrder(entryOrder as any);
+        console.log(`[Binance Trading] ✅ Entry Order Placed: ${entryRes.orderId}`);
+    } catch (e: any) {
+        console.error(`[Binance Trading] ❌ Entry Order Failed:`, e);
+        throw new Error(`Entry Order Failed: ${e.message}`);
     }
 
-    // Return in array format to maintain compatibility with App.tsx which expects batchRes[0]
-    return [entryRes, ...ocoOrders];
+    // Emulate batchRes format [entry, tp, sl] for backward compatibility with App.tsx
+    const batchRes: any[] = [entryRes, {}, {}];
+
+    // 2. Place Take Profit (Algo Order)
+    if (roundedTP > 0) {
+        try {
+            console.log(`[Binance Trading] Placing TP Algo Order for ${params.symbol} at ${roundedTP}...`);
+            const tpRes = await placeAlgoOrder({
+                symbol: params.symbol,
+                side: closeSide,
+                type: 'TAKE_PROFIT_MARKET',
+                triggerPrice: roundedTP,
+                workingType: 'CONTRACT_PRICE',
+                closePosition: true
+            });
+            batchRes[1] = tpRes;
+        } catch (e: any) {
+            console.error(`[Binance Trading] ❌ Take Profit Failed:`, e);
+            batchRes[1] = { code: -1, msg: e.message || 'Take Profit Failed' };
+        }
+    }
+
+    // 3. Place Stop Loss (Algo Order)
+    if (roundedSL > 0) {
+        try {
+            console.log(`[Binance Trading] Placing SL Algo Order for ${params.symbol} at ${roundedSL}...`);
+            const slRes = await placeAlgoOrder({
+                symbol: params.symbol,
+                side: closeSide,
+                type: 'STOP_MARKET',
+                triggerPrice: roundedSL,
+                workingType: 'CONTRACT_PRICE',
+                closePosition: true
+            });
+            batchRes[2] = slRes;
+        } catch (e: any) {
+            console.error(`[Binance Trading] ❌ Stop Loss Failed:`, e);
+            batchRes[2] = { code: -1, msg: e.message || 'Stop Loss Failed' };
+        }
+    }
+
+    // 4. Validation: Verify SL/TP Orders
+    const slTpErrors = batchRes.slice(1)
+        .map((res: any, index: number) => {
+            if (res.code || res.msg) {
+                const orderType = index === 0 ? 'Take Profit' : 'Stop Loss';
+                return `${orderType}: ${res.msg || res.code}`;
+            }
+            return null;
+        })
+        .filter(Boolean);
+
+    if (slTpErrors.length > 0) {
+        // We throw so that App.tsx catches it and displays "Entry OK, but SL/TP Error: ..."
+        throw new Error(`SL/TP Error: ${slTpErrors.join(' | ')}`);
+    }
+    
+    console.log(`[Binance Trading] ✅ Complete SL/TP execution successful.`);
+    return batchRes;
 }
 
 /**
@@ -1036,51 +1189,99 @@ export async function manageTrailingStop(symbol: string, leverage: number) {
     const pos = positions[0];
     const entryPrice = parseFloat(pos.entryPrice);
     const markPrice = parseFloat(pos.markPrice);
-    const side = parseFloat(pos.positionAmt) > 0 ? 'BUY' : 'SELL';
+    const amt = parseFloat(pos.positionAmt);
+    const side = amt > 0 ? 'BUY' : 'SELL';
     
-    // Hitung ROE% sederhana
-    let roe = 0;
+    // Hitung Profit % dari Pergerakan Harga (Price Move)
+    let priceMove = 0;
     if (side === 'BUY') {
-        roe = ((markPrice - entryPrice) / entryPrice) * leverage * 100;
+        priceMove = (markPrice - entryPrice) / entryPrice;
     } else {
-        roe = ((entryPrice - markPrice) / entryPrice) * leverage * 100;
+        priceMove = (entryPrice - markPrice) / entryPrice;
     }
 
     let targetNewSL = 0;
+    let targetNewTP = 0;
+    let level = "";
 
-    // Rule: Profit +3% ROE -> Move SL to +0.3% profit (Lock Profit)
-    if (roe >= 3.0) {
-        targetNewSL = side === 'BUY' ? entryPrice * 1.003 : entryPrice * 0.997; 
+    // Thresholds (ROE-free, based on Price Move)
+    // Level 3 (+1.0%)
+    if (priceMove >= 0.010) {
+        targetNewSL = side === 'BUY' ? entryPrice * 1.005 : entryPrice * 0.995;
+        targetNewTP = side === 'BUY' ? entryPrice * 1.030 : entryPrice * 0.970;
+        level = "LEVEL 3 (+1.0%)";
     } 
-    // Rule: Profit +1.5% ROE -> Move SL to Entry (Break Even)
-    else if (roe >= 1.5) {
+    // Level 2 (+0.5%)
+    else if (priceMove >= 0.005) {
+        targetNewSL = side === 'BUY' ? entryPrice * 1.001 : entryPrice * 0.999;
+        targetNewTP = side === 'BUY' ? entryPrice * 1.020 : entryPrice * 0.980;
+        level = "LEVEL 2 (+0.5%)";
+    } 
+    // Level 1 (+0.2%)
+    else if (priceMove >= 0.002) {
         targetNewSL = entryPrice;
+        level = "LEVEL 1 (+0.2%)";
     }
 
-    if (targetNewSL > 0) {
-        console.log(`[Trailing] 🛡️ Target ROE reached (${roe.toFixed(2)}%). Moving SL to ${targetNewSL}`);
-        
-        // 1. Cancel SL lama (Type: STOP_MARKET)
+    if (targetNewSL > 0 || targetNewTP > 0) {
         const openOrders = await getOpenOrders(symbol);
-        const oldSL = openOrders.find(o => o.type === 'STOP_MARKET');
         
-        if (oldSL && Math.abs(parseFloat(oldSL.stopPrice) - targetNewSL) > 0.1) {
-            await cancelOrder(symbol, oldSL.orderId);
-            
-            // 2. Pasang SL baru
-            await placeOrder({
-                symbol,
-                side: side === 'BUY' ? 'SELL' : 'BUY',
-                type: 'STOP_MARKET',
-                quantity: Math.abs(parseFloat(pos.positionAmt)),
-                stopPrice: await roundPrice(symbol, targetNewSL),
-                reduceOnly: true
-            });
+        // 1. Handle SL Update (Trailing SL)
+        if (targetNewSL > 0) {
+            const oldSL = openOrders.find(o => o.type === 'STOP_MARKET');
+            const roundedSL = await roundPrice(symbol, targetNewSL);
+
+            // Hanya update jika harga baru signifikan berbeda (> 0.01%) 
+            // DAN hanya jika mengunci profit lebih banyak (Trailing)
+            if (oldSL) {
+                const currentSLPrice = parseFloat(oldSL.stopPrice);
+                const isBetterSL = side === 'BUY' ? roundedSL > currentSLPrice : roundedSL < currentSLPrice;
+                const isSignificant = Math.abs(currentSLPrice - roundedSL) > (roundedSL * 0.0001);
+
+                if (isBetterSL && isSignificant) {
+                    console.log(`[Trailing] 🛡️ ${level} Reached. Moving SL to ${roundedSL}`);
+                    await cancelOrder(symbol, oldSL.orderId);
+                    await placeOrder({
+                        symbol,
+                        side: side === 'BUY' ? 'SELL' : 'BUY',
+                        type: 'STOP_MARKET',
+                        quantity: Math.abs(amt),
+                        stopPrice: roundedSL,
+                        reduceOnly: true
+                    });
+                }
+            }
+        }
+
+        // 2. Handle TP Update (Move TP)
+        if (targetNewTP > 0) {
+            const oldTP = openOrders.find(o => o.type === 'TAKE_PROFIT_MARKET');
+            const roundedTP = await roundPrice(symbol, targetNewTP);
+
+            if (oldTP) {
+                const currentTPPrice = parseFloat(oldTP.stopPrice);
+                const isBetterTP = side === 'BUY' ? roundedTP > currentTPPrice : roundedTP < currentTPPrice;
+                const isSignificant = Math.abs(currentTPPrice - roundedTP) > (roundedTP * 0.0001);
+
+                if (isBetterTP && isSignificant) {
+                    console.log(`[Trailing] 🎯 ${level} Reached. Moving TP to ${roundedTP}`);
+                    await cancelOrder(symbol, oldTP.orderId);
+                    await placeOrder({
+                        symbol,
+                        side: side === 'BUY' ? 'SELL' : 'BUY',
+                        type: 'TAKE_PROFIT_MARKET',
+                        quantity: Math.abs(amt),
+                        stopPrice: roundedTP,
+                        reduceOnly: true
+                    });
+                }
+            }
         }
     }
 }
 
 export default {
+    setMode,
     getAccountInfo,
     getAccountBalances,
     getOpenOrders,
@@ -1102,5 +1303,6 @@ export default {
     roundPrice,
     setLeverage,
     placeOrderWithSLTP,
+    placeBatchOrders,
     manageTrailingStop
 };

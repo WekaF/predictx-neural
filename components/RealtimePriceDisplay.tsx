@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { TrendingUp, TrendingDown, Activity } from 'lucide-react';
 import { Candle } from '../types';
 
@@ -10,7 +10,7 @@ interface RealtimePriceDisplayProps {
   sma200?: number;
 }
 
-export const RealtimePriceDisplay: React.FC<RealtimePriceDisplayProps> = ({ 
+export const RealtimePriceDisplay: React.FC<RealtimePriceDisplayProps> = React.memo(({ 
   symbol, 
   candles, 
   trend,
@@ -24,9 +24,19 @@ export const RealtimePriceDisplay: React.FC<RealtimePriceDisplayProps> = ({
 
   const currentCandle = candles.length > 0 ? candles[candles.length - 1] : null;
   const currentPrice = currentCandle?.close || 0;
-  const high24h = candles.length > 0 ? Math.max(...candles.slice(-96).map(c => c.high)) : 0; // Last 24h (assuming 15m candles)
-  const low24h = candles.length > 0 ? Math.min(...candles.slice(-96).map(c => c.low)) : 0;
-  const volume24h = candles.length > 0 ? candles.slice(-96).reduce((sum, c) => sum + c.volume, 0) : 0;
+
+  // Calculate 24h stats
+  const stats24h = useMemo(() => {
+    if (candles.length === 0) return { high: 0, low: 0, volume: 0 };
+    const slice = candles.slice(-96); // Last 24h (assuming 15m candles)
+    return {
+      high: Math.max(...slice.map(c => c.high)),
+      low: Math.min(...slice.map(c => c.low)),
+      volume: slice.reduce((sum, c) => sum + c.volume, 0)
+    };
+  }, [candles]);
+
+  const { high: high24h, low: low24h, volume: volume24h } = stats24h;
 
   // Calculate 24h change
   useEffect(() => {
@@ -124,4 +134,4 @@ export const RealtimePriceDisplay: React.FC<RealtimePriceDisplayProps> = ({
       )}
     </div>
   );
-};
+});

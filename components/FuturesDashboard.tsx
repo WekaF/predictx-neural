@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Gauge, TrendingUp, TrendingDown, DollarSign, Activity, Percent, Shield, AlertTriangle } from 'lucide-react';
+import { Gauge, TrendingUp, TrendingDown, DollarSign, Activity, Percent, Shield, AlertTriangle, Target } from 'lucide-react';
 import { FundingRateChart } from './FundingRateChart';
 import { futuresRiskManager } from '../services/futuresRiskManager';
 import { liquidationCalculator } from '../services/liquidationCalculator';
@@ -86,9 +86,17 @@ export const FuturesDashboard: React.FC<FuturesDashboardProps> = React.memo(({
              <span className="text-slate-500 text-[10px] font-bold uppercase flex items-center gap-1"><Shield size={10}/> Safe Lev</span>
           </div>
           <div className="text-sm font-mono font-bold text-blue-400">
-             {symbol.includes('BTC') ? '20x' : '10x'} 
+             {symbol.includes('BTC') ? '150x' : '50x'} 
              <span className="text-[9px] font-normal text-slate-600 ml-1">MAX</span>
           </div>
+        </div>
+
+        {/* Expected RR */}
+        <div className="bg-slate-900/50 border border-slate-800 rounded-lg p-3 hover:bg-slate-800/80 transition-colors">
+          <div className="flex justify-between items-center mb-1">
+             <span className="text-slate-500 text-[10px] font-bold uppercase flex items-center gap-1"><Target size={10}/> Target RR</span>
+          </div>
+          <div className="text-sm font-mono font-bold text-amber-400">1:3.0</div>
         </div>
       </div>
 
@@ -111,10 +119,10 @@ export const FuturesDashboard: React.FC<FuturesDashboardProps> = React.memo(({
                <div className="bg-slate-950/50 rounded-md p-2 border-l-2 border-emerald-500/50">
                   <div className="flex justify-between text-[9px] mb-0.5">
                     <span className="text-slate-500 uppercase">Long Sup</span>
-                    <span className="text-slate-600">10x</span>
+                    <span className="text-slate-600">{symbol.includes('BTC') ? '150x' : '50x'}</span>
                   </div>
                   <div className="font-mono text-xs font-bold text-emerald-400">
-                    {(currentPrice * (1 - 1/10)).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                    {(currentPrice * (1 - 1/(symbol.includes('BTC') ? 150 : 50))).toLocaleString(undefined, { maximumFractionDigits: 2 })}
                   </div>
                </div>
                
@@ -122,10 +130,10 @@ export const FuturesDashboard: React.FC<FuturesDashboardProps> = React.memo(({
                <div className="bg-slate-950/50 rounded-md p-2 border-l-2 border-rose-500/50">
                   <div className="flex justify-between text-[9px] mb-0.5">
                     <span className="text-slate-500 uppercase">Short Res</span>
-                    <span className="text-slate-600">10x</span>
+                    <span className="text-slate-600">{symbol.includes('BTC') ? '150x' : '50x'}</span>
                   </div>
                   <div className="font-mono text-xs font-bold text-rose-400">
-                    {(currentPrice * (1 + 1/10)).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                    {(currentPrice * (1 + 1/(symbol.includes('BTC') ? 150 : 50))).toLocaleString(undefined, { maximumFractionDigits: 2 })}
                   </div>
                </div>
            </div>

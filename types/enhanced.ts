@@ -66,6 +66,7 @@ export interface EnhancedExecutedTrade {
   pnl: number;
   outcome: 'WIN' | 'LOSS' | 'OPEN' | 'PENDING' | 'EXPIRED' | 'MANUAL_CLOSE';
   source: 'AI' | 'MANUAL' | 'BINANCE_IMPORT';
+  tradingMode?: 'paper' | 'live';
   
   // Enhanced fields for AI training
   marketContext: MarketContext;
