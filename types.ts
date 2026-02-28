@@ -30,7 +30,7 @@ export interface TradeSignal {
   patternDetected?: string;
   confluenceFactors?: string[]; // e.g. ["SMA200 Support", "RSI Divergence"]
   riskRewardRatio?: number;
-  outcome?: 'WIN' | 'LOSS' | 'PENDING' | 'EXPIRED' | 'MANUAL_CLOSE';
+  outcome?: 'WIN' | 'LOSS' | 'PENDING' | 'EXPIRED';
   outputToken?: string;
   newsSentiment?: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
   execution?: {
@@ -122,7 +122,7 @@ export interface BacktestTrade {
 }
 
 export interface ExecutedTrade extends BacktestTrade {
-  source: 'AI' | 'MANUAL';
+  source: 'AI';
 }
 
 export interface BacktestStats {
@@ -219,8 +219,8 @@ export interface TradingLog {
     takeProfit?: number;
     quantity?: number;
     pnl?: number;
-    outcome?: 'WIN' | 'LOSS' | 'PENDING' | 'EXPIRED' | 'MANUAL_CLOSE';
-    source?: 'AI' | 'MANUAL';
+    outcome?: 'WIN' | 'LOSS' | 'PENDING' | 'EXPIRED';
+    source?: 'AI';
     items: {
         snapshot: MarketSnapshot;
         chartHistory: Candle[]; // Stored candles for visualization

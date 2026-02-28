@@ -6,6 +6,10 @@
   "framework": "vite",
   "rewrites": [
     {
+      "source": "/ai-api/:path*",
+      "destination": "https://predictx-neural-production.up.railway.app/api/:path*"
+    },
+    {
       "source": "/api/testnet/:path*",
       "destination": "https://demo-fapi.binance.com/:path*"
     },

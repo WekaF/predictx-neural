@@ -34,6 +34,7 @@ app.add_middleware(
 
 # Import training router
 from api import training
+from services.trade_manager import trade_manager
 
 # Register routers
 app.include_router(training.router, prefix="/api", tags=["training"])
@@ -165,9 +166,12 @@ def train_model(symbol: str = "BTC-USD", epochs: int = 20):
 # from services.scheduler import training_scheduler
 
 @app.on_event("startup")
-def startup_event():
+async def startup_event():
     # Start the scheduler when the app starts
     # training_scheduler.start()
+    
+    # Start the Trade Manager (24/7 Monitoring)
+    await trade_manager.start()
     pass
 
 @app.get("/api/training/schedule/status")

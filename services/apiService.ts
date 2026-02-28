@@ -1,8 +1,8 @@
 import axios from 'axios';
 
-// In development, use /ai-api which Vite proxies to localhost:8000/api
-// In production, use VITE_AI_BACKEND_URL (e.g. https://...railway.app/api)
-const API_URL = import.meta.env.DEV ? '/ai-api' : (import.meta.env.VITE_AI_BACKEND_URL || '/ai-api');
+// In development and production, we use /ai-api which is proxied (via Vite or Vercel)
+// VITE_AI_BACKEND_URL can still be used to override the default proxy path
+const API_URL = import.meta.env.VITE_AI_BACKEND_URL || '/ai-api';
 
 export interface TrainingResponse {
     status: 'success' | 'error';

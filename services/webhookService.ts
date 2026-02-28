@@ -176,7 +176,7 @@ const isDuplicate = (signalId: string): boolean => {
 };
 
 export const sendWebhookNotification = async (
-    event: 'SIGNAL_ENTRY' | 'TAKE_PROFIT' | 'STOP_LOSS' | 'MANUAL_CLOSE',
+    event: 'SIGNAL_ENTRY' | 'TAKE_PROFIT' | 'STOP_LOSS',
     data: TradeSignal | ExecutedTrade,
     price?: number
 ): Promise<{ success: boolean; skipped?: boolean; error?: string; warning?: string }> => {
@@ -213,7 +213,7 @@ export const sendWebhookNotification = async (
                       `*Stop Loss:* $${data.stopLoss}\n` +
                       `*Take Profit:* $${data.takeProfit}\n` +
                       `*Confidence:* ${(data as TradeSignal).confidence}%\n` +
-                      `*Reason:* ${(data as TradeSignal).reasoning || 'Manual Entry'}`;
+                      `*Reason:* ${(data as TradeSignal).reasoning || 'AI Pattern Detected'}`;
             break;
         case 'TAKE_PROFIT':
             emoji = '💰';
@@ -231,13 +231,7 @@ export const sendWebhookNotification = async (
                       `*Exit Price:* $${price}\n` +
                       `*Result:* LOSS`;
             break;
-        case 'MANUAL_CLOSE':
-            emoji = '⚠️';
-            message = `${emoji} *${symbol} - MANUAL CLOSE*\n\n` +
-                      `*Asset:* ${symbol}\n` +
-                      `*Position:* ${data.type}\n` +
-                      `*Exit Price:* $${price}`;
-            break;
+
     }
 
     const payload = {

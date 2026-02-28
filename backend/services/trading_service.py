@@ -171,36 +171,9 @@ class TradingService:
             # Note: 'closePosition': True memerlukan amount=None di API Binance via CCXT
             
             if StrategyConfig.AUTO_SL_TP:
-                protection_orders = [
-                    {
-                        'type': 'TAKE_PROFIT_MARKET',
-                        'price': self.exchange.price_to_precision(symbol, tp_price),
-                        'label': 'TP'
-                    },
-                    {
-                        'type': 'STOP_MARKET',
-                        'price': self.exchange.price_to_precision(symbol, sl_price),
-                        'label': 'SL'
-                    }
-                ]
-        
-                for p_order in protection_orders:
-                    try:
-                        # Binance now requires /fapi/v1/algoOrder for conditional orders (SL/TP)
-                        self.exchange.fapiPrivatePostAlgoOrder({
-                            'symbol': symbol,
-                            'side': tp_side.upper(),
-                            'algoType': 'CONDITIONAL',
-                            'type': p_order['type'],
-                            'triggerPrice': p_order['price'],
-                            'workingType': 'MARK_PRICE',
-                            'closePosition': 'true',
-                            'timeInForce': 'GTC'
-                        })
-                        logging.info(f"🎯 {p_order['label']} set at {p_order['price']} via Algo API")
-                    except Exception as e:
-                        logging.error(f"⚠️ Failed to set {p_order['label']}: {e}")
-                        # Opsional: Jika SL gagal, mungkin kamu ingin tutup posisi entry segera?
+                # 7. Kirim Protective Orders (SL & TP)
+                self.place_algo_order(symbol, tp_side, 'TAKE_PROFIT_MARKET', tp_price)
+                self.place_algo_order(symbol, tp_side, 'STOP_MARKET', sl_price)
             else:
                 logging.info(f"⏩ Auto SL/TP is disabled in StrategyConfig. Skipping Algo API.")
     
@@ -211,6 +184,33 @@ class TradingService:
             error_msg = str(e)
             logging.error(f"❌ FATAL EXECUTION ERROR: {error_msg}")
             return f"FAILED: {error_msg}"
+
+    def place_algo_order(self, symbol, side, order_type, trigger_price, amount=None):
+        """
+        Helper for Binance Algo API (Conditional Orders)
+        """
+        if not self.exchange: return
+        try:
+            params = {
+                'symbol': symbol.replace("-", "").replace("/", ""),
+                'side': side.upper(),
+                'algoType': 'CONDITIONAL',
+                'type': order_type.upper(),
+                'triggerPrice': self.exchange.price_to_precision(symbol, trigger_price),
+                'workingType': 'MARK_PRICE',
+                'closePosition': 'true',
+                'timeInForce': 'GTC'
+            }
+            if amount:
+                params['quantity'] = self.exchange.amount_to_precision(symbol, amount)
+                params['closePosition'] = 'false'
+                
+            res = self.exchange.fapiPrivatePostAlgoOrder(params)
+            logging.info(f"🎯 {order_type} set at {trigger_price} for {symbol}")
+            return res
+        except Exception as e:
+            logging.error(f"❌ Failed to set {order_type} for {symbol}: {e}")
+            return None
 
     def log_trade(self, trade_data: dict):
         if not db_service.client: return

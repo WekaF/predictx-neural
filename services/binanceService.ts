@@ -15,9 +15,7 @@ const BINANCE_TESTNET_WS = 'wss://stream.binancefuture.com/ws'; // Futures Testn
 const BINANCE_DIRECT_WS = 'wss://stream.binance.com:9443/ws'; // Backup
 
 // Dynamic Backend URL: In dev mode always use localhost, in production use VITE_BACKEND_URL
-const BACKEND_BASE_URL = import.meta.env.DEV
-  ? 'http://localhost:8000'
-  : (import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000');
+const BACKEND_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
 const LOCAL_PROXY_API = `${BACKEND_BASE_URL}/api/proxy`;
 const BINANCE_PRODUCTION_WS = `${BACKEND_BASE_URL.replace('https://', 'wss://').replace('http://', 'ws://')}/ws/proxy`;
 

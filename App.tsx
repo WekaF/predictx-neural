@@ -736,11 +736,11 @@ function App() {
           quantity: parseFloat(trade.qty),
           pnl: pnl,
           outcome: outcome,
-          source: 'MANUAL',
+          source: 'BINANCE_IMPORT',
           marketContext: null,
           aiConfidence: 0,
-          aiReasoning: 'Manual Close via Dashboard',
-          tags: ['MANUAL_CLOSE'],
+          aiReasoning: 'Closed via External Platform (Binance)',
+          tags: ['EXTERNAL_CLOSE'],
           stopLoss: 0,
           takeProfit: 0
       };
@@ -1160,7 +1160,7 @@ function App() {
         quantity: quantity,
         pnl: pnl,
         outcome: 'EXPIRED',
-        source: activeSignal.patternDetected === "Manual Entry" ? "MANUAL" : "AI",
+        source: "AI",
         marketContext: activeSignal.marketContext,
         aiConfidence: activeSignal.confidence,
         aiReasoning: `Auto-expired after ${AUTO_EXPIRE_HOURS} hours`,
@@ -1241,7 +1241,7 @@ function App() {
         quantity: quantity,
         pnl: pnl,
         outcome: closedOutcome,
-        source: activeSignal.patternDetected === "Manual Entry" ? "MANUAL" : "AI",
+        source: "AI",
         marketContext: activeSignal.marketContext,
         aiConfidence: activeSignal.confidence,
         aiReasoning: activeSignal.reasoning,
@@ -1652,7 +1652,7 @@ function App() {
         quantity: quantityAsset, // Store confirmed quantity
         pnl: 0, // Will be calculated when trade closes
         outcome: 'PENDING',
-        source: signal.patternDetected === "Manual Entry" ? "MANUAL" : "AI",
+        source: "AI",
         items: {
           snapshot: {
             price: signal.entryPrice,
@@ -2206,7 +2206,7 @@ function App() {
       quantity: quantity,
       pnl: pnl,
       outcome: outcome,
-      source: activeSignal.patternDetected === "Manual Entry" ? "MANUAL" : "AI"
+      source: "AI"
     };
     setTradeHistory(prev => [completedTrade, ...prev]);
 

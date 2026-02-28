@@ -128,7 +128,7 @@ export const storageService = {
           take_profit: signal.takeProfit,
           confidence: signal.confidence,
           reasoning: signal.reasoning,
-          source: signal.patternDetected?.includes('Gemini') ? 'GEMINI' : signal.patternDetected?.includes('Manual') ? 'MANUAL' : 'AI',
+          source: signal.patternDetected?.includes('Gemini') ? 'GEMINI' : 'AI',
           outcome: signal.outcome || 'PENDING'
         });
 
@@ -634,7 +634,7 @@ export const storageService = {
             take_profit: log.takeProfit,
             pnl: log.pnl,
             outcome: log.outcome,
-            source: log.source || (log.tags?.includes('AI') ? 'AI' : 'MANUAL'),
+            source: log.source || (log.tags?.includes('AI') ? 'AI' : 'AI'),
             confidence: log.aiConfidence || log.items?.aiConfidence,
             reasoning: log.aiReasoning || log.items?.aiReasoning,
             trading_mode: log.tradingMode

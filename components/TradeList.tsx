@@ -115,7 +115,6 @@ const TradeList: React.FC<TradeListProps> = React.memo(({ trades }) => {
                         trade.outcome === 'WIN' ? 'bg-emerald-500/20 text-emerald-400' : 
                         trade.outcome === 'LOSS' ? 'bg-rose-500/20 text-rose-400' : 
                         trade.outcome === 'EXPIRED' ? 'bg-orange-500/20 text-orange-400' :
-                        trade.outcome === 'MANUAL_CLOSE' ? 'bg-purple-500/20 text-purple-400' :
                         'bg-blue-500/20 text-blue-400'
                       }`}>
                           {trade.outcome}

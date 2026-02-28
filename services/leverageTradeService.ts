@@ -35,7 +35,7 @@ export interface LeverageTrade {
     risk_reward_ratio?: number;
     
     notes?: string;
-    source?: 'HISTORICAL' | 'AI_PREDICTED' | 'MANUAL';
+    source?: 'HISTORICAL' | 'AI_PREDICTED';
 }
 
 export interface TrainingSession {
